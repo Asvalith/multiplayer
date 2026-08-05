@@ -1,6 +1,6 @@
 # UE5 Co-op 网络项目统一技术复习文档
 
-> 更新日期：2026-08-02
+> 更新日期：2026-08-05
 > 项目路径：`E:\ueprojrct\multiplayer`
 > 原则：只把代码和运行证据能够证明的内容写成成果；待蓝图接入或待双端验证的内容明确标注。
 
@@ -23,7 +23,8 @@
 | Character 网络实验 | NetMode、Role、Authority、Ownership 日志；Server/Client/Multicast RPC；RepNotify；服务端生成 Actor | RPC 方向、所有权、持久状态和瞬时事件 |
 | GameInstance Session | Create、Find、Join、Destroy；异步 Delegate Handle；重复建房先销毁；操作防重入 | OSS、Session 生命周期、异步回调 |
 | ReplicatedCube | 服务端生成、Actor 复制、移动复制和服务端物理 | 服务端权威生成 |
-| CoopGate | 两块压力板、不同玩家约束、门状态复制和本地表现 | 事件驱动、RepNotify、晚加入 |
+| PressurePlate | 独立压力板、服务端 Overlap、占用者去重、状态复制和按需动画 Tick | 单一职责、弱引用、事件驱动 |
+| CoopGate | 订阅多个独立压力板、不同玩家约束、门状态复制和本地表现 | Delegate 解耦、RepNotify、晚加入 |
 | MovingPlatform | 多玩家占用、服务端移动、Transform 复制、按需 Tick | 服务端模拟、移动复制、更新治理 |
 | Key / KeySocket | 服务端拾取、Holder 复制、附着、插槽消费和目标进度 | Actor 所有权、对象生命周期 |
 | CoopGameState | 目标进度和胜利状态的原子复制 | 全局共享状态、晚加入一致性 |
@@ -37,8 +38,9 @@
 4. 两端实际验证压力板、平台、钥匙、插槽和胜利区。
 5. 100/200 ms 延迟、丢包、晚加入和断线边界测试。
 6. 共享胜利 UI、演示视频、README 和可执行版本。
+7. GAS 进阶版本尚未开始；它不阻塞基础 Co-op 版本验收。
 
-明确不声称已完成：Steam 实测、Dedicated Server 部署、客户端预测回滚、延迟补偿、断线重连。
+明确不声称已完成：Steam 实测、Dedicated Server 部署、客户端预测回滚、延迟补偿、断线重连、GAS。
 
 ---
 
@@ -69,7 +71,8 @@ AmultiplayerCharacter
 └─ RepNotify：复制可持续的计数状态
 
 关卡机关
-├─ AmultiplayerCoopGate：双压力板门
+├─ AmultiplayerPressurePlate：可独立复用的权威压力板
+├─ AmultiplayerCoopGate：订阅多个压力板的协作门
 ├─ AmultiplayerMovingPlatform：双人同步平台
 ├─ AmultiplayerCoopKey：可拾取钥匙
 ├─ AmultiplayerKeySocket：钥匙插槽
@@ -213,22 +216,26 @@ None
 ### 5.1 双压力板门
 
 ```text
-服务器 BeginOverlap / EndOverlap
-→ 两个 TSet<TWeakObjectPtr<ACharacter>> 保存占用者
-→ 去重并清除失效 Pawn
-→ 检查两块板上是否存在两个不同玩家
-→ 更新 ActivePlateMask 和 bGateOpen
-→ RepNotify 到客户端
-→ 客户端本地播放门和压力板表现
+独立 PressurePlate 在服务器接收 BeginOverlap / EndOverlap
+→ 每块板用 TSet<TWeakObjectPtr<ACharacter>> 保存占用者
+→ 去重、清除失效 Pawn，并计算 bPlateActive
+→ bPlateActive 通过 RepNotify 驱动两端压力板表现
+→ PressurePlate 广播 OnPlateActiveChanged
+→ CoopGate 订阅 RequiredPlates 的 Delegate
+→ Gate 汇总激活板数量和不同玩家数量
+→ 满足 RequiredActivePlateCount 后更新 bGateOpen
+→ bGateOpen 通过 RepNotify 驱动两端门表现
 ```
 
 设计取舍：
 
+- 压力板只回答“当前是否被有效玩家激活”，门只负责组合规则，两者可以分别复用。
 - Overlap 是离散状态变化，不使用每帧查询。
 - 服务端能直接观察碰撞，不让客户端 RPC 报告“我踩到了”。
 - 复制语义状态，不逐帧复制门动画。
 - `TSet` 防止角色多个碰撞组件造成重复计数。
 - `TWeakObjectPtr` 表示机关观察玩家但不拥有其生命周期。
+- 只有压力板或门正在做短距离插值时才临时开启 Tick，到达目标后立即关闭。
 
 ### 5.2 双人移动平台
 
@@ -732,12 +739,30 @@ AI 用于检索 API 迁移线索、审查异步回调和边界条件、生成测
 
 按知识点和 C++ 覆盖约为 **80%～85%**；按可玩、可演示并通过双客户端验证约为 **55%～60%**。因此目前只能表述为“C++ 网络核心已完成”，不能表述为“完整 Co-op 项目已完成”。
 
-### 12.2 C++ 冻结原则
+### 12.2 基础版 C++ 冻结原则
 
-- 不再增加 GAS、预测回滚、复杂重连、通用交互框架或 Dedicated Server 部署。
+- 基础版不增加 GAS、预测回滚、复杂重连、通用交互框架或 Dedicated Server 部署。
 - 只有蓝图联调或双端测试暴露真实缺口时，才修改 C++。
 - 已保留的工程保护仅包括：Session 异步防重入、网络/Travel 失败事件、玩家销毁时解除压力板/平台/胜利区占用，以及持钥匙玩家销毁后的显式释放。
 - 这些保护直接避免 UI 无反馈、机关永久占用和残留引用，不作为新的独立系统包装。
+
+### 12.3 GAS 进阶版边界
+
+GAS 是基础版通过双客户端验收后的独立进阶版本，目前只完成方案设计，不能表述为已实现。基础版先建立可回退的 Git 标签，再从独立分支继续开发，避免技能系统影响已验证的 Session 和机关闭环。
+
+进阶版只做一条可解释、可验证的最小链路：
+
+```text
+PlayerState 持有 AbilitySystemComponent 和 AttributeSet
+→ Character 通过 AbilitySystemInterface 暴露能力系统
+→ 服务端授予并激活一项双人玩法相关 Ability
+→ GameplayEffect 修改属性或状态
+→ 两客户端验证 Authority、Ownership、预测边界和复制结果
+```
+
+- 优先选择冲刺、交互或救援中的一项，不一次铺开完整技能树。
+- 压力板、门、钥匙和胜利区继续使用服务器权威 Actor 规则，不为了“使用 GAS”而迁移成熟机关。
+- GAS 进阶版有独立验收记录；未通过前不计入基础版完成度。
 
 ## 13. 下一步收口顺序
 
@@ -747,6 +772,7 @@ AI 用于检索 API 迁移线索、审查异步回调和边界条件、生成测
 4. 测试晚加入、100/200 ms 延迟和 5% 丢包。
 5. 保存双端日志、截图和 60～90 秒演示视频。
 6. 整理 README、简历描述和 Git 模块化提交。
+7. 为通过验收的基础版创建 Git 标签，再开独立分支实现最小 GAS 链路。
 
 在这些验收前，准确表述是：
 

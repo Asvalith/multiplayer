@@ -2,20 +2,13 @@
 
 #include "multiplayerCoopGate.h"
 
-#include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Character.h"
+#include "multiplayerPressurePlate.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
-
-namespace
-{
-	constexpr uint8 PlateABit = 1 << 0;
-	constexpr uint8 PlateBBit = 1 << 1;
-	constexpr float PressedPlateOffset = -8.0f;
-}
 
 AmultiplayerCoopGate::AmultiplayerCoopGate()
 {
@@ -36,40 +29,10 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 	DoorMesh->SetRelativeLocation(FVector(300.0f, 0.0f, 200.0f));
 	DoorMesh->SetRelativeScale3D(FVector(0.3f, 2.0f, 2.0f));
 
-	PlateAMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlateAMesh"));
-	PlateAMesh->SetupAttachment(SceneRoot);
-	PlateAMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	PlateAMesh->SetRelativeLocation(FVector(0.0f, -180.0f, 10.0f));
-	PlateAMesh->SetRelativeScale3D(FVector(1.5f, 1.5f, 0.1f));
-
-	PlateBMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlateBMesh"));
-	PlateBMesh->SetupAttachment(SceneRoot);
-	PlateBMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	PlateBMesh->SetRelativeLocation(FVector(0.0f, 180.0f, 10.0f));
-	PlateBMesh->SetRelativeScale3D(FVector(1.5f, 1.5f, 0.1f));
-
-	PlateATrigger = CreateDefaultSubobject<UBoxComponent>(TEXT("PlateATrigger"));
-	PlateATrigger->SetupAttachment(SceneRoot);
-	PlateATrigger->SetRelativeLocation(FVector(0.0f, -180.0f, 60.0f));
-	PlateATrigger->SetBoxExtent(FVector(150.0f, 150.0f, 60.0f));
-	PlateATrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	PlateATrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
-	PlateATrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
-
-	PlateBTrigger = CreateDefaultSubobject<UBoxComponent>(TEXT("PlateBTrigger"));
-	PlateBTrigger->SetupAttachment(SceneRoot);
-	PlateBTrigger->SetRelativeLocation(FVector(0.0f, 180.0f, 60.0f));
-	PlateBTrigger->SetBoxExtent(FVector(150.0f, 150.0f, 60.0f));
-	PlateBTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	PlateBTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
-	PlateBTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
-
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMesh.Succeeded())
 	{
 		DoorMesh->SetStaticMesh(CubeMesh.Object);
-		PlateAMesh->SetStaticMesh(CubeMesh.Object);
-		PlateBMesh->SetStaticMesh(CubeMesh.Object);
 	}
 }
 
@@ -78,16 +41,15 @@ void AmultiplayerCoopGate::BeginPlay()
 	Super::BeginPlay();
 
 	DoorClosedRelativeLocation = DoorMesh->GetRelativeLocation();
-	PlateAReleasedRelativeLocation = PlateAMesh->GetRelativeLocation();
-	PlateBReleasedRelativeLocation = PlateBMesh->GetRelativeLocation();
-
-	PlateATrigger->OnComponentBeginOverlap.AddDynamic(this, &AmultiplayerCoopGate::HandlePlateABeginOverlap);
-	PlateATrigger->OnComponentEndOverlap.AddDynamic(this, &AmultiplayerCoopGate::HandlePlateAEndOverlap);
-	PlateBTrigger->OnComponentBeginOverlap.AddDynamic(this, &AmultiplayerCoopGate::HandlePlateBBeginOverlap);
-	PlateBTrigger->OnComponentEndOverlap.AddDynamic(this, &AmultiplayerCoopGate::HandlePlateBEndOverlap);
-
-	ApplyPlateState();
+	BindRequiredPlates();
+	EvaluateGateState();
 	ApplyGateState(true);
+}
+
+void AmultiplayerCoopGate::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	UnbindRequiredPlates();
+	Super::EndPlay(EndPlayReason);
 }
 
 void AmultiplayerCoopGate::Tick(float DeltaSeconds)
@@ -115,93 +77,44 @@ void AmultiplayerCoopGate::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AmultiplayerCoopGate, bGateOpen);
-	DOREPLIFETIME(AmultiplayerCoopGate, ActivePlateMask);
+	DOREPLIFETIME(AmultiplayerCoopGate, ActivePlateCount);
 }
 
-void AmultiplayerCoopGate::HandlePlateABeginOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex,
-	bool bFromSweep,
-	const FHitResult& SweepResult)
+int32 AmultiplayerCoopGate::GetRequiredPlateCount() const
 {
-	AddPlateOccupant(PlateAOccupants, OtherActor);
-}
-
-void AmultiplayerCoopGate::HandlePlateAEndOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex)
-{
-	RemovePlateOccupant(PlateAOccupants, OtherActor);
-}
-
-void AmultiplayerCoopGate::HandlePlateBBeginOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex,
-	bool bFromSweep,
-	const FHitResult& SweepResult)
-{
-	AddPlateOccupant(PlateBOccupants, OtherActor);
-}
-
-void AmultiplayerCoopGate::HandlePlateBEndOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex)
-{
-	RemovePlateOccupant(PlateBOccupants, OtherActor);
-}
-
-void AmultiplayerCoopGate::AddPlateOccupant(
-	TSet<TWeakObjectPtr<ACharacter>>& Occupants,
-	AActor* OtherActor)
-{
-	if (!HasAuthority())
+	if (RequiredPlates.Num() == 0)
 	{
-		return;
+		return RequiredActivePlateCount;
 	}
 
-	ACharacter* Character = Cast<ACharacter>(OtherActor);
-	if (Character == nullptr || Character->GetController() == nullptr)
-	{
-		return;
-	}
-
-	Occupants.Add(Character);
-	EvaluateGateState();
+	return FMath::Clamp(RequiredActivePlateCount, 1, RequiredPlates.Num());
 }
 
-void AmultiplayerCoopGate::RemovePlateOccupant(
-	TSet<TWeakObjectPtr<ACharacter>>& Occupants,
-	AActor* OtherActor)
+void AmultiplayerCoopGate::BindRequiredPlates()
 {
-	if (!HasAuthority())
+	for (AmultiplayerPressurePlate* Plate : RequiredPlates)
 	{
-		return;
-	}
-
-	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
-	{
-		Occupants.Remove(Character);
-		EvaluateGateState();
-	}
-}
-
-void AmultiplayerCoopGate::RemoveInvalidOccupants(TSet<TWeakObjectPtr<ACharacter>>& Occupants)
-{
-	for (auto It = Occupants.CreateIterator(); It; ++It)
-	{
-		if (!It->IsValid())
+		if (Plate != nullptr)
 		{
-			It.RemoveCurrent();
+			Plate->OnPlateActiveChanged.AddUniqueDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateChanged);
 		}
 	}
+}
+
+void AmultiplayerCoopGate::UnbindRequiredPlates()
+{
+	for (AmultiplayerPressurePlate* Plate : RequiredPlates)
+	{
+		if (Plate != nullptr)
+		{
+			Plate->OnPlateActiveChanged.RemoveDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateChanged);
+		}
+	}
+}
+
+void AmultiplayerCoopGate::HandleRequiredPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive)
+{
+	EvaluateGateState();
 }
 
 void AmultiplayerCoopGate::EvaluateGateState()
@@ -211,27 +124,39 @@ void AmultiplayerCoopGate::EvaluateGateState()
 		return;
 	}
 
-	RemoveInvalidOccupants(PlateAOccupants);
-	RemoveInvalidOccupants(PlateBOccupants);
-
-	uint8 NewPlateMask = 0;
-	if (!PlateAOccupants.IsEmpty())
+	int32 NewActivePlateCount = 0;
+	TSet<ACharacter*> DistinctPlayers;
+	for (const AmultiplayerPressurePlate* Plate : RequiredPlates)
 	{
-		NewPlateMask |= PlateABit;
-	}
-	if (!PlateBOccupants.IsEmpty())
-	{
-		NewPlateMask |= PlateBBit;
+		if (Plate == nullptr || !Plate->IsPlateActive())
+		{
+			continue;
+		}
+
+		++NewActivePlateCount;
+
+		TArray<ACharacter*> PlateOccupants;
+		Plate->GetOccupyingCharacters(PlateOccupants);
+		for (ACharacter* Occupant : PlateOccupants)
+		{
+			if (Occupant != nullptr)
+			{
+				DistinctPlayers.Add(Occupant);
+			}
+		}
 	}
 
-	if (ActivePlateMask != NewPlateMask)
+	if (ActivePlateCount != NewActivePlateCount)
 	{
-		ActivePlateMask = NewPlateMask;
-		OnRep_ActivePlateMask();
+		ActivePlateCount = NewActivePlateCount;
+		OnRep_ActivePlateCount();
 	}
 
-	const bool bShouldOpen = HasTwoDistinctPlayers();
+	const int32 RequiredCount = GetRequiredPlateCount();
+	const bool bHasValidPlateSetup = RequiredPlates.Num() > 0 && RequiredCount > 0;
+	const bool bShouldOpen = bHasValidPlateSetup && ActivePlateCount >= RequiredCount && DistinctPlayers.Num() >= RequiredCount;
 	const bool bNewGateOpen = bStayOpenOnceActivated ? (bGateOpen || bShouldOpen) : bShouldOpen;
+
 	if (bGateOpen != bNewGateOpen)
 	{
 		bGateOpen = bNewGateOpen;
@@ -241,27 +166,6 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	ForceNetUpdate();
 }
 
-bool AmultiplayerCoopGate::HasTwoDistinctPlayers() const
-{
-	for (const TWeakObjectPtr<ACharacter>& PlateAPlayer : PlateAOccupants)
-	{
-		if (!PlateAPlayer.IsValid())
-		{
-			continue;
-		}
-
-		for (const TWeakObjectPtr<ACharacter>& PlateBPlayer : PlateBOccupants)
-		{
-			if (PlateBPlayer.IsValid() && PlateAPlayer != PlateBPlayer)
-			{
-				return true;
-			}
-		}
-	}
-
-	return false;
-}
-
 void AmultiplayerCoopGate::OnRep_GateOpen()
 {
 	ApplyGateState(false);
@@ -269,11 +173,10 @@ void AmultiplayerCoopGate::OnRep_GateOpen()
 	ReceiveGateVisualStateChanged(bGateOpen);
 }
 
-void AmultiplayerCoopGate::OnRep_ActivePlateMask()
+void AmultiplayerCoopGate::OnRep_ActivePlateCount()
 {
-	ApplyPlateState();
-	OnPlateStateChanged.Broadcast(ActivePlateMask);
-	ReceivePlateVisualStateChanged(ActivePlateMask);
+	OnPlateProgressChanged.Broadcast(ActivePlateCount, GetRequiredPlateCount());
+	ReceivePlateProgressChanged(ActivePlateCount, GetRequiredPlateCount());
 }
 
 void AmultiplayerCoopGate::ApplyGateState(bool bSnapToTarget)
@@ -287,15 +190,4 @@ void AmultiplayerCoopGate::ApplyGateState(bool bSnapToTarget)
 	}
 
 	SetActorTickEnabled(true);
-}
-
-void AmultiplayerCoopGate::ApplyPlateState()
-{
-	const bool bPlateAActive = (ActivePlateMask & PlateABit) != 0;
-	const bool bPlateBActive = (ActivePlateMask & PlateBBit) != 0;
-
-	PlateAMesh->SetRelativeLocation(
-		PlateAReleasedRelativeLocation + FVector(0.0f, 0.0f, bPlateAActive ? PressedPlateOffset : 0.0f));
-	PlateBMesh->SetRelativeLocation(
-		PlateBReleasedRelativeLocation + FVector(0.0f, 0.0f, bPlateBActive ? PressedPlateOffset : 0.0f));
 }

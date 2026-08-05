@@ -6,19 +6,18 @@
 #include "GameFramework/Actor.h"
 #include "multiplayerCoopGate.generated.h"
 
-class ACharacter;
-class UBoxComponent;
+class AmultiplayerPressurePlate;
 class USceneComponent;
 class UStaticMeshComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCoopGateStateChanged, bool, bIsOpen);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCoopPlateStateChanged, int32, ActivePlateMask);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnCoopGatePlateProgressChanged, int32, ActivePlateCount, int32, RequiredPlateCount);
 
 /**
- * Server-authoritative two-player pressure gate.
+ * Server-authoritative gate that opens when linked pressure plates are active.
  *
- * The server owns overlap checks and replicated state. Clients only animate the
- * replicated result, so no per-frame door transform needs to be replicated.
+ * The gate no longer owns pressure plate overlap logic. Designers place any
+ * number of AmultiplayerPressurePlate actors in the level, then link them here.
  */
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerCoopGate : public AActor
@@ -35,87 +34,56 @@ public:
 	bool IsGateOpen() const { return bGateOpen; }
 
 	UFUNCTION(BlueprintPure, Category = "Coop Gate")
-	int32 GetActivePlateMask() const { return ActivePlateMask; }
+	int32 GetActivePlateCount() const { return ActivePlateCount; }
+
+	UFUNCTION(BlueprintPure, Category = "Coop Gate")
+	int32 GetRequiredPlateCount() const;
 
 	UPROPERTY(BlueprintAssignable, Category = "Coop Gate")
 	FOnCoopGateStateChanged OnGateStateChanged;
 
 	UPROPERTY(BlueprintAssignable, Category = "Coop Gate")
-	FOnCoopPlateStateChanged OnPlateStateChanged;
+	FOnCoopGatePlateProgressChanged OnPlateProgressChanged;
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
-	void HandlePlateABeginOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex,
-		bool bFromSweep,
-		const FHitResult& SweepResult);
-
-	UFUNCTION()
-	void HandlePlateAEndOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex);
-
-	UFUNCTION()
-	void HandlePlateBBeginOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex,
-		bool bFromSweep,
-		const FHitResult& SweepResult);
-
-	UFUNCTION()
-	void HandlePlateBEndOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex);
+	void HandleRequiredPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive);
 
 	UFUNCTION()
 	void OnRep_GateOpen();
 
 	UFUNCTION()
-	void OnRep_ActivePlateMask();
+	void OnRep_ActivePlateCount();
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Coop Gate", meta = (DisplayName = "On Gate Visual State Changed"))
 	void ReceiveGateVisualStateChanged(bool bIsOpen);
 
-	UFUNCTION(BlueprintImplementableEvent, Category = "Coop Gate", meta = (DisplayName = "On Plate Visual State Changed"))
-	void ReceivePlateVisualStateChanged(int32 NewActivePlateMask);
+	UFUNCTION(BlueprintImplementableEvent, Category = "Coop Gate", meta = (DisplayName = "On Plate Progress Changed"))
+	void ReceivePlateProgressChanged(int32 NewActivePlateCount, int32 NewRequiredPlateCount);
 
 private:
-	void AddPlateOccupant(TSet<TWeakObjectPtr<ACharacter>>& Occupants, AActor* OtherActor);
-	void RemovePlateOccupant(TSet<TWeakObjectPtr<ACharacter>>& Occupants, AActor* OtherActor);
-	void RemoveInvalidOccupants(TSet<TWeakObjectPtr<ACharacter>>& Occupants);
+	void BindRequiredPlates();
+	void UnbindRequiredPlates();
 	void EvaluateGateState();
-	bool HasTwoDistinctPlayers() const;
 	void ApplyGateState(bool bSnapToTarget);
-	void ApplyPlateState();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UStaticMeshComponent> DoorMesh;
 
-	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
-	TObjectPtr<UStaticMeshComponent> PlateAMesh;
+	UPROPERTY(EditInstanceOnly, Category = "Coop Gate|Rules")
+	TArray<TObjectPtr<AmultiplayerPressurePlate>> RequiredPlates;
 
-	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
-	TObjectPtr<UStaticMeshComponent> PlateBMesh;
+	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules", meta = (ClampMin = "1"))
+	int32 RequiredActivePlateCount = 2;
 
-	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
-	TObjectPtr<UBoxComponent> PlateATrigger;
-
-	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
-	TObjectPtr<UBoxComponent> PlateBTrigger;
+	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
+	bool bStayOpenOnceActivated = true;
 
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Movement")
 	FVector DoorOpenOffset = FVector(0.0f, 0.0f, 400.0f);
@@ -123,19 +91,11 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Movement", meta = (ClampMin = "1.0"))
 	float DoorMoveSpeed = 250.0f;
 
-	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
-	bool bStayOpenOnceActivated = true;
-
 	UPROPERTY(ReplicatedUsing = OnRep_GateOpen)
 	bool bGateOpen = false;
 
-	UPROPERTY(ReplicatedUsing = OnRep_ActivePlateMask)
-	uint8 ActivePlateMask = 0;
+	UPROPERTY(ReplicatedUsing = OnRep_ActivePlateCount)
+	int32 ActivePlateCount = 0;
 
 	FVector DoorClosedRelativeLocation = FVector::ZeroVector;
-	FVector PlateAReleasedRelativeLocation = FVector::ZeroVector;
-	FVector PlateBReleasedRelativeLocation = FVector::ZeroVector;
-
-	TSet<TWeakObjectPtr<ACharacter>> PlateAOccupants;
-	TSet<TWeakObjectPtr<ACharacter>> PlateBOccupants;
 };

@@ -18,6 +18,13 @@ enum class EMultiplayerSessionOperation : uint8
 	Destroying
 };
 
+UENUM(BlueprintType)
+enum class EMultiplayerSessionMap : uint8
+{
+	ThirdPersonMap UMETA(DisplayName = "Third Person Map"),
+	DesertCityExample UMETA(DisplayName = "Desert City Example")
+};
+
 USTRUCT(BlueprintType)
 struct FmultiplayerSessionInfo
 {
@@ -48,7 +55,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FmultiplayerSessionSearchEvent,
 	bool,
 	bWasSuccessful,
-	TArray<FmultiplayerSessionInfo>,
+	const TArray<FmultiplayerSessionInfo>&,
 	Results);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
@@ -80,6 +87,16 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void HostGame(const FString& ServerName, int32 PublicConnections, bool bIsLanMatch);
+
+	/** Selects the gameplay map used by the next hosted session. */
+	UFUNCTION(BlueprintCallable, Category = "Network|Session")
+	void SelectSessionMap(EMultiplayerSessionMap NewMap);
+
+	UFUNCTION(BlueprintPure, Category = "Network|Session")
+	EMultiplayerSessionMap GetSelectedSessionMap() const
+	{
+		return SelectedSessionMap;
+	}
 
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void FindGames(int32 MaxResults, bool bIsLanQuery);
@@ -131,8 +148,17 @@ public:
 	FmultiplayerConnectionFailureEvent OnConnectionFailure;
 
 protected:
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|Session")
-	FString SessionMapPath = TEXT("/Game/ThirdPerson/Maps/ThirdPersonMap");
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Network|Session")
+	FString SessionMapPath = TEXT("/Script/Engine.World'/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo'");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|Session|Maps")
+	FString ThirdPersonMapPath = TEXT("/Game/ThirdPerson/Maps/ThirdPersonMap");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|Session|Maps")
+	FString DesertCityMapPath = TEXT("/Script/Engine.World'/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo'");
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Network|Session|Maps")
+	EMultiplayerSessionMap SelectedSessionMap = EMultiplayerSessionMap::DesertCityExample;
 
 private:
 	void CreateSession();

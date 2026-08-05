@@ -8,6 +8,7 @@
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
+#include "UObject/SoftObjectPath.h"
 
 namespace MultiplayerSession
 {
@@ -71,6 +72,28 @@ void UmultiplayerGameInstance::Shutdown()
 void UmultiplayerGameInstance::ClearLastConnectionError()
 {
 	LastConnectionError.Reset();
+}
+
+void UmultiplayerGameInstance::SelectSessionMap(EMultiplayerSessionMap NewMap)
+{
+	SelectedSessionMap = NewMap;
+
+	switch (SelectedSessionMap)
+	{
+	case EMultiplayerSessionMap::DesertCityExample:
+		SessionMapPath = DesertCityMapPath;
+		break;
+	case EMultiplayerSessionMap::ThirdPersonMap:
+	default:
+		SessionMapPath = ThirdPersonMapPath;
+		break;
+	}
+
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Selected session map: %s"),
+		*SessionMapPath);
 }
 
 void UmultiplayerGameInstance::HostGame(
@@ -275,7 +298,10 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 	}
 
 	UWorld* World = GetWorld();
-	if (World == nullptr || !World->ServerTravel(SessionMapPath + TEXT("?listen")))
+	const FString TravelMapPath = FSoftObjectPath(SessionMapPath).GetLongPackageName();
+	const FString TravelUrl = (TravelMapPath.IsEmpty() ? SessionMapPath : TravelMapPath) + TEXT("?listen");
+
+	if (World == nullptr || !World->ServerTravel(TravelUrl))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Session created, but ServerTravel failed."));
 	}

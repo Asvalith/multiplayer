@@ -14,6 +14,9 @@ class UInputAction;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNetworkActionCountChanged, int32, NewCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnServerActionConfirmed, int32, ConfirmedCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNetworkActionEffect, FVector, EffectLocation);
 
 UCLASS(config=Game)
 class AmultiplayerCharacter : public ACharacter
@@ -46,7 +49,31 @@ class AmultiplayerCharacter : public ACharacter
 
 public:
 	AmultiplayerCharacter();
-	
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	UFUNCTION(BlueprintCallable, Category = "Network|Debug")
+	void PrintNetworkRole();
+
+	UFUNCTION(BlueprintCallable, Category = "Network|Test")
+	void RequestServerAction();
+
+	UFUNCTION(BlueprintCallable, Category = "Network|Test")
+	void RequestSpawnReplicatedCube();
+
+	UFUNCTION(BlueprintPure, Category = "Network|Test")
+	int32 GetNetworkActionCount() const { return NetworkActionCount; }
+
+	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
+	FOnNetworkActionCountChanged OnNetworkActionCountChanged;
+
+	/** Only the owning client receives this server acknowledgement. */
+	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
+	FOnServerActionConfirmed OnServerActionConfirmed;
+
+	/** Every connected peer receives this transient presentation event. */
+	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
+	FOnNetworkActionEffect OnNetworkActionEffect;
 
 protected:
 
@@ -62,6 +89,27 @@ protected:
 	virtual void NotifyControllerChanged() override;
 
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerRequestAction();
+
+	UFUNCTION(Client, Reliable)
+	void ClientConfirmServerAction(int32 ConfirmedCount);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayNetworkActionEffect(FVector_NetQuantize EffectLocation);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerSpawnReplicatedCube(FVector_NetQuantize SpawnLocation);
+
+	UFUNCTION()
+	void OnRep_NetworkActionCount();
+
+private:
+	void BroadcastNetworkActionCount();
+
+	UPROPERTY(ReplicatedUsing = OnRep_NetworkActionCount)
+	int32 NetworkActionCount = 0;
 
 public:
 	/** Returns CameraBoom subobject **/

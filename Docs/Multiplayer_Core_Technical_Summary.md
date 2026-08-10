@@ -1,6 +1,6 @@
 # UE5 Co-op 网络项目统一技术复习文档
 
-> 更新日期：2026-08-05
+> 更新日期：2026-08-10
 > 项目路径：`E:\ueprojrct\multiplayer`
 > 原则：只把代码和运行证据能够证明的内容写成成果；待蓝图接入或待双端验证的内容明确标注。
 
@@ -1516,3 +1516,260 @@ DestroySession
 
 这套顺序的核心是先确认问题属于哪一层，再修改代码。它避免用重接蓝图解决环境故障，
 也避免用清缓存掩盖 Session 状态机或地图引用问题。
+
+---
+
+## 18. Co-op Demo V1 收口说明（2026-08-10）
+
+本节记录 Demo V1 在关卡机关、共享目标、胜利结算和胜利 UI 方面的当前实现。状态分为：
+
+- **已实现**：C++ 调用链存在，并通过 `multiplayer Win64 Development` 构建。
+- **需蓝图配置**：C++ 已暴露属性或事件，但关卡实例、资源引用或 Widget 节点必须在编辑器中设置。
+- **待双端验证**：需要 Host 和 Client 两个独立窗口共同运行后才能形成验收证据。
+
+### 18.1 最终玩法闭环
+
+```text
+四把钥匙分别被玩家收集
+→ 每把钥匙安装到唯一 DestinationSocket / KeyDisplayPoint
+→ 服务器 KeySocket::RegisterActivatedKey
+→ GameState.ActivatedKeys 达到 RequiredKeys（默认 4）
+→ 最终机关允许被激活
+→ 两名不同玩家同时进入 WinArea
+→ 服务器 TryCompleteGame
+→ GameState.bGameWon = true
+→ 属性复制到两个客户端
+→ 每个本地 VictoryPresenter 创建胜利 UMG
+→ 玩家可选择重新开始或退出游戏
+```
+
+共享结果由服务器决定。客户端只能通过自己拥有的 Character 发起“重新开始”请求，不能直接修改
+`ActivatedKeys`、`bGameWon` 或机关最终状态。
+
+### 18.2 机关职责已经拆分
+
+| Actor | 负责内容 | 不负责内容 |
+|---|---|---|
+| `AmultiplayerPressurePlate` | 玩家 Overlap、按压状态、下压动画、一次锁存、目标完成限制 | 不直接移动门或平台 |
+| `AmultiplayerCoopGate` | 订阅压力板、组合开启规则、门移动、开放状态复制 | 不承担玩家检测盒 |
+| `AmultiplayerMovingPlatform` | 平台移动、平台占用或外部压力板激活 | 不与门共享移动点 |
+| `AmultiplayerCoopKey` | 拾取、安装、持有者复制、旋转表现 | 不直接保存全局钥匙数量 |
+| `AmultiplayerKeySocket` | 唯一插槽、防重复激活、注册共享进度 | 不决定游戏胜利 |
+| `AmultiplayerWinArea` | 统计终点内不同玩家并请求结算 | 不允许客户端直接宣布胜利 |
+| `AmultiplayerCoopGameState` | 复制钥匙进度和胜利结果、广播事件 | 不保存只属于服务器的关卡规则对象 |
+
+拆分后的关卡引用关系如下：
+
+```text
+普通门.RequiredPlates[] ──引用──> 压力板实例
+移动平台.ActivationPlate ──引用──> 外部压力板实例
+钥匙.DestinationSocket ──引用──> 对应钥匙架插槽实例
+WinArea ──运行时获取──> CoopGameState
+VictoryPresenter ──运行时监听──> CoopGameState.OnGameWon
+```
+
+### 18.3 压力板配置
+
+关键实例属性：
+
+| 属性 | 默认值 | 语义 |
+|---|---:|---|
+| `PressedOffset` | `(0, 0, -8)` | 相对初始位置的按下偏移；Z 更负表示下压更深 |
+| `PressMoveSpeed` | `80` | PlateMesh 向按下/释放位置插值的速度 |
+| `bLatchOnceActivated` | `false` | 开启后只激活一次，玩家离开也不复位 |
+| `bRequireObjectiveComplete` | `false` | 只有四把钥匙完成后才允许激活 |
+| `bRequirePlayerControlledCharacter` | `true` | 只接受玩家控制角色，不让普通 AI 触发 |
+
+普通协作机关应保持 `bLatchOnceActivated=false`，玩家必须持续踩住。最终钥匙机关应同时设置：
+
+```text
+bRequireObjectiveComplete = true
+bLatchOnceActivated = true
+```
+
+若最终门也必须永久保持打开，再把该门的 `bStayOpenOnceActivated` 设置为 `true`。
+
+### 18.4 门和移动平台的移动点
+
+普通门包含 `ClosedPoint` 与 `OpenPoint`。它们是门 Actor 内部的 SceneComponent，保存的是两个目标位置；
+运行时真正移动的是 `DoorMesh`。编辑关卡时应：
+
+```text
+ClosedPoint = 门关闭时的位置
+OpenPoint   = 门完全打开时的位置
+RequiredPlates[0..N] = 控制该门的压力板实例
+RequiredActivePlateCount = 需要同时激活的压力板数量
+```
+
+组件必须是 `Movable`。如果点被选中后没有坐标轴，应确认当前不是播放状态、视口变换工具处于移动模式，
+并确认选中的是蓝图实例内的继承组件而不是 Content Browser 资产。
+
+移动平台使用独立的 `StartPoint` 与 `TargetPoint`，支持两种激活源：
+
+- `PlatformOccupancy`：直接统计站在平台检测盒中的玩家数量。
+- `ExternalPressurePlate`：订阅关卡中的独立压力板，适合“一人持续踩板、另一人乘平台”。
+
+平台与门可以复用移动组件的思想，但不共享门 Actor，也不把压力板和平台 Mesh 放进同一个 Actor。
+
+### 18.5 钥匙与钥匙架
+
+钥匙实例需要设置唯一的 `DestinationSocket`。玩家进入 `PickupTrigger` 后，服务器优先执行：
+
+```text
+DestinationSocket::StoreCollectedKey(Key)
+→ Key::InstallAtSocket(KeyDisplayPoint)
+→ Socket.bActivated = true
+→ RegisterActivatedKey()
+```
+
+这样钥匙架位置一开始没有已安装钥匙；收集后，原钥匙 Actor 被附着到对应 `KeyDisplayPoint` 并开始在那里显示。
+钥匙的视觉旋转由以下属性控制：
+
+| 属性 | 默认值 | 说明 |
+|---|---:|---|
+| `RotationSpeedDegrees` | `90` | 每秒旋转角度；设置为 0 停止 |
+| `RotationAxis` | `(0,0,1)` | 本地旋转轴；默认绕 Z 轴 |
+
+旋转只修改 `KeyMesh` 的本地旋转，因此钥匙安装到架上以后仍然旋转，不会改变 Socket 的世界位置。
+每把钥匙必须指向不同的 Socket；同一 Socket 的 `bActivated` 可以阻止重复增加全局计数。
+
+### 18.6 胜利判定和公开接口
+
+GameMode 在服务器 `BeginPlay` 中调用：
+
+```cpp
+CoopState->ConfigureRequiredKeys(RequiredKeys); // 默认 4
+```
+
+WinArea 只在服务器维护 `PlayersInside`。胜利条件为：
+
+```text
+PlayersInside.Num() >= RequiredPlayers（默认 2）
+AND
+ActivatedKeys >= RequiredKeys（默认 4）
+```
+
+GameState 对蓝图提供的读取和事件接口：
+
+| 接口 | 类型 | 用途 |
+|---|---|---|
+| `GetObjectiveState()` | `BlueprintPure` | 读取钥匙数、需求数和胜利状态 |
+| `IsObjectiveComplete()` | `BlueprintPure` | 判断钥匙目标是否完成 |
+| `ConfigureRequiredKeys()` | `BlueprintAuthorityOnly` | 服务器配置钥匙需求 |
+| `OnObjectiveProgressChanged` | `BlueprintAssignable` | UI 或机关监听钥匙进度 |
+| `OnGameWon` | `BlueprintAssignable` | 本地 UI 监听胜利结果 |
+| `On Game Won UI` | `BlueprintImplementableEvent` | 可选的 GameState 蓝图扩展入口 |
+
+`RegisterActivatedKey()` 和 `TryCompleteGame()` 保持为 C++ 内部接口，没有暴露为普通客户端可调用的
+`BlueprintCallable`。这是有意的权限边界，不是接口遗漏。
+
+`bGameWon` 先检查旧值再写入，因此服务器只结算一次；VictoryPresenter 也检查现有 Widget，避免本地重复创建。
+
+### 18.7 胜利 UI、重新开始与退出
+
+每个本地 Character 都包含 `VictoryPresenter` 组件。它只在 `IsLocallyControlled()` 为真时绑定
+`GameState.OnGameWon`，因此 Listen Server 和远端 Client 会各自创建一份本地胜利界面。
+
+角色蓝图必须把 `VictoryPresenter.VictoryWidgetClass` 设置为 `Content/UI/winandquit`。胜利时组件会：
+
+```text
+CreateWidget
+→ AddToViewport(100)
+→ Show Mouse Cursor
+→ Set Input Mode Game And UI
+```
+
+重新开始按钮的正确蓝图链：
+
+```text
+OnClicked
+→ Get Owning Player Pawn
+→ Cast To multiplayerCharacter
+→ Request Restart Coop Game
+→ ServerRestartCoopGame RPC
+→ GameMode::RestartCoopGame
+→ ServerTravel(CurrentMap + "?listen")
+```
+
+退出按钮的正确蓝图链：
+
+```text
+OnClicked
+→ Get Owning Player
+→ Quit Game
+```
+
+静态资源检查已经发现 `winandquit` 中存在 `OnClicked` 和 `QuitGame`，但没有发现
+`RequestRestartCoopGame` 节点。重新开始按钮仍需要在编辑器中连接、编译并保存后再做双端验收。
+
+### 18.8 机关碰撞基线
+
+| 组件 | Collision Enabled | Object Type | Pawn 响应 | Generate Overlap Events |
+|---|---|---|---|---|
+| PressurePlate.PlateMesh | Query and Physics | WorldDynamic | Block | Off |
+| PressurePlate.ActivationTrigger | Query Only | WorldDynamic | Overlap | On |
+| CoopGate.DoorMesh | Query and Physics | WorldDynamic | Block | Off |
+| MovingPlatform.PlatformMesh | Query and Physics | WorldDynamic | Block | Off |
+| MovingPlatform.ActivationVolume | Query Only | WorldDynamic | Overlap | On |
+| CoopKey.KeyMesh | No Collision | WorldDynamic | Ignore | Off |
+| CoopKey.PickupTrigger | Query Only | WorldDynamic | Overlap | On |
+| KeySocket.ActivationTrigger | Query Only | WorldDynamic | Overlap | On |
+| WinArea.WinTrigger | Query Only | WorldDynamic | Overlap | On |
+
+代码或 Timeline 驱动的门、压力板和平台均保持 `Simulate Physics=false`、`Mobility=Movable`。实体 Mesh
+负责站立和阻挡；独立 Box/Sphere 负责 Overlap 事件，不能让同一个碰撞组件同时承担两种职责。
+
+### 18.9 双人验收矩阵
+
+| 用例 | 预期结果 |
+|---|---|
+| 只收集 3/4 把钥匙，两人进入 WinArea | 不胜利 |
+| 收齐 4 把钥匙，只有玩家 1 进入 | 不胜利 |
+| 收齐 4 把钥匙，只有玩家 2 进入 | 不胜利 |
+| 收齐 4 把钥匙，两人同时进入 | 两端各显示一次胜利 UMG |
+| 同一个玩家多个碰撞组件进入 | 人数不能重复增加 |
+| 一名玩家离开 WinArea | 在另一名玩家进入前不能胜利 |
+| 胜利后再次进入/离开 | 不重复结算，不重复创建 Widget |
+| Client 点击重新开始 | 请求到达服务器，两端重载同一地图 |
+| Client 点击退出 | 只退出该客户端进程 |
+| Host 点击退出 | Listen Server 结束，Client 应收到断开连接 |
+
+可使用 `TestTwoPlayers.bat` 启动两个相同尺寸窗口。最终验收仍需保存 Host 和 Client 两份日志，确认：
+
+```text
+Coop objective configured: RequiredKeys=4
+WinArea Evaluate: Players=2 RequiredPlayers=2 KeysComplete=true
+OnGameWon 在两个本地客户端各执行一次
+```
+
+### 18.10 当前已知缺口
+
+1. `TSet` 可以防止同一 Character 的多个碰撞组件在 BeginOverlap 时重复加人；但当前 EndOverlap 收到任意
+   一个组件离开事件后就会移除整个 Character。若角色确实有多个参与 Pawn Overlap 的组件，需要增加组件级
+   引用计数，或确认 Actor 已完全离开 Trigger 后再移除。WinArea、压力板和平台都应做相同审计。
+2. `winandquit` 的重新开始按钮仍需连接 `RequestRestartCoopGame`，然后 Compile/Save。
+3. 需要在 `BP_ThirdPersonCharacter` 中确认 `VictoryWidgetClass=winandquit`。
+4. 需要确认玩法地图 World Settings 没有使用错误的 GameMode Override；项目默认值已经指向
+   `/Script/multiplayer.multiplayerGameMode`。
+5. 独立游戏目标已经构建成功，但机关、钥匙、胜利、重开仍需完整双窗口运行证据。
+
+---
+
+## 19. Git 与二进制资产策略
+
+Unreal 的 `.uasset` 和 `.umap` 是项目运行所需的二进制资产，不是可由 C++ 自动重新生成的中间文件。
+它们包含蓝图、关卡、材质、Mesh 引用和编辑器序列化数据，因此必须在“可复现项目”与“仓库体积/授权”之间
+做明确选择。
+
+Demo V1 分支使用 Git LFS：
+
+```gitattributes
+*.uasset filter=lfs diff=lfs merge=lfs -text
+*.umap filter=lfs diff=lfs merge=lfs -text
+```
+
+这样 Git 提交保存小型指针，真实二进制由 LFS 存储；232 MB 的 BuiltData 不再受到普通 GitHub 单文件
+100 MB 限制。资源按源码配置、自制蓝图/UI、地图、纹理和模型分批提交，便于失败后续传和定位。
+
+注意：Git LFS 解决技术上传限制，不自动解决第三方商城资产的再分发授权。公开仓库发布前仍需核对
+Stylized Egypt 资源许可；若许可不允许公开再分发，应只提交自制资产和依赖说明。

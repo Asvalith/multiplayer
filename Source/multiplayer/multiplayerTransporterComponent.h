@@ -32,6 +32,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Transport")
 	void SetTransportActive(bool bNewActive);
 
+	/** Captures fixed world-space endpoints supplied by the owning mechanism. */
+	void ConfigureWorldTargets(const FVector& InStartLocation, const FVector& InActiveLocation);
+
 	UFUNCTION(BlueprintPure, Category = "Coop|Transport")
 	bool IsTransportActive() const { return bTransportActive; }
 
@@ -58,6 +61,8 @@ private:
 	bool bOffsetUsesActorRotation = true;
 
 	FVector StartLocation = FVector::ZeroVector;
+	FVector ConfiguredActiveLocation = FVector::ZeroVector;
+	bool bUseConfiguredWorldTargets = false;
 	bool bTransportActive = false;
 	bool bMoving = false;
 };

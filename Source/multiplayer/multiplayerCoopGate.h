@@ -7,6 +7,7 @@
 #include "multiplayerCoopGate.generated.h"
 
 class AmultiplayerPressurePlate;
+class AmultiplayerCoopGameState;
 class USceneComponent;
 class UStaticMeshComponent;
 
@@ -53,6 +54,9 @@ protected:
 	void HandleRequiredPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive);
 
 	UFUNCTION()
+	void HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys);
+
+	UFUNCTION()
 	void OnRep_GateOpen();
 
 	UFUNCTION()
@@ -76,17 +80,25 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UStaticMeshComponent> DoorMesh;
 
+	/** Designers position these two points in a Blueprint child to define door travel. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USceneComponent> ClosedPoint;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USceneComponent> OpenPoint;
+
 	UPROPERTY(EditInstanceOnly, Category = "Coop Gate|Rules")
 	TArray<TObjectPtr<AmultiplayerPressurePlate>> RequiredPlates;
 
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules", meta = (ClampMin = "1"))
-	int32 RequiredActivePlateCount = 2;
+	int32 RequiredActivePlateCount = 1;
 
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
-	bool bStayOpenOnceActivated = true;
+	bool bStayOpenOnceActivated = false;
 
-	UPROPERTY(EditAnywhere, Category = "Coop Gate|Movement")
-	FVector DoorOpenOffset = FVector(0.0f, 0.0f, 400.0f);
+	/** Prevents the gate from opening until every required key is activated. */
+	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
+	bool bRequireObjectiveComplete = false;
 
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Movement", meta = (ClampMin = "1.0"))
 	float DoorMoveSpeed = 250.0f;
@@ -97,5 +109,6 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_ActivePlateCount)
 	int32 ActivePlateCount = 0;
 
-	FVector DoorClosedRelativeLocation = FVector::ZeroVector;
+	UPROPERTY()
+	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
 };

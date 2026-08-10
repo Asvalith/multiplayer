@@ -15,7 +15,7 @@ struct FmultiplayerCoopObjectiveState
 	int32 ActivatedKeys = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Coop|Objective")
-	int32 RequiredKeys = 2;
+	int32 RequiredKeys = 4;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Coop|Objective")
 	bool bGameWon = false;
@@ -66,6 +66,10 @@ public:
 protected:
 	UFUNCTION()
 	void OnRep_ObjectiveState();
+
+	/** Implement this in the GameState Blueprint to create the local victory UMG. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Objective", meta = (DisplayName = "On Game Won UI"))
+	void ReceiveGameWon();
 
 private:
 	UPROPERTY(ReplicatedUsing = OnRep_ObjectiveState)

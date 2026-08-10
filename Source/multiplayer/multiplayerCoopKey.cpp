@@ -2,6 +2,8 @@
 
 #include "multiplayerCoopKey.h"
 
+#include "multiplayerKeySocket.h"
+
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SphereComponent.h"
@@ -11,7 +13,7 @@
 
 AmultiplayerCoopKey::AmultiplayerCoopKey()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
 	SetReplicateMovement(true);
 
@@ -33,6 +35,21 @@ AmultiplayerCoopKey::AmultiplayerCoopKey()
 		&AmultiplayerCoopKey::HandlePickupOverlap);
 }
 
+void AmultiplayerCoopKey::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (RotationSpeedDegrees <= 0.0f || RotationAxis.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FQuat RotationDelta(
+		RotationAxis.GetSafeNormal(),
+		FMath::DegreesToRadians(RotationSpeedDegrees * DeltaSeconds));
+	KeyMesh->AddLocalRotation(RotationDelta);
+}
+
 void AmultiplayerCoopKey::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (Holder != nullptr)
@@ -51,6 +68,7 @@ void AmultiplayerCoopKey::GetLifetimeReplicatedProps(
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AmultiplayerCoopKey, Holder);
+	DOREPLIFETIME(AmultiplayerCoopKey, bInstalled);
 }
 
 void AmultiplayerCoopKey::HandlePickupOverlap(
@@ -61,7 +79,7 @@ void AmultiplayerCoopKey::HandlePickupOverlap(
 	bool bFromSweep,
 	const FHitResult& SweepResult)
 {
-	if (!HasAuthority() || Holder != nullptr)
+	if (!HasAuthority() || Holder != nullptr || bInstalled)
 	{
 		return;
 	}
@@ -75,8 +93,15 @@ void AmultiplayerCoopKey::HandlePickupOverlap(
 
 void AmultiplayerCoopKey::PickupBy(ACharacter* Character)
 {
-	if (!HasAuthority() || Character == nullptr || Holder != nullptr)
+	if (!HasAuthority() || Character == nullptr || Holder != nullptr || bInstalled)
 	{
+		return;
+	}
+
+	if (DestinationSocket != nullptr && DestinationSocket->StoreCollectedKey(this))
+	{
+		OnKeyPickedUp.Broadcast(Character);
+		ReceiveKeyHolderChanged(nullptr);
 		return;
 	}
 
@@ -86,6 +111,25 @@ void AmultiplayerCoopKey::PickupBy(ACharacter* Character)
 	ApplyHeldState();
 	ForceNetUpdate();
 	OnRep_Holder();
+}
+
+bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
+{
+	if (!HasAuthority() || SocketPoint == nullptr || bInstalled)
+	{
+		return false;
+	}
+
+	ReleaseHolder(false);
+	bInstalled = true;
+	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SetOwner(SocketPoint->GetOwner());
+	AttachToComponent(
+		SocketPoint,
+		FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	OnRep_Installed();
+	ForceNetUpdate();
+	return true;
 }
 
 bool AmultiplayerCoopKey::ConsumeAtSocket()
@@ -134,6 +178,16 @@ void AmultiplayerCoopKey::OnRep_Holder()
 	ApplyHeldState();
 	OnKeyPickedUp.Broadcast(Holder);
 	ReceiveKeyHolderChanged(Holder);
+}
+
+void AmultiplayerCoopKey::OnRep_Installed()
+{
+	if (!bInstalled)
+	{
+		return;
+	}
+
+	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
 
 void AmultiplayerCoopKey::ApplyHeldState()

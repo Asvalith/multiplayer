@@ -29,6 +29,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Coop|Key Socket")
 	bool IsActivated() const { return bActivated; }
 
+	/** Installs a collected key directly into this rack slot on the server. */
+	bool StoreCollectedKey(AmultiplayerCoopKey* Key);
+
 	UPROPERTY(BlueprintAssignable, Category = "Coop|Key Socket")
 	FmultiplayerKeySocketActivatedEvent OnSocketActivated;
 
@@ -56,6 +59,9 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
 	TObjectPtr<UStaticMeshComponent> SocketMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Key Socket", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USceneComponent> KeyDisplayPoint;
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
 	TObjectPtr<UBoxComponent> ActivationTrigger;

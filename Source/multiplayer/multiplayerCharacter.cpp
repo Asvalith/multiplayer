@@ -13,6 +13,8 @@
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
 #include "multiplayerReplicatedCube.h"
+#include "multiplayerVictoryPresenterComponent.h"
+#include "multiplayerGameMode.h"
 #include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
@@ -54,6 +56,8 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName); // Attach the camera to the end of the boom and let the boom adjust to match the controller orientation
 	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
 
+	VictoryPresenter = CreateDefaultSubobject<UmultiplayerVictoryPresenterComponent>(TEXT("VictoryPresenter"));
+
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
 }
@@ -64,6 +68,7 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 void AmultiplayerCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
+	VictoryPresenter->RefreshBinding();
 
 	// Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
@@ -209,6 +214,25 @@ void AmultiplayerCharacter::RequestSpawnReplicatedCube()
 		+ FVector(0.0f, 0.0f, 100.0f);
 
 	ServerSpawnReplicatedCube(SpawnLocation);
+}
+
+void AmultiplayerCharacter::RequestRestartCoopGame()
+{
+	ServerRestartCoopGame();
+}
+
+bool AmultiplayerCharacter::ServerRestartCoopGame_Validate()
+{
+	return !IsActorBeingDestroyed();
+}
+
+void AmultiplayerCharacter::ServerRestartCoopGame_Implementation()
+{
+	if (AmultiplayerGameMode* CoopGameMode =
+		GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AmultiplayerGameMode>() : nullptr)
+	{
+		CoopGameMode->RestartCoopGame();
+	}
 }
 
 bool AmultiplayerCharacter::ServerSpawnReplicatedCube_Validate(

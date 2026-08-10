@@ -11,6 +11,7 @@ class USpringArmComponent;
 class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
+class UmultiplayerVictoryPresenterComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -30,6 +31,10 @@ class AmultiplayerCharacter : public ACharacter
 	/** Follow camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
+
+	/** Local-only bridge from replicated game-over state to the configured victory UMG. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Victory", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UmultiplayerVictoryPresenterComponent> VictoryPresenter;
 	
 	/** MappingContext */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
@@ -60,6 +65,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Network|Test")
 	void RequestSpawnReplicatedCube();
+
+	/** May be called by the victory widget on either player's owning client. */
+	UFUNCTION(BlueprintCallable, Category = "Coop|Match")
+	void RequestRestartCoopGame();
 
 	UFUNCTION(BlueprintPure, Category = "Network|Test")
 	int32 GetNetworkActionCount() const { return NetworkActionCount; }
@@ -101,6 +110,9 @@ protected:
 
 	UFUNCTION(Server, Reliable, WithValidation)
 	void ServerSpawnReplicatedCube(FVector_NetQuantize SpawnLocation);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerRestartCoopGame();
 
 	UFUNCTION()
 	void OnRep_NetworkActionCount();

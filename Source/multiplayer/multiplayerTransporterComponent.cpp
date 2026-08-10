@@ -73,11 +73,25 @@ void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 	SetComponentTickEnabled(true);
 }
 
+void UmultiplayerTransporterComponent::ConfigureWorldTargets(
+	const FVector& InStartLocation,
+	const FVector& InActiveLocation)
+{
+	StartLocation = InStartLocation;
+	ConfiguredActiveLocation = InActiveLocation;
+	bUseConfiguredWorldTargets = true;
+}
+
 FVector UmultiplayerTransporterComponent::GetTargetLocation() const
 {
 	if (!bTransportActive)
 	{
 		return StartLocation;
+	}
+
+	if (bUseConfiguredWorldTargets)
+	{
+		return ConfiguredActiveLocation;
 	}
 
 	const AActor* Owner = GetOwner();

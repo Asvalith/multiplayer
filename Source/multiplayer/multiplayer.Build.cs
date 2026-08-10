@@ -15,6 +15,7 @@ public class multiplayer : ModuleRules
 			"Engine",
 			"InputCore",
 			"EnhancedInput",
+			"UMG",
 			"OnlineSubsystem",
 			"OnlineSubsystemUtils"
 		});

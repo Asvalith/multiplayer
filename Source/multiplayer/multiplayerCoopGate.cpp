@@ -3,9 +3,11 @@
 #include "multiplayerCoopGate.h"
 
 #include "Components/SceneComponent.h"
+#include "Components/ArrowComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Character.h"
+#include "multiplayerCoopGameState.h"
 #include "multiplayerPressurePlate.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
@@ -21,6 +23,7 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	SceneRoot->SetMobility(EComponentMobility::Movable);
 
 	DoorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorMesh"));
 	DoorMesh->SetupAttachment(SceneRoot);
@@ -28,6 +31,20 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 	DoorMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	DoorMesh->SetRelativeLocation(FVector(300.0f, 0.0f, 200.0f));
 	DoorMesh->SetRelativeScale3D(FVector(0.3f, 2.0f, 2.0f));
+
+	ClosedPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("ClosedPoint"));
+	ClosedPoint->SetupAttachment(SceneRoot);
+	ClosedPoint->SetMobility(EComponentMobility::Movable);
+	ClosedPoint->bEditableWhenInherited = true;
+	ClosedPoint->SetRelativeLocation(FVector(300.0f, 0.0f, 200.0f));
+	CastChecked<UArrowComponent>(ClosedPoint)->ArrowColor = FColor::Red;
+
+	OpenPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("OpenPoint"));
+	OpenPoint->SetupAttachment(SceneRoot);
+	OpenPoint->SetMobility(EComponentMobility::Movable);
+	OpenPoint->bEditableWhenInherited = true;
+	OpenPoint->SetRelativeLocation(FVector(300.0f, 0.0f, 600.0f));
+	CastChecked<UArrowComponent>(OpenPoint)->ArrowColor = FColor::Green;
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMesh.Succeeded())
@@ -40,8 +57,14 @@ void AmultiplayerCoopGate::BeginPlay()
 {
 	Super::BeginPlay();
 
-	DoorClosedRelativeLocation = DoorMesh->GetRelativeLocation();
 	BindRequiredPlates();
+	CoopGameState = GetWorld()->GetGameState<AmultiplayerCoopGameState>();
+	if (CoopGameState != nullptr)
+	{
+		CoopGameState->OnObjectiveProgressChanged.AddUniqueDynamic(
+			this,
+			&AmultiplayerCoopGate::HandleObjectiveProgressChanged);
+	}
 	EvaluateGateState();
 	ApplyGateState(true);
 }
@@ -49,6 +72,12 @@ void AmultiplayerCoopGate::BeginPlay()
 void AmultiplayerCoopGate::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindRequiredPlates();
+	if (CoopGameState != nullptr)
+	{
+		CoopGameState->OnObjectiveProgressChanged.RemoveDynamic(
+			this,
+			&AmultiplayerCoopGate::HandleObjectiveProgressChanged);
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -56,18 +85,20 @@ void AmultiplayerCoopGate::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	const FVector TargetLocation = DoorClosedRelativeLocation + (bGateOpen ? DoorOpenOffset : FVector::ZeroVector);
+	const FVector TargetLocation = bGateOpen
+		? OpenPoint->GetComponentLocation()
+		: ClosedPoint->GetComponentLocation();
 	const FVector NewLocation = FMath::VInterpConstantTo(
-		DoorMesh->GetRelativeLocation(),
+		DoorMesh->GetComponentLocation(),
 		TargetLocation,
 		DeltaSeconds,
 		DoorMoveSpeed);
 
-	DoorMesh->SetRelativeLocation(NewLocation);
+	DoorMesh->SetWorldLocation(NewLocation);
 
 	if (NewLocation.Equals(TargetLocation, 0.5f))
 	{
-		DoorMesh->SetRelativeLocation(TargetLocation);
+		DoorMesh->SetWorldLocation(TargetLocation);
 		SetActorTickEnabled(false);
 	}
 }
@@ -117,6 +148,11 @@ void AmultiplayerCoopGate::HandleRequiredPlateChanged(AmultiplayerPressurePlate*
 	EvaluateGateState();
 }
 
+void AmultiplayerCoopGate::HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys)
+{
+	EvaluateGateState();
+}
+
 void AmultiplayerCoopGate::EvaluateGateState()
 {
 	if (!HasAuthority())
@@ -154,7 +190,25 @@ void AmultiplayerCoopGate::EvaluateGateState()
 
 	const int32 RequiredCount = GetRequiredPlateCount();
 	const bool bHasValidPlateSetup = RequiredPlates.Num() > 0 && RequiredCount > 0;
-	const bool bShouldOpen = bHasValidPlateSetup && ActivePlateCount >= RequiredCount && DistinctPlayers.Num() >= RequiredCount;
+	const bool bObjectiveReady = !bRequireObjectiveComplete
+		|| (CoopGameState != nullptr && CoopGameState->IsObjectiveComplete());
+	const bool bShouldOpen = bHasValidPlateSetup
+		&& bObjectiveReady
+		&& ActivePlateCount >= RequiredCount
+		&& DistinctPlayers.Num() >= RequiredCount;
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("CoopGate[%s] Evaluate: Plates=%d Active=%d Required=%d Players=%d ObjectiveRequired=%s ObjectiveReady=%s ShouldOpen=%s CurrentOpen=%s"),
+		*GetName(),
+		RequiredPlates.Num(),
+		ActivePlateCount,
+		RequiredCount,
+		DistinctPlayers.Num(),
+		bRequireObjectiveComplete ? TEXT("true") : TEXT("false"),
+		bObjectiveReady ? TEXT("true") : TEXT("false"),
+		bShouldOpen ? TEXT("true") : TEXT("false"),
+		bGateOpen ? TEXT("true") : TEXT("false"));
 	const bool bNewGateOpen = bStayOpenOnceActivated ? (bGateOpen || bShouldOpen) : bShouldOpen;
 
 	if (bGateOpen != bNewGateOpen)
@@ -181,10 +235,12 @@ void AmultiplayerCoopGate::OnRep_ActivePlateCount()
 
 void AmultiplayerCoopGate::ApplyGateState(bool bSnapToTarget)
 {
-	const FVector TargetLocation = DoorClosedRelativeLocation + (bGateOpen ? DoorOpenOffset : FVector::ZeroVector);
+	const FVector TargetLocation = bGateOpen
+		? OpenPoint->GetComponentLocation()
+		: ClosedPoint->GetComponentLocation();
 	if (bSnapToTarget)
 	{
-		DoorMesh->SetRelativeLocation(TargetLocation);
+		DoorMesh->SetWorldLocation(TargetLocation);
 		SetActorTickEnabled(false);
 		return;
 	}

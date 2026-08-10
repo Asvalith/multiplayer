@@ -7,6 +7,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Character.h"
+#include "multiplayerCoopGameState.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -21,15 +22,18 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	SceneRoot->SetMobility(EComponentMobility::Movable);
 
 	PlateMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlateMesh"));
 	PlateMesh->SetupAttachment(SceneRoot);
 	PlateMesh->SetMobility(EComponentMobility::Movable);
-	PlateMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PlateMesh->SetCollisionProfileName(TEXT("BlockAll"));
+	PlateMesh->SetGenerateOverlapEvents(false);
 	PlateMesh->SetRelativeScale3D(FVector(1.5f, 1.5f, 0.1f));
 
 	ActivationTrigger = CreateDefaultSubobject<UBoxComponent>(TEXT("ActivationTrigger"));
 	ActivationTrigger->SetupAttachment(SceneRoot);
+	ActivationTrigger->bEditableWhenInherited = true;
 	ActivationTrigger->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
 	ActivationTrigger->SetBoxExtent(FVector(150.0f, 150.0f, 60.0f));
 	ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -51,6 +55,17 @@ void AmultiplayerPressurePlate::BeginPlay()
 	ActivationTrigger->OnComponentBeginOverlap.AddDynamic(this, &AmultiplayerPressurePlate::HandleBeginOverlap);
 	ActivationTrigger->OnComponentEndOverlap.AddDynamic(this, &AmultiplayerPressurePlate::HandleEndOverlap);
 	ApplyPlateState(true);
+
+	if (HasAuthority() && bRequireObjectiveComplete)
+	{
+		CoopGameState = GetWorld()->GetGameState<AmultiplayerCoopGameState>();
+		if (CoopGameState != nullptr)
+		{
+			CoopGameState->OnObjectiveProgressChanged.AddUniqueDynamic(
+				this,
+				&AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
+		}
+	}
 }
 
 void AmultiplayerPressurePlate::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -67,6 +82,12 @@ void AmultiplayerPressurePlate::EndPlay(const EEndPlayReason::Type EndPlayReason
 	}
 
 	Occupants.Reset();
+	if (CoopGameState != nullptr)
+	{
+		CoopGameState->OnObjectiveProgressChanged.RemoveDynamic(
+			this,
+			&AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -180,6 +201,13 @@ void AmultiplayerPressurePlate::HandleOccupantDestroyed(AActor* DestroyedActor)
 	}
 }
 
+void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
+	int32 ActivatedKeys,
+	int32 RequiredKeys)
+{
+	EvaluatePlateState();
+}
+
 void AmultiplayerPressurePlate::RemoveInvalidOccupants()
 {
 	for (auto It = Occupants.CreateIterator(); It; ++It)
@@ -200,7 +228,20 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 
 	RemoveInvalidOccupants();
 
-	const bool bNewPlateActive = !Occupants.IsEmpty();
+	const bool bObjectiveReady = !bRequireObjectiveComplete
+		|| (CoopGameState != nullptr && CoopGameState->IsObjectiveComplete());
+	const bool bNewPlateActive = (bLatchOnceActivated && bPlateActive)
+		|| (bObjectiveReady && !Occupants.IsEmpty());
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("PressurePlate[%s] Evaluate: Occupants=%d ObjectiveRequired=%s ObjectiveReady=%s Current=%s New=%s"),
+		*GetName(),
+		Occupants.Num(),
+		bRequireObjectiveComplete ? TEXT("true") : TEXT("false"),
+		bObjectiveReady ? TEXT("true") : TEXT("false"),
+		bPlateActive ? TEXT("true") : TEXT("false"),
+		bNewPlateActive ? TEXT("true") : TEXT("false"));
 	if (bPlateActive != bNewPlateActive)
 	{
 		bPlateActive = bNewPlateActive;

@@ -10,6 +10,7 @@ class ACharacter;
 class USceneComponent;
 class USphereComponent;
 class UStaticMeshComponent;
+class AmultiplayerKeySocket;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FmultiplayerKeyPickedUpEvent,
@@ -25,6 +26,8 @@ class MULTIPLAYER_API AmultiplayerCoopKey : public AActor
 public:
 	AmultiplayerCoopKey();
 
+	virtual void Tick(float DeltaSeconds) override;
+
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -35,6 +38,7 @@ public:
 	bool IsHeldBy(const ACharacter* Character) const { return Holder == Character; }
 
 	bool ConsumeAtSocket();
+	bool InstallAtSocket(USceneComponent* SocketPoint);
 
 	UPROPERTY(BlueprintAssignable, Category = "Coop|Key")
 	FmultiplayerKeyPickedUpEvent OnKeyPickedUp;
@@ -53,6 +57,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_Holder();
+
+	UFUNCTION()
+	void OnRep_Installed();
 
 	UFUNCTION()
 	void HandleHolderDestroyed(AActor* DestroyedActor);
@@ -76,6 +83,19 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = "Coop|Key")
 	FName CarrySocketName = TEXT("KeySocket");
+
+	/** When assigned, collecting this key immediately installs it in this separate rack slot. */
+	UPROPERTY(EditInstanceOnly, Category = "Coop|Key")
+	TObjectPtr<AmultiplayerKeySocket> DestinationSocket;
+
+	UPROPERTY(EditAnywhere, Category = "Coop|Key|Visual", meta = (ClampMin = "0.0"))
+	float RotationSpeedDegrees = 90.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Coop|Key|Visual")
+	FVector RotationAxis = FVector::UpVector;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Installed)
+	bool bInstalled = false;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Holder)
 	TObjectPtr<ACharacter> Holder;

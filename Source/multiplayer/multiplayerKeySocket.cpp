@@ -22,6 +22,10 @@ AmultiplayerKeySocket::AmultiplayerKeySocket()
 	SocketMesh->SetupAttachment(SceneRoot);
 	SocketMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	KeyDisplayPoint = CreateDefaultSubobject<USceneComponent>(TEXT("KeyDisplayPoint"));
+	KeyDisplayPoint->SetupAttachment(SceneRoot);
+	KeyDisplayPoint->SetRelativeLocation(FVector(0.0f, 0.0f, 75.0f));
+
 	ActivationTrigger = CreateDefaultSubobject<UBoxComponent>(TEXT("ActivationTrigger"));
 	ActivationTrigger->SetupAttachment(SceneRoot);
 	ActivationTrigger->SetBoxExtent(FVector(100.0f));
@@ -31,6 +35,27 @@ AmultiplayerKeySocket::AmultiplayerKeySocket()
 	ActivationTrigger->OnComponentBeginOverlap.AddDynamic(
 		this,
 		&AmultiplayerKeySocket::HandleSocketOverlap);
+}
+
+bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
+{
+	if (!HasAuthority() || bActivated || Key == nullptr || !Key->InstallAtSocket(KeyDisplayPoint))
+	{
+		return false;
+	}
+
+	bActivated = true;
+	ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ForceNetUpdate();
+	OnRep_Activated();
+
+	if (AmultiplayerCoopGameState* CoopState =
+		GetWorld()->GetGameState<AmultiplayerCoopGameState>())
+	{
+		CoopState->RegisterActivatedKey();
+	}
+
+	return true;
 }
 void AmultiplayerKeySocket::GetLifetimeReplicatedProps(
 	TArray<FLifetimeProperty>& OutLifetimeProps) const

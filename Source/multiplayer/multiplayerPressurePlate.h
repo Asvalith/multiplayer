@@ -11,6 +11,7 @@ class UBoxComponent;
 class USceneComponent;
 class UStaticMeshComponent;
 class AmultiplayerPressurePlate;
+class AmultiplayerCoopGameState;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnPressurePlateActiveChanged, AmultiplayerPressurePlate*, Plate, bool, bIsActive);
 
@@ -33,6 +34,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Pressure Plate")
 	bool IsPlateActive() const { return bPlateActive; }
+
+	UFUNCTION(BlueprintPure, Category = "Pressure Plate")
+	bool IsLatchedOnceActivated() const { return bLatchOnceActivated; }
 
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
 
@@ -61,6 +65,9 @@ protected:
 
 	UFUNCTION()
 	void HandleOccupantDestroyed(AActor* DestroyedActor);
+
+	UFUNCTION()
+	void HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys);
 
 	UFUNCTION()
 	void OnRep_PlateActive();
@@ -93,9 +100,20 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Rules")
 	bool bRequirePlayerControlledCharacter = true;
 
+	/** When enabled, the first valid press permanently activates this plate. */
+	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Rules")
+	bool bLatchOnceActivated = false;
+
+	/** When enabled, overlap is ignored until all configured keys are in the rack. */
+	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Rules")
+	bool bRequireObjectiveComplete = false;
+
 	UPROPERTY(ReplicatedUsing = OnRep_PlateActive)
 	bool bPlateActive = false;
 
 	FVector ReleasedRelativeLocation = FVector::ZeroVector;
 	TSet<TWeakObjectPtr<ACharacter>> Occupants;
+
+	UPROPERTY()
+	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
 };

@@ -20,7 +20,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Network|LAN")
 	void JoinLANGame();
 
+	/** Reloads the current match and travels every connected player together. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Match")
+	void RestartCoopGame();
+
 protected:
+	virtual void BeginPlay() override;
+
+	/** Authoritative number of rack slots that must be activated before victory. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Coop|Objective", meta = (ClampMin = "1"))
+	int32 RequiredKeys = 4;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|LAN")
 	FString LANMapPath = TEXT("/Script/Engine.World'/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo'");
 

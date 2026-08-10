@@ -10,6 +10,15 @@ class ACharacter;
 class UBoxComponent;
 class UStaticMeshComponent;
 class UmultiplayerTransporterComponent;
+class AmultiplayerPressurePlate;
+class USceneComponent;
+
+UENUM(BlueprintType)
+enum class EMovingPlatformActivationSource : uint8
+{
+	ExternalPressurePlate,
+	PlatformOccupancy
+};
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FmultiplayerPlatformOccupancyEvent,
@@ -65,12 +74,19 @@ protected:
 	UFUNCTION()
 	void HandleOccupantDestroyed(AActor* DestroyedActor);
 
+	UFUNCTION()
+	void HandleActivationPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive);
+
 	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Platform", meta = (DisplayName = "On Platform Occupancy Visual Changed"))
 	void ReceivePlatformOccupancyChanged(int32 CurrentPlayers, int32 NeededPlayers);
 
 private:
 	void RefreshOccupancy();
+	void RefreshActivation();
 	void RemoveInvalidOccupants();
+
+	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
+	TObjectPtr<USceneComponent> PlatformRoot;
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
 	TObjectPtr<UStaticMeshComponent> PlatformMesh;
@@ -81,7 +97,21 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
 	TObjectPtr<UmultiplayerTransporterComponent> Transporter;
 
-	UPROPERTY(EditAnywhere, Category = "Coop|Platform", meta = (ClampMin = "1"))
+	/** Fixed endpoints are captured at BeginPlay and may be positioned in a Blueprint child. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Platform", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USceneComponent> StartPoint;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Platform", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USceneComponent> TargetPoint;
+
+	UPROPERTY(EditAnywhere, Category = "Coop|Platform|Activation")
+	EMovingPlatformActivationSource ActivationSource = EMovingPlatformActivationSource::ExternalPressurePlate;
+
+	/** A separately placed pressure plate; the platform never owns the plate. */
+	UPROPERTY(EditInstanceOnly, Category = "Coop|Platform|Activation", meta = (EditCondition = "ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate", EditConditionHides))
+	TObjectPtr<AmultiplayerPressurePlate> ActivationPlate;
+
+	UPROPERTY(EditAnywhere, Category = "Coop|Platform|Activation", meta = (ClampMin = "1", EditCondition = "ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy", EditConditionHides))
 	int32 RequiredPlayers = 1;
 
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerCount)

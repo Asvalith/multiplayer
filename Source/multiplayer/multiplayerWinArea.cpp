@@ -145,6 +145,14 @@ void AmultiplayerWinArea::EvaluateWinCondition()
 	}
 
 	RemoveInvalidPlayers();
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("WinArea[%s] Evaluate: Players=%d RequiredPlayers=%d KeysComplete=%s"),
+		*GetName(),
+		PlayersInside.Num(),
+		RequiredPlayers,
+		CoopGameState->IsObjectiveComplete() ? TEXT("true") : TEXT("false"));
 	if (PlayersInside.Num() >= RequiredPlayers
 		&& CoopGameState->IsObjectiveComplete())
 	{

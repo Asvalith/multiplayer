@@ -7,6 +7,7 @@ public class multiplayer : ModuleRules
 	public multiplayer(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+		PublicIncludePaths.Add(ModuleDirectory);
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
@@ -15,6 +16,9 @@ public class multiplayer : ModuleRules
 			"Engine",
 			"InputCore",
 			"EnhancedInput",
+			"GameplayAbilities",
+			"GameplayTags",
+			"GameplayTasks",
 			"UMG",
 			"OnlineSubsystem",
 			"OnlineSubsystemUtils"

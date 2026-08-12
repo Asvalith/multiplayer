@@ -1,10 +1,14 @@
 # UE5.5 GAS 与网络预测深度路线
 
-> 更新日期：2026-08-10
+> 更新日期：2026-08-12
 >
 > 项目：`E:\ueprojrct\multiplayer`
 >
 > 目标：从零实现可双人测试的 GAS 单局 Demo，并达到能够解释预测、服务器校验、复制和网络优化的面试深度。
+
+> 状态说明：本文最初写于 `demov1`，其中“GAS 尚未接入”描述的是该基线。`coop-GAS` 已完成第一版核心闭环，当前事实与证据以
+> [《Co-op GAS 核心闭环实施说明》](GAS_Core_Loop_Implementation.md)和
+> [《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)为准；未完成项目仍按本文路线推进。
 
 ## 1. 路线结论
 
@@ -45,16 +49,20 @@
 
 ### 2.2 GAS 当前状态
 
-GAS 目前只完成方案设计，尚未接入：
+`coop-GAS` 已经完成第一版 C++ 核心闭环：
 
-- `multiplayer.Build.cs` 尚未依赖 `GameplayAbilities`、`GameplayTags`、`GameplayTasks`。
-- `multiplayer.uproject` 尚未启用 GameplayAbilities 插件。
-- 尚无 ASC、AttributeSet、GameplayAbility、GameplayEffect 和 GameplayCue 实现。
-- 尚无 PredictionKey、TargetData 和 Replication Mode 实测结果。
+- 已启用 GameplayAbilities 插件和三个 GAS 模块依赖。
+- PlayerState 持有 Mixed 模式 ASC 与 AttributeSet，Character 作为 Avatar。
+- 已实现伤害、治疗、状态免疫、Cost、Cooldown、原生 InputTag 和 AbilitySet。
+- 已实现自定义 TargetData AbilityTask、PredictionKey 上传以及服务器目标校验。
+- Editor/Game 编译和 `multiplayer.GAS.Configuration` 配置自动化测试已通过。
+
+当前仍缺少双客户端行为验收、预测拒绝/回滚实验、GameplayCue、ExecCalc、自定义 EffectContext、死亡复活、双客户端自动化和 Network Insights 前后数据。完整状态矩阵见
+[《Co-op GAS 架构与面试讲解手册》第 12.2 节](GAS_Architecture_Interview_Guide.md#122-完整未完成项矩阵)。
 
 准确表述是：
 
-> 已具备 UE5 双人网络和服务器权威 Gameplay 基础；GAS、预测和网络优化属于下一阶段。
+> 已具备 UE5 双人网络基础和可编译、可启动的 GAS 核心闭环；完整多人验收、预测实验和数据化网络优化属于下一阶段。
 
 ### 2.3 不在首版范围内
 

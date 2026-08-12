@@ -2,8 +2,10 @@
 
 #pragma once
 
+#include "AbilitySystemInterface.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "GameplayTagContainer.h"
 #include "Logging/LogMacros.h"
 #include "multiplayerCharacter.generated.h"
 
@@ -12,15 +14,19 @@ class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
 class UmultiplayerVictoryPresenterComponent;
+class UmultiplayerAbilitySet;
+class UmultiplayerAbilitySystemComponent;
+class UmultiplayerAttributeSet;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNetworkActionCountChanged, int32, NewCount);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnServerActionConfirmed, int32, ConfirmedCount);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNetworkActionEffect, FVector, EffectLocation);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnMultiplayerAbilitySystemInitialized);
 
 UCLASS(config=Game)
-class AmultiplayerCharacter : public ACharacter
+class AmultiplayerCharacter : public ACharacter, public IAbilitySystemInterface
 {
 	GENERATED_BODY()
 
@@ -52,10 +58,23 @@ class AmultiplayerCharacter : public ACharacter
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* LookAction;
 
+	/** Optional editor-authored set. The C++ demo abilities are used when this is unset. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UmultiplayerAbilitySet> StartupAbilitySet;
+
 public:
 	AmultiplayerCharacter();
 
+	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void OnRep_PlayerState() override;
+
+	UFUNCTION(BlueprintPure, Category = "GAS")
+	UmultiplayerAbilitySystemComponent* GetMultiplayerAbilitySystemComponent() const;
+
+	UFUNCTION(BlueprintPure, Category = "GAS")
+	UmultiplayerAttributeSet* GetMultiplayerAttributeSet() const { return AttributeSet; }
 
 	UFUNCTION(BlueprintCallable, Category = "Network|Debug")
 	void PrintNetworkRole();
@@ -84,6 +103,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
 	FOnNetworkActionEffect OnNetworkActionEffect;
 
+	UPROPERTY(BlueprintAssignable, Category = "GAS")
+	FOnMultiplayerAbilitySystemInitialized OnAbilitySystemInitialized;
+
 protected:
 
 	/** Called for movement input */
@@ -91,6 +113,13 @@ protected:
 
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
+
+	void DamageAbilityPressed();
+	void DamageAbilityReleased();
+	void HealAbilityPressed();
+	void HealAbilityReleased();
+	void ImmunityAbilityPressed();
+	void ImmunityAbilityReleased();
 			
 
 protected:
@@ -119,6 +148,15 @@ protected:
 
 private:
 	void BroadcastNetworkActionCount();
+	void InitializeAbilitySystem();
+	void AbilityInputTagPressed(const FGameplayTag& InputTag);
+	void AbilityInputTagReleased(const FGameplayTag& InputTag);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UmultiplayerAbilitySystemComponent> AbilitySystemComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UmultiplayerAttributeSet> AttributeSet;
 
 	UPROPERTY(ReplicatedUsing = OnRep_NetworkActionCount)
 	int32 NetworkActionCount = 0;

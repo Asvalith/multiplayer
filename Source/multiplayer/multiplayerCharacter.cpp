@@ -1,6 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "multiplayerCharacter.h"
+#include "AbilitySystem/multiplayerAbilitySet.h"
+#include "AbilitySystem/multiplayerAbilitySystemComponent.h"
+#include "AbilitySystem/multiplayerAttributeSet.h"
+#include "AbilitySystem/multiplayerGameplayTags.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -16,6 +20,7 @@
 #include "multiplayerVictoryPresenterComponent.h"
 #include "multiplayerGameMode.h"
 #include "Net/UnrealNetwork.h"
+#include "Player/multiplayerGASPlayerState.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -65,10 +70,39 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 //////////////////////////////////////////////////////////////////////////
 // Input
 
+void AmultiplayerCharacter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	InitializeAbilitySystem();
+}
+
+void AmultiplayerCharacter::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	InitializeAbilitySystem();
+}
+
+UAbilitySystemComponent* AmultiplayerCharacter::GetAbilitySystemComponent() const
+{
+	if (AbilitySystemComponent != nullptr)
+	{
+		return AbilitySystemComponent;
+	}
+
+	const AmultiplayerGASPlayerState* GASPlayerState = GetPlayerState<AmultiplayerGASPlayerState>();
+	return GASPlayerState != nullptr ? GASPlayerState->GetAbilitySystemComponent() : nullptr;
+}
+
+UmultiplayerAbilitySystemComponent* AmultiplayerCharacter::GetMultiplayerAbilitySystemComponent() const
+{
+	return Cast<UmultiplayerAbilitySystemComponent>(GetAbilitySystemComponent());
+}
+
 void AmultiplayerCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
 	VictoryPresenter->RefreshBinding();
+	InitializeAbilitySystem();
 
 	// Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
@@ -99,6 +133,14 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 		PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AmultiplayerCharacter::PrintNetworkRole);
 		PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AmultiplayerCharacter::RequestServerAction);
 		PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AmultiplayerCharacter::RequestSpawnReplicatedCube);
+
+		// Asset-free GAS test controls. These can later be replaced by InputAction assets.
+		PlayerInputComponent->BindKey(EKeys::Four, IE_Pressed, this, &AmultiplayerCharacter::DamageAbilityPressed);
+		PlayerInputComponent->BindKey(EKeys::Four, IE_Released, this, &AmultiplayerCharacter::DamageAbilityReleased);
+		PlayerInputComponent->BindKey(EKeys::Five, IE_Pressed, this, &AmultiplayerCharacter::HealAbilityPressed);
+		PlayerInputComponent->BindKey(EKeys::Five, IE_Released, this, &AmultiplayerCharacter::HealAbilityReleased);
+		PlayerInputComponent->BindKey(EKeys::Six, IE_Pressed, this, &AmultiplayerCharacter::ImmunityAbilityPressed);
+		PlayerInputComponent->BindKey(EKeys::Six, IE_Released, this, &AmultiplayerCharacter::ImmunityAbilityReleased);
 	}
 	else
 	{
@@ -176,6 +218,72 @@ void AmultiplayerCharacter::ServerRequestAction_Implementation()
 	// and transient presentation, so late joiners do not depend on them.
 	ClientConfirmServerAction(NetworkActionCount);
 	MulticastPlayNetworkActionEffect(GetActorLocation());
+}
+
+void AmultiplayerCharacter::DamageAbilityPressed()
+{
+	AbilityInputTagPressed(MultiplayerGameplayTags::InputTag_Ability_Damage);
+}
+
+void AmultiplayerCharacter::DamageAbilityReleased()
+{
+	AbilityInputTagReleased(MultiplayerGameplayTags::InputTag_Ability_Damage);
+}
+
+void AmultiplayerCharacter::HealAbilityPressed()
+{
+	AbilityInputTagPressed(MultiplayerGameplayTags::InputTag_Ability_Heal);
+}
+
+void AmultiplayerCharacter::HealAbilityReleased()
+{
+	AbilityInputTagReleased(MultiplayerGameplayTags::InputTag_Ability_Heal);
+}
+
+void AmultiplayerCharacter::ImmunityAbilityPressed()
+{
+	AbilityInputTagPressed(MultiplayerGameplayTags::InputTag_Ability_Immunity);
+}
+
+void AmultiplayerCharacter::ImmunityAbilityReleased()
+{
+	AbilityInputTagReleased(MultiplayerGameplayTags::InputTag_Ability_Immunity);
+}
+
+void AmultiplayerCharacter::AbilityInputTagPressed(const FGameplayTag& InputTag)
+{
+	if (UmultiplayerAbilitySystemComponent* ASC = GetMultiplayerAbilitySystemComponent())
+	{
+		ASC->AbilityInputTagPressed(InputTag);
+	}
+}
+
+void AmultiplayerCharacter::AbilityInputTagReleased(const FGameplayTag& InputTag)
+{
+	if (UmultiplayerAbilitySystemComponent* ASC = GetMultiplayerAbilitySystemComponent())
+	{
+		ASC->AbilityInputTagReleased(InputTag);
+	}
+}
+
+void AmultiplayerCharacter::InitializeAbilitySystem()
+{
+	AmultiplayerGASPlayerState* GASPlayerState = GetPlayerState<AmultiplayerGASPlayerState>();
+	if (GASPlayerState == nullptr)
+	{
+		return;
+	}
+
+	GASPlayerState->InitializeAbilityActorInfo(this);
+	AbilitySystemComponent = GASPlayerState->GetMultiplayerAbilitySystemComponent();
+	AttributeSet = GASPlayerState->GetAttributeSet();
+
+	if (HasAuthority())
+	{
+		GASPlayerState->GrantStartupAbilities(StartupAbilitySet);
+	}
+
+	OnAbilitySystemInitialized.Broadcast();
 }
 
 void AmultiplayerCharacter::ClientConfirmServerAction_Implementation(

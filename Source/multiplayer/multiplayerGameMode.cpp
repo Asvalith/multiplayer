@@ -3,6 +3,7 @@
 #include "multiplayerGameMode.h"
 #include "multiplayerCharacter.h"
 #include "multiplayerCoopGameState.h"
+#include "Player/multiplayerGASPlayerState.h"
 #include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/SoftObjectPath.h"
@@ -10,6 +11,7 @@
 AmultiplayerGameMode::AmultiplayerGameMode()
 {
 	GameStateClass = AmultiplayerCoopGameState::StaticClass();
+	PlayerStateClass = AmultiplayerGASPlayerState::StaticClass();
 
 	// set default pawn class to our Blueprinted character
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter"));

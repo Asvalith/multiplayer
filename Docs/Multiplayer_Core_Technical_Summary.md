@@ -7,6 +7,10 @@
 GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)。
 
+分支边界：本文主体记录 `demov1` 的基础 Co-op 版本，因此后文“GAS 尚未开始”不代表 `coop-GAS` 的当前状态。
+`coop-GAS` 的已实现事实、调用链和验证证据见
+[《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)。
+
 ---
 
 ## 1. 当前完成度与边界

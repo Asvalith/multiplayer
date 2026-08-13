@@ -58,7 +58,7 @@
 - GAS 插件和模块依赖。
 - PlayerState ASC/AttributeSet 与 Mixed 复制。
 - `PossessedBy`、`OnRep_PlayerState` ActorInfo 初始化。
-- 原生 GameplayTag 输入和 AbilitySet/C++ fallback 授予。
+- 原生 GameplayTag 输入和 AbilitySet 单一授予源。
 - LocalPredicted 伤害、治疗、免疫。
 - Cost、Cooldown、TargetData AbilityTask 和 PredictionKey 上传。
 - DamageIntent 只序列化 ShotId、量化 Origin/方向和估算 ServerTime；PlayerState ASC 跨 Pawn 维护 ShotId guard。
@@ -139,7 +139,7 @@ flowchart LR
 代码任务：
 
 - 使用 Enhanced Input 将 InputAction 映射到 InputTag。
-- 保留 4/5/6 仅作为开发调试入口。
+- 自动化调试入口放入独立 Developer Harness，并由命令行显式启用；Character 不保留数字键旁路。
 - 增加正式 AbilitySet、InitAttributes 和 Blueprint GE 配置入口。
 - 建立 HUD 与 PlayerState ASC 的绑定/解绑生命周期。
 
@@ -153,7 +153,7 @@ flowchart LR
 
 - 正式输入能激活三个能力。
 - UI 不因重复初始化或 Pawn 更换重复绑定。
-- C++ fallback 只承担测试兜底，不再作为正式内容配置。
+- AbilitySet 缺失时明确报错且不标记已授予，配置自动化负责提前发现。
 
 ### M2：合作目标、队伍规则和最终瞄准（第 2～3 周）
 
@@ -353,7 +353,7 @@ flowchart LR
 当前执行范围只补充 GAS 内容，不返工已经稳定的门、压力板、钥匙、移动平台和胜利流程。严格按以下顺序执行：
 
 1. **补齐合作型技能语义**：保留 Damage 只攻击 `Team.Enemy`、Immunity 自用；把当前 Self Heal 扩展为服务器验证的队友治疗，或增加独立 Ally Heal，明确不能治疗敌人、死亡目标或超距/遮挡目标。
-2. **先整理 C++/资产边界**：把 Damage、Vulnerability、Healing、Immunity Effect Class 以及 Montage/Cue 表现引用暴露为 `EditDefaultsOnly`，保留 C++ fallback；核心 Commit、ExecCalc、Context、PredictionKey、TargetData 和服务器验证不得复制到蓝图。
+2. **先整理 C++/资产边界**：把 Damage、Vulnerability、Healing、Immunity Effect Class 以及 Montage/Cue 表现引用暴露为 `EditDefaultsOnly`；AbilitySet 保持唯一授予源，核心 Commit、ExecCalc、Context、PredictionKey、TargetData 和服务器验证不得复制到蓝图。
 3. **创建正式数据资产**：建立 `BP_GA_Damage`、`BP_GA_HealAlly`、`BP_GA_Immunity` 和对应 Cost/Cooldown/状态 GE 资产，让 `DA_GAS_DefaultAbilitySet` 引用正式技能类。蓝图只配置数值、类引用、图标和表现资源。
 4. **完成 GameplayCue 内容层**：在 `/Game/GAS/GameplayCues` 为 Cast、Impact、Heal、Immunity、Vulnerability、Death 制作 Niagara/音效/材质表现；每个 Tag 只保留一个表现所有者，并验证预测 Owner 不双播、持续 Cue 正确 Removed。
 5. **完成正式 GAS UI**：创建继承 `multiplayerGASHUDWidget` 的 Widget Blueprint，显示 Health、Energy、Cooldown、Immune/Vulnerable/Dead；再增加开发版 PredictionKey、ShotId、Role、RejectReason 调试面板。Widget 只读 ASC/PlayerState，不能修改权威状态。

@@ -28,9 +28,9 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 
 | 模块 | 已完成内容 | 主要网络知识 |
 |---|---|---|
-| Character 网络实验 | NetMode、Role、Authority、Ownership 日志；Server/Client/Multicast RPC；RepNotify；服务端生成 Actor | RPC 方向、所有权、持久状态和瞬时事件 |
+| Character 网络教学样例（历史） | 曾用于 NetMode、Role、RPC 和 RepNotify 入门；`coop-GAS` 已移除，避免与真实业务链重复 | 概念保留，样例不进入当前运行时 |
 | GameInstance Session | Create、Find、Join、Destroy；异步 Delegate Handle；重复建房先销毁；操作防重入 | OSS、Session 生命周期、异步回调 |
-| ReplicatedCube | 服务端生成、Actor 复制、移动复制和服务端物理 | 服务端权威生成 |
+| ReplicatedCube（历史） | 早期服务端生成/移动复制样例；`coop-GAS` 已删除 | 当前用机关、属性和目标状态验证复制 |
 | PressurePlate | 独立压力板、服务端 Overlap、占用者去重、状态复制和按需动画 Tick | 单一职责、弱引用、事件驱动 |
 | CoopGate | 订阅多个独立压力板、不同玩家约束、门状态复制和本地表现 | Delegate 解耦、RepNotify、晚加入 |
 | MovingPlatform | 多玩家占用、服务端移动、Transform 复制、按需 Tick | 服务端模拟、移动复制、更新治理 |
@@ -73,10 +73,10 @@ AmultiplayerCoopGameState（服务器和客户端均存在）
 └─ RepNotify 向 UI 和机关广播共享进度
 
 AmultiplayerCharacter
-├─ Server RPC：客户端请求服务端执行
-├─ Client RPC：服务端只回执拥有者
-├─ Multicast RPC：所有端播放一次瞬时表现
-└─ RepNotify：复制可持续的计数状态
+├─ 初始化 PlayerState 持有的 ASC/Avatar
+├─ 将正式 InputAction 转发为 InputTag
+├─ 编排 HUD、GameplayCue 和胜利表现组件
+└─ 开发实验委托给显式启用的 DeveloperHarness
 
 关卡机关
 ├─ AmultiplayerPressurePlate：可独立复用的权威压力板
@@ -93,68 +93,18 @@ AmultiplayerCharacter
 
 ---
 
-## 3. 四种网络手段的完整对比
+## 3. 网络手段与当前业务落点
 
-### 3.1 Server RPC
+早期 `1/2/3 -> Server/Client/Multicast/NetworkActionCount/ReplicatedCube` 只用于教学，已从 `coop-GAS` 删除。概念现在由真实业务链验证：
 
-```text
-客户端按键 2
-→ RequestServerAction
-→ ServerRequestAction_Validate
-→ ServerRequestAction_Implementation
-→ 服务端增加 NetworkActionCount
-```
+| 手段 | 当前落点 |
+|---|---|
+| Server RPC | 联机重开请求、GAS 服务器校验和仅开发环境启用的测试注入 |
+| Client RPC | ASC 的预测拒绝确认和 DamageIntent 结果回执 |
+| Replication / RepNotify | 机关状态、目标进度、属性、队伍和死亡状态；支持晚加入取得当前值 |
+| GameplayCue | 技能瞬时/持续表现；不代替权威状态复制 |
 
-- 客户端只能提出请求，权威数据由服务器修改。
-- RPC 放在玩家拥有的 Character 上，满足 Client-to-Server Ownership 条件。
-- Validation 检查对象是否正在销毁；真实项目还要校验冷却、距离、资源和状态。
-- 低频关键请求使用 Reliable，高频输入不能无脑使用 Reliable。
-
-### 3.2 Client RPC
-
-```text
-服务器完成请求
-→ ClientConfirmServerAction(ConfirmedCount)
-→ 只在该 Character 的拥有者客户端执行
-→ OnServerActionConfirmed 广播给蓝图
-```
-
-用途是给请求者回执、显示私有提示或打开只属于该玩家的 UI。它不负责共享状态。
-
-### 3.3 NetMulticast RPC
-
-```text
-服务器确认动作
-→ MulticastPlayNetworkActionEffect(Location)
-→ 服务器和相关客户端收到
-→ OnNetworkActionEffect 播放瞬时表现
-```
-
-- 使用 Unreliable，因为表现允许偶发丢失，不能阻塞后续关键网络消息。
-- 适合粒子、声音和一次性表现。
-- 不适合门是否打开、目标是否完成等持久状态，晚加入者会错过历史 Multicast。
-
-### 3.4 属性复制与 RepNotify
-
-```text
-服务端修改 NetworkActionCount
-→ UE 属性复制
-→ 客户端 OnRep_NetworkActionCount
-→ OnNetworkActionCountChanged
-```
-
-- 适合血量、门状态、任务进度等可持续状态。
-- 新客户端加入后能获得当前值。
-- Listen Server 修改属性时不会依赖自己的 OnRep，服务端显式调用共用应用函数。
-
-核心结论：
-
-```text
-请求权威操作：Server RPC
-只通知拥有者：Client RPC
-播放一次表现：Unreliable Multicast
-保存最终状态：Replication + RepNotify
-```
+持久结果用复制，拥有者私有回执用 Client RPC，客户端只提交意图，服务器决定最终状态。当前业务不依赖通用 Character Multicast 样例。
 
 ---
 
@@ -576,11 +526,7 @@ None
 
 ### 8.2 网络实验表现
 
-在 Character 蓝图中可选绑定：
-
-- `OnNetworkActionCountChanged`：显示复制后的最终计数。
-- `OnServerActionConfirmed`：只给请求玩家显示“服务器确认”。
-- `OnNetworkActionEffect`：在所有端播放同一位置的声音或粒子。
+旧 Character 数字键、计数 Delegate 和 ReplicatedCube 表现已删除。当前调试展示分别由 GAS HUD/Cue Presenter、机关 RepNotify Delegate 和命令行 Developer Harness 提供，不在 Character 蓝图维护第二套教学表现链。
 
 ### 8.3 机关关卡
 

@@ -31,31 +31,31 @@
 - PlayerState ASC 跨 Pawn 分配 ShotId；服务器执行 Schema/source、重放/旧序号、50ms 最小间隔、时间/Origin/方向校验，再从权威 EyeOrigin 在当前世界 Sweep 重建 HitResult。
 - 最终伤害和治疗只由服务器应用。
 - 免疫使用持续 GameplayEffect、`State.Immune` 和 `UImmunityGameplayEffectComponent`。
-- Enhanced Input 通过 InputTag 驱动正式能力入口，并保留数字键作为开发验收入口。
+- Enhanced Input 通过 InputTag 驱动唯一的正式能力入口；测试目标操作由显式 `-GASDeveloperControls` 夹具提供。
 - 基础 HUD 绑定 PlayerState ASC，显示属性、冷却和状态，并在 Avatar 更换时安全重绑。
-- 服务器用 `GameplayEffectExecutionCalculation` 计算攻击、护甲、暴击和 Vulnerability 修正。
+- 服务器用 `GameplayEffectExecutionCalculation` 计算基础伤害、低血量确定性 Critical 和 Vulnerability 修正；AttackPower/Armor/Resistance 捕获仍是下一阶段任务。
 - 自定义 `GameplayEffectContext` 复制 Critical、HitType 和 ImpactImpulse，供确认 Cue 消费。
 - Vulnerability 最多三层，按 Target 聚合、应用时刷新持续时间，并抑制叠层 Cue 重触发。
 - 死亡、复活、Ability/Task/临时 GE 清理和 ASC Avatar 重绑已形成服务器幂等链。
 - 原生 GameplayCue 已覆盖 Damage/Heal Cast、权威结果、Immunity/Vulnerability 生命周期和 Death 通知。
 
-## 2. 正式输入与开发测试按键
+## 2. 正式输入与开发夹具
 
-正式入口使用 Enhanced Input；为了可复现技术验收，仍保留以下开发按键：
+正式入口只使用 Enhanced Input：
 
 | 按键 | 能力 | 数值 |
 |---|---|---|
-| `4` | 攻击范围内最近的 `Team.Enemy` GAS 目标 | 伤害 25、能量 10、冷却 1 秒、范围 600；玩家均为 `Team.Player`，不能互伤 |
-| `5` | 自我治疗 | 治疗 30、能量 20、冷却 3 秒 |
-| `6` | 状态免疫 | 持续 5 秒、能量 30、冷却 8 秒 |
-| `7` | 生成/重置 M0 敌对训练目标 | 服务器在玩家前方生成一个 `Team.Enemy` GAS 方块；仅用于技术验收 |
+| 鼠标左键 | 攻击准星内的 `Team.Enemy` GAS 目标 | 伤害 25、能量 10、冷却 1 秒、范围 600；玩家均为 `Team.Player`，不能互伤 |
+| `Q` | 自我治疗 | 治疗 30、能量 20、冷却 3 秒 |
+| `E` | 状态免疫 | 持续 5 秒、能量 30、冷却 8 秒 |
+| `7`（仅 `-GASDeveloperControls`） | 生成/重置敌对训练目标 | Developer Harness 的技术验收入口，不属于正式玩法 |
 
-按键和 InputAction 最终都进入同一 InputTag/ASC 调用链，不存在两套 Gameplay 权威逻辑。
+自动化和正式 InputAction 最终都进入同一 InputTag/ASC 调用链，不存在两套 Gameplay 权威逻辑。
 
 ## 3. 伤害网络链路
 
 ```text
-Owning Client 按下 4
+Owning Client 按下鼠标左键
 -> ASC 根据 InputTag 找到 AbilitySpec
 -> LocalPredicted 激活并预测 Cost/Cooldown
 -> AbilityTask 在本地生成只用于预览的 HitResult
@@ -84,17 +84,17 @@ Owning Client 按下 4
 2. Net Mode：`Play As Listen Server`。
 3. New Editor Window，两个窗口大小一致。
 4. 确认当前 GameMode 没有在蓝图里覆盖 PlayerState Class；正确类型是 `multiplayerGASPlayerState`。
-5. 按 `7` 在当前玩家前方生成/重置 `Team.Enemy` GAS 训练方块。它是零资产 M0 验收脚手架，不是正式敌人；伤害玩法不能以玩家互相攻击代替。
+5. 需要人工生成训练目标时，以 `-GASDeveloperControls` 启动，再按 `7`；正式运行不暴露该入口。
 
 测试矩阵：
 
 | 场景 | 预期结果 |
 |---|---|
-| Client 对敌对目标按一次 `4` | Server 对 `Team.Enemy` 目标扣除 25 Health |
-| 连续快速按 `4` | 1 秒冷却期间不能重复激活 |
+| Client 对敌对目标按一次鼠标左键 | Server 对 `Team.Enemy` 目标扣除 25 Health |
+| 连续快速点击鼠标左键 | 1 秒冷却期间不能重复激活 |
 | 目标超过 650 单位 | 服务器拒绝结算伤害 |
 | 目标隔着阻挡 Visibility 的墙 | 服务器拒绝结算伤害 |
-| 玩家按 `5` | Health 最多恢复到 MaxHealth |
+| 玩家按 `Q` | Health 最多恢复到 MaxHealth |
 | Energy 不足 | `CommitAbility` 失败，不产生技能结果 |
 | 免疫目标受到敌对负面 GE | 负面伤害 GE 被免疫组件阻止；玩家互伤不是正式验收路径 |
 | 免疫 5 秒结束后再受击 | 正常扣除 Health |

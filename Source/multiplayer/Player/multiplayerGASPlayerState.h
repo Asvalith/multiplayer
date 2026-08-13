@@ -86,7 +86,6 @@ private:
 	void ClearTransientAbilityState();
 	void HandleHealthChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleEnergyChanged(const FOnAttributeChangeData& ChangeData);
-	void GrantBuiltInDemoAbilities();
 
 	UPROPERTY(VisibleAnywhere, Category = "GAS")
 	TObjectPtr<UmultiplayerAbilitySystemComponent> AbilitySystemComponent;

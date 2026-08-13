@@ -12,6 +12,8 @@ param(
 
     [switch]$Headless,
 
+    [switch]$DeveloperControls,
+
     [ValidateRange(1, 65535)]
     [int]$Port = 17777,
 
@@ -64,6 +66,9 @@ $autoArgument = if ($AutoSequence) {
         @('-GASM5Auto')
     }
 } else { @() }
+$developerControlsArgument = if ($DeveloperControls) {
+    @('-GASDeveloperControls')
+} else { @() }
 $displayArguments = if ($Headless) {
     @('-NullRHI', '-Unattended', '-NoSound')
 } else {
@@ -85,7 +90,7 @@ $hostArguments = @(
     $projectPath,
     "$testMap`?listen",
     '-game'
-) + $displayArguments + $stageArguments + @(
+) + $displayArguments + $stageArguments + $developerControlsArgument + @(
     "-port=$Port", '-NoSplash', '-ForceLogFlush',
     "-PktLag=$PktLagMs", "-PktLoss=$PktLossPercent",
     "-AbsLog=$hostLogPath",
@@ -99,7 +104,7 @@ $clientArguments = @(
 ) + $clientDisplayArguments + $stageArguments + @(
     '-NoSplash', '-ForceLogFlush',
     "-PktLag=$PktLagMs", "-PktLoss=$PktLossPercent"
-) + $autoArgument + @(
+) + $autoArgument + $developerControlsArgument + @(
     "-AbsLog=$clientLogPath",
     "-LogCmds=`"$logCommands`"",
     '-DDC=InstalledNoZenLocalFallback'
@@ -120,7 +125,7 @@ $clientArguments = @(
     "NetworkConditionNote=PktLag applies in each direction; $PktLagMs on both peers is approximately $($PktLagMs * 2)ms RTT"
     "ClientAutoSequence=$([bool]$AutoSequence)"
     'FormalControls=LMB Damage Enemy, Q Self Heal, E Immunity'
-    'DebugControls=1 Network/GAS Status, 4 Damage Enemy, 5 Self Heal, 6 Immunity, 7 Spawn/Reset Enemy Target, 8 Enemy Damages Self, 9 Arm M6 Immunity Reject Lab'
+    "DeveloperControls=$([bool]$DeveloperControls) (7 Spawn/Reset Target, 8 Enemy Damages Self, 9 Arm M6 Reject Lab); production input remains LMB/Q/E"
     'ExpectedPlayerState=multiplayerGASPlayerState'
     "StageLabNote=$stageNote"
 ) | Set-Content -LiteralPath $runInfoPath -Encoding utf8
@@ -151,7 +156,8 @@ function Wait-ForLogPattern {
     throw "Timed out waiting for '$Pattern' in $Path"
 }
 
-$hostProcess = Start-Process -FilePath $editorPath -ArgumentList $hostArguments -PassThru
+$processWindowStyle = if ($Headless) { 'Hidden' } else { 'Normal' }
+$hostProcess = Start-Process -FilePath $editorPath -ArgumentList $hostArguments -PassThru -WindowStyle $processWindowStyle
 Add-Content -LiteralPath $runInfoPath -Value "HostPid=$($hostProcess.Id)"
 
 try {
@@ -162,7 +168,7 @@ try {
         -Process $hostProcess
     Add-Content -LiteralPath $runInfoPath -Value 'HostReady=true'
 
-    $clientProcess = Start-Process -FilePath $editorPath -ArgumentList $clientArguments -PassThru
+    $clientProcess = Start-Process -FilePath $editorPath -ArgumentList $clientArguments -PassThru -WindowStyle $processWindowStyle
     Add-Content -LiteralPath $runInfoPath -Value "ClientPid=$($clientProcess.Id)"
 
     Wait-ForLogPattern `

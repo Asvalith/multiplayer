@@ -7,6 +7,11 @@
 #include "GameplayTagContainer.h"
 #include "multiplayerAbilitySystemComponent.generated.h"
 
+DECLARE_MULTICAST_DELEGATE_TwoParams(
+	FOnPredictionLabReconciled,
+	bool /* bRejected */,
+	int16 /* PredictionKey */);
+
 UCLASS()
 class MULTIPLAYER_API UmultiplayerAbilitySystemComponent : public UAbilitySystemComponent
 {
@@ -59,6 +64,10 @@ public:
 	bool RecordPredictionLabCaughtUp(FName AbilityName, int16 PredictionKey);
 	int16 GetLastPredictionLabRejectedKey() const { return LastPredictionLabRejectedKey; }
 	int16 GetLastPredictionLabCaughtUpKey() const { return LastPredictionLabCaughtUpKey; }
+	FOnPredictionLabReconciled& OnPredictionLabReconciled()
+	{
+		return PredictionLabReconciledEvent;
+	}
 	uint32 GetPredictionRejectLabTrialId() const
 	{
 		return LastPredictionRejectTrialId != 0
@@ -93,4 +102,5 @@ private:
 	uint32 LastDamageIntentResultShotId = 0;
 	EmultiplayerDamageIntentResult LastDamageIntentResult =
 		EmultiplayerDamageIntentResult::InvalidSchema;
+	FOnPredictionLabReconciled PredictionLabReconciledEvent;
 };

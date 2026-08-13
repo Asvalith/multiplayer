@@ -15,7 +15,6 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "multiplayer.h"
-#include "multiplayerCharacter.h"
 #include "Team/multiplayerTeamLibrary.h"
 
 UmultiplayerGameplayAbility::UmultiplayerGameplayAbility()
@@ -211,16 +210,6 @@ void UmultiplayerGameplayAbility::HandlePredictionRejected(
 			AbilityName,
 			ActionPredictionKey.Current);
 	}
-	if (AbilityName == TEXT("Immunity"))
-	{
-		if (AmultiplayerCharacter* Character =
-			Cast<AmultiplayerCharacter>(GetAvatarActorFromActorInfo()))
-		{
-			Character->ReconcilePredictionLabPendingPresentation(
-				TEXT("Rejected"),
-				ActionPredictionKey.Current);
-		}
-	}
 	UE_LOG(
 		LogMultiplayerGAS,
 		Warning,
@@ -250,16 +239,6 @@ void UmultiplayerGameplayAbility::HandlePredictionCaughtUp(
 		bReconciledCatchUp = SourceASC->RecordPredictionLabCaughtUp(
 			AbilityName,
 			PredictionKey);
-	}
-	if (bReconciledCatchUp && AbilityName == TEXT("Immunity"))
-	{
-		if (AmultiplayerCharacter* Character =
-			Cast<AmultiplayerCharacter>(GetAvatarActorFromActorInfo()))
-		{
-			Character->ReconcilePredictionLabPendingPresentation(
-				TEXT("CaughtUp"),
-				PredictionKey);
-		}
 	}
 	UE_LOG(
 		LogMultiplayerGAS,

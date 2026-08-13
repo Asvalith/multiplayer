@@ -37,7 +37,7 @@
 | M1-UI-02 | 按 `E` | Energy 下降；HUD 显示 Immune 和 Immunity CD，持续时间结束后 Immune 消失 | 待验证 |
 | M1-UI-03 | 按 `Q` | Energy 下降；HUD 显示 Heal CD；Health 不超过 MaxHealth | 待验证 |
 | M1-IN-01 | 按 `7` 后鼠标左键攻击 | 正式 InputAction 通过 InputTag 激活 Damage；目标扣血，Energy 和 Damage CD 更新 | 待验证 |
-| M1-IN-02 | 使用调试键 `4/5/6` | 仍能走相同 InputTag/AbilitySpec 链，不影响正式输入 | 待验证 |
+| M1-IN-02 | 运行 Developer Harness 自动输入 | 仍走相同 InputTag/AbilitySpec 链，不在 Character 复制技能逻辑 | 重构后 M5 `20260814_015249` 自动序列完成；正式输入的非 Headless 人工验收仍待补 |
 | M1-LIFE-01 | 重复触发 `InitializeAbilitySystem` | HUD 不重复创建，属性/Tag 委托不重复绑定 | 代码门禁和自动化配置通过；运行待验证 |
 | M1-LIFE-02 | Client 退出 | Widget 清理委托，Host 不崩溃 | 待验证 |
 
@@ -62,6 +62,6 @@
 ## 5. 当前边界
 
 - HUD 已可直接运行，但视觉是 C++ 基础布局；作品集最终皮肤仍可用 WBP 子类替换。
-- 技能正式配置已来自 AbilitySet；C++ fallback 仍保留给无资产自动化/故障兜底。
+- 技能正式配置与自动化统一来自 AbilitySet；缺失配置会 fail-fast，不再维护 C++ 授予 fallback。
 - 当前 Cooldown HUD 显示“是否冷却”，尚未显示精确剩余秒数。
 - M1 退出仍需完成上面的双窗口人工运行矩阵。

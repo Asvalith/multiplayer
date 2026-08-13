@@ -228,6 +228,7 @@ void UmultiplayerAbilitySystemComponent::RecordPredictionLabRejected(
 	if (AbilityName == TEXT("Immunity"))
 	{
 		LastPredictionLabRejectedKey = PredictionKey;
+		PredictionLabReconciledEvent.Broadcast(true, PredictionKey);
 	}
 }
 
@@ -255,6 +256,7 @@ bool UmultiplayerAbilitySystemComponent::RecordPredictionLabCaughtUp(
 	}
 
 	LastPredictionLabCaughtUpKey = PredictionKey;
+	PredictionLabReconciledEvent.Broadcast(false, PredictionKey);
 	return true;
 }
 

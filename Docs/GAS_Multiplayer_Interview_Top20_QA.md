@@ -67,8 +67,8 @@ GAS 的核心不是一个组件，而是一套协作模型：ASC 保存和复制
 ### 当前项目调用链
 
 ```text
-鼠标左键（或开发键 4）
--> Character::DamageAbilityPressed
+鼠标左键
+-> Character::AbilityInputTagPressed
 -> ASC::AbilityInputTagPressed(InputTag.Ability.Damage)
 -> 遍历 AbilitySpec Dynamic Source Tags
 -> TryActivateAbility

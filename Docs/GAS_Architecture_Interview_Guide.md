@@ -94,8 +94,31 @@ flowchart TB
 | `AbilitySystem/AbilityTasks/multiplayerAbilityTask_TargetActor.*` | 客户端本地选取只用于预测表现；向服务器只发 DamageIntent，服务器验证后重建权威 HitResult |
 | `AbilitySystem/multiplayerGameplayEffects.*` | 伤害、治疗、免疫、Cost、Cooldown 的 C++ 默认 GE |
 | `Player/multiplayerGASPlayerState.*` | ASC/AttributeSet 所有权、属性委托、默认能力授予 |
-| `multiplayerCharacter.*` | Avatar 初始化和临时 `4/5/6` 输入入口 |
+| `multiplayerCharacter.*` | Avatar 初始化、正式 InputTag 转发、死亡控制和表现组件编排 |
+| `UI/multiplayerGASCuePresenterComponent.*` | GameplayCue 灯光、持续状态和预测 Pending 的本地表现；不修改权威 Gameplay 状态 |
+| `Developer/multiplayerGASDeveloperHarnessComponent.*` | M5/M6 双进程实验、测试目标和拒绝注入；仅由命令行显式启用，Shipping 路径不执行 |
 | `Tests/multiplayerGASAutomationTests.cpp` | 标签、预测策略、GE 配置和免疫组件的启动级验证 |
+
+#### 1.3.1 ARCH-001：Character 职责膨胀与教学残留清理（问题复盘）
+
+**现象与难点：** `multiplayerCharacter.cpp` 曾同时承担 Avatar/Input、GameplayCue 表现、M5/M6 双进程状态机、测试目标 RPC，以及早期 `1/2/3` 网络教学样例。问题不只是文件长：测试 Timer、测试 Actor 和表现状态都依赖 Character 生命周期，增加能力时容易误改运行时主链。难点是 M5/M6 已有可复现实验证据，不能用“删测试代码”换取表面上的精简。
+
+**定位工具与操作：** 使用 `rg` 枚举 Character 的函数、RPC、Timer 和跨文件引用；用源码行数与 `git diff --stat` 量化职责集中度；逐项追踪 `SetupPlayerInputComponent -> ASC InputTag`、`GameplayCueDefaultHandler`、`OnAbilitySystemReady -> M5/M6 Harness` 调用链。该检查确认旧 ReplicatedCube 链没有业务消费者，而预测拒绝和 DamageIntent 自动化仍是有效回归入口。
+
+**根因与取舍：** 第一版为了快速验证网络知识，把临时样例和实验夹具直接放进可复制 Character。仅拆成多个 Character `.cpp` 文件只能缩短单文件，不能降低耦合；建立独立插件/模块隔离最彻底，但对当前单模块 Demo 成本过高。当前采用两个窄组件，同时保留 GAS 的实现与实验深度：
+
+| 边界 | 当前职责 |
+|---|---|
+| Character | Avatar/ASC 初始化、正式输入意图转发、死亡控制、组件编排 |
+| GAS PlayerState / ASC / Ability | 持久状态、预测激活、Cost/Cooldown、TargetData 校验和权威结算 |
+| CuePresenter | 只消费 Cue/死亡结果并维护本地表现和 Timer |
+| DeveloperHarness | 保留 M5/M6 状态机、测试 RPC 和弱网证据；`7/8/9` 需 `-GASDeveloperControls`，自动流程需对应 `-GASM*Auto` 参数 |
+
+旧 `1/2/3`、`NetworkActionCount` 和 `ReplicatedCube` 只验证通用 RPC/复制概念，与当前机关/GAS 主链重复，已从 `coop-GAS` 删除。正式技能输入仍由 Enhanced Input/DataAsset 转成 InputTag，不依赖数字键夹具。
+
+**验证与遗留：** 已完成 UE Development Editor/Game 编译、`multiplayer.GAS` 2/2 自动化，以及重构后的双进程回归：M5 `20260814_015249` 完成日志清点，M6 `20260814_015507` 为 95/95 PASS，M6Intent `20260814_015404` 为 52/52 PASS。DeveloperHarness 暂时集中承载三组相关状态机；只有继续增加互不相关的实验时，才按实验场景再拆组件，避免为拆分而拆分。M5 工具仍是日志清点器，不把它表述成严格行为断言。
+
+参考边界：沿用 [GASDocumentation](https://github.com/tranek/GASDocumentation) 的 PlayerState ASC/Avatar 生命周期原则，以及 [GameplayAbilitySystem_Aura](https://github.com/DruidMech/GameplayAbilitySystem_Aura) 和 [GASAura](https://github.com/CNGoSeI/GASAura) 的 Character、PlayerState、AbilitySet 职责分离思路；不复制教程源码、命名或 Content，也不引入当前 Co-op 不需要的 RPG/MVC 层。
 
 ### 1.4 C++ 与蓝图职责边界及当前项目设置清单
 
@@ -142,7 +165,7 @@ flowchart TB
    - `IA_GAS_Damage -> InputTag.Ability.Damage`；
    - `IA_GAS_Heal -> InputTag.Ability.Heal`；
    - `IA_GAS_Immunity -> InputTag.Ability.Immunity`。
-6. 打开 `IMC_GAS_Abilities`，确认正式按键为鼠标左键、`Q`、`E`；当前源码中的 `4/5/6` 只作为开发回退，不能替代正式输入验收。
+6. 打开 `IMC_GAS_Abilities`，确认正式按键为鼠标左键、`Q`、`E`；运行时不再提供 `4/5/6` 旁路，所有人工玩法验收必须经过正式 InputAction/InputTag 链。
 
 可选表现/数据化：可创建 Damage、Heal、Immunity 的 Blueprint Ability 子类，在 Class Defaults 调整 `DamageAmount`、`TargetRange`、`HealingAmount`，再让 AbilitySet 引用这些子类。当前直接引用 C++ Ability 也能使用 C++ 默认值；Cost、Cooldown、目标验证和最终结算不能复制到 Character Blueprint。
 
@@ -344,8 +367,8 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     Key["LMB / Q / E 的 InputAction"] --> Config["InputConfig: Action -> InputTag"]
-    Debug["开发键 4 / 5 / 6"] --> Character
     Config --> Character["Character 输入函数"]
+    Harness["命令行自动化 Harness"] --> ASC
     Character --> Tag["InputTag.Ability.*"]
     Tag --> ASC["AbilityInputTagPressed"]
     ASC --> Spec["AbilitySpec.GetDynamicSpecSourceTags"]
@@ -361,16 +384,11 @@ flowchart LR
 - 标签层级可以表达 `InputTag.Ability.*`；
 - 更容易扩展重绑定、技能栏和调试工具。
 
-M1 已创建 InputAction、MappingContext 和 InputConfig DataAsset：鼠标左键伤害、`Q` 治疗、`E` 免疫。`4/5/6` 仅作为可复现开发入口；两条入口都转成同一 InputTag，不复制技能逻辑。资产加载/接线自动化已通过，正式按键与 HUD 的完整人工矩阵仍待补。
+M1 已创建 InputAction、MappingContext 和 InputConfig DataAsset：鼠标左键伤害、`Q` 治疗、`E` 免疫。开发自动化由独立 Harness 直接提交相同 InputTag，运行时 Character 不保留第二套按键逻辑。资产加载/接线自动化已通过，正式按键与 HUD 的完整人工矩阵仍待补。
 
-### 3.2 AbilitySet 与默认能力
+### 3.2 AbilitySet 单一授予源
 
-当前同时提供两条路径：
-
-1. Character 配置了 AbilitySet：服务器按数据资产授予能力和初始 Effect。
-2. 未配置 AbilitySet：PlayerState 授予三个内置 C++ Demo 能力。
-
-保留 C++ fallback 是为了让分支在没有新增 `.uasset` 时也能编译和启动验证。正式内容应优先使用 AbilitySet，让角色配置数据化；fallback 最终可以只保留给自动化测试。
+Character 必须配置 AbilitySet，服务器只按该数据资产授予能力和初始 Effect。未配置时明确报错并保留重试机会，不再维护第二套 C++ 内置授予源，避免资产配置与代码 fallback 漂移。
 
 ---
 
@@ -514,7 +532,7 @@ InputTag.Immunity
 | 输入标识 | GameplayTag | InputID / enum / 直接绑定类 | 解耦输入、技能类和技能栏配置 |
 | 数值入口 | Meta Attribute | Damage GE 直接减 Health | 集中结算并为 ExecCalc、死亡、统计留扩展点 |
 | 负面免疫 | Immunity GE Component + Tag | 每种伤害手写 bool 判断 | 可以统一扩展到控制和 Debuff |
-| 技能配置 | AbilitySet + C++ fallback | 只在 Character 数组硬编码 | 正式内容数据化，同时保持零资产测试能力 |
+| 技能配置 | AbilitySet 单一授予源 | C++ fallback / Character 数组硬编码 | 消除双权威和配置漂移；自动化复用同一正式 AbilitySet |
 | 机关架构 | 普通服务器权威 Actor | 全部 GAS 化 | 机关不需要 GAS 生命周期与预测能力 |
 | 第一版表现 | 无外部素材 | 迁移 Aura Content | 避免许可证、二进制依赖和教程辨识度 |
 | EffectContext | 自定义 Context，仅携带已有消费者的数据 | 把所有命中临时数据都塞入 Context | M4 已实现 `GetScriptStruct`、`Duplicate`、`NetSerialize`；Critical/HitType/ImpactImpulse 被 M5 Cue 消费，避免复制无消费者字段 |
@@ -1076,7 +1094,7 @@ GE constructor
 | GAS-RISK-001 | 风险分析 | M6 DamageIntent 已实现 Schema、ShotId 幂等、50ms 最小间隔、时间/Origin/方向校验和当前世界服务器 Sweep；0ms/约 300ms RTT 各52/52 PASS | 当前频率保护不是 token bucket；无多轮丢包、快速移动、友军/遮挡专项运行样本，也无历史回溯 | 扩展 token bucket/strike telemetry，补齐运行矩阵；M7 单独实现有限回溯 |
 | PERF-RISK-001 | 优化候选 | Gate/Plate 使用较低频率更新，MovingPlatform 和 PlayerState 有经验频率 | 频率是否合理、主要带宽来自属性还是移动仍未知 | 固定场景比较 RPC、属性字节、Actor 更新次数和 P95/P99 帧时间 |
 | BP-RISK-001 | 风险分析 | C++ GameMode 设置 PlayerStateClass，但地图可能使用 Blueprint GameMode | 蓝图默认值可能覆盖 C++ 类配置，导致 ASC 初始化链不一致 | 检查 World Settings、GameMode BP、两端 PlayerState 实际类型 |
-| CONTENT-OPT-001 | 优化候选 | 默认 GE 和 AbilitySet 有 C++ fallback | 正式数值迭代继续写死 C++ 会增加编译和调参成本 | 引入一组 Blueprint GE/Data Asset 后比较配置、测试和版本管理成本 |
+| CONTENT-OPT-001 | 优化候选 | AbilitySet 已是单一授予源，部分 GE 数值仍由 C++ 默认类提供 | 正式数值迭代继续写死 C++ 会增加编译和调参成本 | 引入 Blueprint GE/Data Asset 后比较配置、测试和版本管理成本 |
 
 ---
 
@@ -1231,8 +1249,8 @@ GE constructor
 | 编号 | 未完成项 | 当前状态 | 完成定义 |
 |---|---|---|---|
 | P0-01 | 双窗口人工验收 | 部分通过 | Client 接受、Immunity Reject 和 DamageIntent 语义拒绝日志链已通过；仍需 Host 反向输入和可视录屏 |
-| P0-02 | 正式 Enhanced Input 接线 | 已实现，待人工输入验收 | InputAction/InputMappingContext 已驱动 InputTag；数字键只保留为开发入口 |
-| P0-03 | AbilitySet/GE 数据化资产 | 部分实现 | 正式 Character 配置 AbilitySet；技能等级、Cost、Cooldown、持续时间不再只依赖 C++ 默认值；C++ fallback 仅用于测试 |
+| P0-02 | 正式 Enhanced Input 接线 | 已实现，待人工输入验收 | InputAction/InputMappingContext 已驱动 InputTag；测试目标键仅在显式 Developer Harness 参数下启用 |
+| P0-03 | AbilitySet/GE 数据化资产 | 部分实现 | 正式 Character 以 AbilitySet 为唯一授予源；技能等级及部分 GE 数值仍需进一步资产化 |
 | P0-04 | 正式 GAS HUD | 已实现，待完整人工验收 | 本地 UI 已显示属性、Cooldown 和状态并支持重绑；Reject 的技术状态日志通过，正式提示与可视回归仍待补 |
 | P0-05 | 技能表现 | 部分通过 | 原生 Cue 的预测/确认/生命周期与 Pending Reject 收口日志通过；Montage、Niagara、音效和人工视觉待补 |
 | P0-06 | 合作型目标选择 | 部分实现 | 治疗/免疫可选择队友；伤害、治疗和免疫根据队伍规则验证目标 |

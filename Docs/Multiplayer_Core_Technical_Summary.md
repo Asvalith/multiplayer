@@ -1,10 +1,11 @@
 # UE5 Co-op 网络项目统一技术复习文档
 
-> 更新日期：2026-08-10
+> 更新日期：2026-08-13
 > 项目路径：`E:\ueprojrct\multiplayer`
 > 原则：只把代码和运行证据能够证明的内容写成成果；待蓝图接入或待双端验证的内容明确标注。
 
 GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
+[《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)。更长的源码阅读和扩展研究见
 [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)。
 
 分支边界：本文主体记录 `demov1` 的基础 Co-op 版本，因此后文“GAS 尚未开始”不代表 `coop-GAS` 的当前状态。
@@ -755,13 +756,13 @@ AI 用于检索 API 迁移线索、审查异步回调和边界条件、生成测
 
 ### 12.3 GAS 进阶版边界
 
-GAS 是基础版通过双客户端验收后的独立进阶版本，目前只完成路线设计，不能表述为已实现。
-基础版先建立可回退的 Git 标签，再从独立分支开发，避免影响已验证的 Session 和机关闭环。
+`demov1` 的初始规划曾把 GAS 作为后续阶段；当前 `coop-GAS` 已完成 M0～M5 核心闭环，以及 M6 Immunity 真 `ClientActivateAbilityFailed` 回滚和 DamageIntent 当前世界服务器权威验证。DamageIntent 只携带 ShotId、量化 Origin/方向和估算 ServerTime；PlayerState ASC 跨 Pawn 分配/验证 ShotId，服务器执行 50ms 最小间隔、字段校验和当前世界 Sweep，再用权威 HitResult 写入 Context。服务器 TargetData 等待已有 5 秒超时，Task 在数据到达、超时/结束时清理委托和 Timer，Damage Ability 在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。Editor/Game Development 和 `DamageIntent.Unit` 通过；0ms/约 300ms RTT 两轮专用核验各52/52 PASS。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 的专项双进程端到端分支，以及完整丢包矩阵、token bucket、服务器+2 Clients 自动化、Dedicated、历史回溯和 Network Insights 优化仍未完成。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)。
 
 - 压力板、门、钥匙和胜利区继续使用服务器权威 Actor 规则，不为了使用 GAS 而迁移成熟机关。
 - GAS 进阶版以伤害、治疗、状态免疫、客户端预测、服务器校验和网络优化为验收范围。
-- 详细架构、20+4 周计划、实验矩阵、性能指标和阶段门禁统一维护在
-  [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)，本总文档不再重复维护计划细节。
+- 当前 M0～M9 执行顺序、实验矩阵和完成门禁统一维护在
+  [《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)，更长的源码阅读计划保留在
+  [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)。
 - GAS 进阶版必须有独立双端日志和弱网数据；未通过门禁前不计入基础版完成度。
 
 ## 13. 下一步收口顺序

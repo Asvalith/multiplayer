@@ -4,6 +4,7 @@
 
 #include "Abilities/Tasks/AbilityTask.h"
 #include "Abilities/GameplayAbilityTargetTypes.h"
+#include "AbilitySystem/multiplayerGameplayAbilityTargetData.h"
 #include "multiplayerAbilityTask_TargetActor.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
@@ -12,7 +13,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	TargetData);
 
 /**
- * Collects a locally selected player target and sends it to the server under the
+ * Collects a locally selected hostile GAS target and sends it to the server under the
  * activation prediction key. The consuming ability must still validate it.
  */
 UCLASS()
@@ -27,6 +28,8 @@ public:
 		float MaxRange);
 
 	virtual void Activate() override;
+	virtual void OnDestroy(bool bInOwnerFinished) override;
+	uint32 GetResolvedShotId() const { return ResolvedShotId; }
 
 	UPROPERTY(BlueprintAssignable)
 	FmultiplayerTargetDataReadyEvent ValidData;
@@ -36,7 +39,20 @@ private:
 	void OnTargetDataReplicated(
 		const FGameplayAbilityTargetDataHandle& TargetData,
 		FGameplayTag ActivationTag);
-	AActor* FindNearestPlayerTarget() const;
+	void HandleRemoteTargetDataTimeout();
+	void ProcessAuthorityIntent(
+		const FGameplayAbilityTargetDataHandle& TargetData,
+		FGameplayTag ActivationTag,
+		bool bConsumeReplicatedData);
+	EmultiplayerDamageIntentResult ResolveAuthorityIntent(
+		const FmultiplayerGameplayAbilityTargetData_DamageIntent& Intent,
+		FHitResult& OutServerHit) const;
+	void ReportAuthorityIntentResult(
+		uint32 ShotId,
+		EmultiplayerDamageIntentResult Result) const;
+	bool FindCrosshairHostileHit(FHitResult& OutHitResult) const;
 
 	float TargetRange = 0.0f;
+	uint32 ResolvedShotId = 0;
+	FTimerHandle RemoteTargetDataTimeoutHandle;
 };

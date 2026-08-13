@@ -1,6 +1,6 @@
 # UE5.5 GAS 与网络预测深度路线
 
-> 更新日期：2026-08-12
+> 更新日期：2026-08-13
 >
 > 项目：`E:\ueprojrct\multiplayer`
 >
@@ -8,7 +8,8 @@
 
 > 状态说明：本文最初写于 `demov1`，其中“GAS 尚未接入”描述的是该基线。`coop-GAS` 已完成第一版核心闭环，当前事实与证据以
 > [《Co-op GAS 核心闭环实施说明》](GAS_Core_Loop_Implementation.md)和
-> [《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)为准；未完成项目仍按本文路线推进。
+> [《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)为准。当前 10～14 周执行顺序、延迟补偿边界和阶段门禁以
+> [《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)为准；本文保留更长的源码阅读和扩展实验路线。
 
 ## 1. 路线结论
 
@@ -49,20 +50,24 @@
 
 ### 2.2 GAS 当前状态
 
-`coop-GAS` 已经完成第一版 C++ 核心闭环：
+`coop-GAS` 已经完成 M0～M5 的技术核心闭环：
 
 - 已启用 GameplayAbilities 插件和三个 GAS 模块依赖。
 - PlayerState 持有 Mixed 模式 ASC 与 AttributeSet，Character 作为 Avatar。
 - 已实现伤害、治疗、状态免疫、Cost、Cooldown、原生 InputTag 和 AbilitySet。
-- 已实现自定义 TargetData AbilityTask、PredictionKey 上传以及服务器目标校验。
+- 已实现自定义 DamageIntent TargetData：客户端只上传 ShotId、量化 Origin/方向和估算 ServerTime，服务器在当前世界重建 HitResult。
+- 已实现正式 Enhanced Input、基础 HUD、团队规则、敌对训练目标、死亡/复活与 ASC 清理。
+- 已实现服务器 `ExecutionCalculation`、自定义 `GameplayEffectContext::NetSerialize` 和三层 Vulnerability 堆叠。
+- 已实现原生 GameplayCue 的预测 Cast、服务器确认 Impact、持续 Cue 生命周期和叠层 Cue 抑制。
 - Editor/Game 编译和 `multiplayer.GAS.Configuration` 配置自动化测试已通过。
+- 0ms 与每方向 150ms（约 300ms RTT）的双进程接受路径已验证；预测 Cue 未双播，持续 Cue 能到期或 Reset 清理。
 
-当前仍缺少双客户端行为验收、预测拒绝/回滚实验、GameplayCue、ExecCalc、自定义 EffectContext、死亡复活、双客户端自动化和 Network Insights 前后数据。完整状态矩阵见
+当前已完成真正 `ClientActivateAbilityFailed` 对预测 Cost、Cooldown、Immunity GE/Cue 和 Pending 表现的回滚实验；DamageIntent 也已完成 Schema/source、ShotId 幂等、50ms 最小间隔、时间/Origin/方向校验、服务器当前世界 Sweep 和语义结果 RPC。TargetData 等待已增加 5 秒超时，Task 在数据到达、超时/结束时清理等待状态、委托和 Timer，并在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。0ms/约 300ms RTT 各52/52 PASS。仍缺 `TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 的专项端到端分支，以及 DamageIntent loss/快速移动/友军/遮挡专项、token bucket、Host 反向输入、Dedicated Server、晚加入、功能级双客户端自动化、正式表现和 Network Insights 前后数据。完整状态矩阵见
 [《Co-op GAS 架构与面试讲解手册》第 12.2 节](GAS_Architecture_Interview_Guide.md#122-完整未完成项矩阵)。
 
 准确表述是：
 
-> 已具备 UE5 双人网络基础和可编译、可启动的 GAS 核心闭环；完整多人验收、预测实验和数据化网络优化属于下一阶段。
+> 已完成 GAS 数值、生命周期、GameplayCue 接受路径、真实激活拒绝回滚，以及 DamageIntent 幂等/语义拒绝/当前世界权威 Trace 的核心闭环；服务器历史回溯和数据化网络优化仍属于后续阶段。
 
 ### 2.3 不在首版范围内
 
@@ -222,8 +227,9 @@ IncomingDamage（Meta Attribute）
 ```text
 拥有客户端预测激活
 → 本地播放 Montage / Cue
-→ 本地采集 TargetData
-→ 服务器验证距离、视线、目标、阵营和技能状态
+→ 本地预览 HitResult，只上传 DamageIntent
+→ 服务器验证 ShotId/频率/时间/Origin/方向
+→ 当前世界权威 Sweep 重建 HitResult，再验证阵营/存活
 → ExecCalc_Damage
 → 修改 IncomingDamage
 → PostGameplayEffectExecute 扣除 Health
@@ -424,6 +430,8 @@ GameplayCue 只负责音画表现，不承担最终 Gameplay 状态。测试：
 
 ### 7.5 TargetData 安全与流量
 
+当前 DamageIntent P0 已实现，运行证据见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)。客户端不再上传目标 Actor/HitResult/伤害值；服务器守卫位于 PlayerState ASC，跨 Pawn 生命周期保留。当前 50ms 最小间隔不是 token bucket，时间字段也只做 freshness 校验，不做历史回溯。
+
 服务器重新验证：
 
 ```text
@@ -534,13 +542,16 @@ Net PktDup
 | Active GE 数量 | 待测 | 待测 |
 | GameplayCue Actor 数量 | 待测 | 待测 |
 | 200ms 下本地响应时间 | 待测 | 待测 |
-| 服务器拒绝后的回滚时间 | 待测 | 待测 |
-| 5% 丢包下最终错误率 | 待测 | 待测 |
+| 服务器拒绝后的回滚时间 | M6 三组日志有单次时序 | P50/P95/P99 统计待测 |
+| 5% 丢包下最终错误率 | 一组 M6 样本 95/95 通过 | 多轮样本与置信区间待测 |
 | 10～20 AI 下服务器帧时间 | 待测 | 待测 |
 
 不能只记录平均值。至少保存测试持续时间、样本次数、最大值、P95、网络参数、机器配置和对应提交号。
 
-## 10. 20+4 周执行计划
+## 10. 原始 20+4 周扩展学习计划（归档参考）
+
+这张表保留为完成作品集后的源码深挖和扩展学习参考，不再作为当前发布排期。当前主线是 10～14 周的 M0～M9，见
+[《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)。
 
 | 周数 | 工作 | 阶段产物 |
 |---|---|---|
@@ -550,7 +561,7 @@ Net PktDup
 | 7～8 | 伤害和治疗能力 | Cost、Cooldown、TargetData |
 | 9～10 | 状态免疫和双人配合 | State.Immune 与协作关卡 |
 | 11～12 | PredictionKey 与拒绝回滚实验 | Prediction Lab 与时序日志 |
-| 13～14 | TargetData 校验和作弊测试 | 服务器验证矩阵 |
+| 13～14 | TargetData 校验和作弊测试 | DamageIntent 核心验证矩阵已通过；完整弱网/快速移动矩阵待补 |
 | 15～16 | Replication Mode、GE、Cue 优化 | Network Insights 对比 |
 | 17 | Lyra AbilitySet 与 InputTag | 精简 AbilitySet 架构 |
 | 18 | 晚加入、死亡、重生、断线和弱网 | 回归报告 |
@@ -583,7 +594,15 @@ Net PktDup
 - 没有重复 Cue、重复扣费或残留 Cooldown。
 - PredictionKey 日志和调用链可以解释。
 
-### Gate D：网络优化
+### Gate D：接近进阶的网络同步
+
+- 服务器接受与拒绝路径都有 PredictionKey 双端日志。
+- Cost、Cooldown 和 GameplayCue 在拒绝后正确校正或清理。
+- 请求具备 ShotId 去重、频率限制、时间/位置/方向验证。
+- 一个 Hitscan 能力完成有限服务器回溯，并验证未来、过旧和重复请求。
+- 能解释为什么该实现不是全世界回滚，也不是商业反作弊。
+
+### Gate E：网络优化
 
 - 有优化前后数据。
 - 能解释带宽和延迟变化原因。
@@ -591,7 +610,7 @@ Net PktDup
 - 5% / 10% 丢包下最终状态一致。
 - 10～20 AI 压力下没有明显 GE/Cue 生命周期泄漏。
 
-### Gate E：简历发布
+### Gate F：简历发布
 
 - 项目和类型不使用教程原名。
 - 有原创双人免疫协作玩法。

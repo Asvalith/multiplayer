@@ -26,12 +26,36 @@ public:
 };
 
 UCLASS()
+class MULTIPLAYER_API UmultiplayerVulnerabilityEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UmultiplayerVulnerabilityEffect();
+	virtual void PostInitProperties() override;
+};
+
+UCLASS()
 class MULTIPLAYER_API UmultiplayerImmunityEffect : public UGameplayEffect
 {
 	GENERATED_BODY()
 
 public:
 	UmultiplayerImmunityEffect();
+	virtual void PostInitProperties() override;
+};
+
+/**
+ * Non-gameplay prediction lab marker. It visualizes a reversible predicted GE/Cue
+ * and is only applied when the process explicitly runs with -GASM6Lab.
+ */
+UCLASS()
+class MULTIPLAYER_API UmultiplayerPredictionPendingEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UmultiplayerPredictionPendingEffect();
 	virtual void PostInitProperties() override;
 };
 
@@ -60,6 +84,7 @@ class MULTIPLAYER_API UmultiplayerImmunityCostEffect : public UGameplayEffect
 
 public:
 	UmultiplayerImmunityCostEffect();
+	virtual void PostInitProperties() override;
 };
 
 UCLASS()
@@ -90,4 +115,14 @@ class MULTIPLAYER_API UmultiplayerImmunityCooldownEffect : public UGameplayEffec
 public:
 	UmultiplayerImmunityCooldownEffect();
 	virtual void PostInitProperties() override;
+};
+
+/** Default attribute initialization entry for an editor-authored AbilitySet. */
+UCLASS()
+class MULTIPLAYER_API UmultiplayerInitStatsEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UmultiplayerInitStatsEffect();
 };

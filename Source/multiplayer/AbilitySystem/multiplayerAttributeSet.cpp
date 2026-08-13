@@ -3,6 +3,8 @@
 #include "AbilitySystem/multiplayerAttributeSet.h"
 
 #include "AbilitySystem/multiplayerGameplayTags.h"
+#include "AbilitySystem/multiplayerGameplayEffectContext.h"
+#include "multiplayer.h"
 #include "GameplayEffectExtension.h"
 #include "Net/UnrealNetwork.h"
 
@@ -73,6 +75,24 @@ void UmultiplayerAttributeSet::PostGameplayEffectExecute(const FGameplayEffectMo
 			&& TargetASC->HasMatchingGameplayTag(MultiplayerGameplayTags::State_Immune);
 		if (Damage > 0.0f && !bImmune)
 		{
+			const FGameplayEffectContext* BaseContext = Data.EffectSpec.GetContext().Get();
+			const FmultiplayerGameplayEffectContext* CoopContext =
+				BaseContext != nullptr
+				&& BaseContext->GetScriptStruct()->IsChildOf(
+					FmultiplayerGameplayEffectContext::StaticStruct())
+					? static_cast<const FmultiplayerGameplayEffectContext*>(BaseContext)
+					: nullptr;
+			UE_LOG(
+				LogMultiplayerGAS,
+				Display,
+				TEXT("GAS_DAMAGE_CONTEXT Target=%s Damage=%.1f Critical=%s HitType=%d Impulse=%s"),
+				*GetNameSafe(GetOwningActor()),
+				Damage,
+				CoopContext != nullptr && CoopContext->IsCriticalHit() ? TEXT("true") : TEXT("false"),
+				CoopContext != nullptr ? static_cast<int32>(CoopContext->GetHitType()) : -1,
+				CoopContext != nullptr
+					? *CoopContext->GetImpactImpulse().ToCompactString()
+					: TEXT("None"));
 			SetHealth(FMath::Clamp(GetHealth() - Damage, 0.0f, GetMaxHealth()));
 		}
 	}

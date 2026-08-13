@@ -3,10 +3,13 @@
 > 分支：`coop-GAS`
 >
 > UE 版本：5.5
-> 更新日期：2026-08-12
+> 更新日期：2026-08-13
 
 完整架构讲解、调用链、技术选型、问题复盘和面试场景题见：
 [《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)。本文件只维护实施状态和运行步骤。
+
+当前阶段顺序、延迟补偿/作弊防护边界和下一批任务见：
+[《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)。
 
 ## 1. 当前实现
 
@@ -24,22 +27,30 @@
 - IncomingDamage、IncomingHealing 是服务器结算用 Meta Attribute。
 - 伤害、治疗和免疫均使用 `LocalPredicted` 激活。
 - Cost 与 Cooldown 通过 GameplayEffect 预测并由服务器校正。
-- 伤害目标通过自定义 AbilityTask 和 PredictionKey 上传服务器。
-- 服务器重新验证目标类型、存活状态、距离和视线。
+- 伤害 AbilityTask 将本地 HitResult 只用于预览；通过 PredictionKey 向服务器只上传 DamageIntent（ShotId、量化 Origin/方向和估算 ServerTime）。
+- PlayerState ASC 跨 Pawn 分配 ShotId；服务器执行 Schema/source、重放/旧序号、50ms 最小间隔、时间/Origin/方向校验，再从权威 EyeOrigin 在当前世界 Sweep 重建 HitResult。
 - 最终伤害和治疗只由服务器应用。
 - 免疫使用持续 GameplayEffect、`State.Immune` 和 `UImmunityGameplayEffectComponent`。
+- Enhanced Input 通过 InputTag 驱动正式能力入口，并保留数字键作为开发验收入口。
+- 基础 HUD 绑定 PlayerState ASC，显示属性、冷却和状态，并在 Avatar 更换时安全重绑。
+- 服务器用 `GameplayEffectExecutionCalculation` 计算攻击、护甲、暴击和 Vulnerability 修正。
+- 自定义 `GameplayEffectContext` 复制 Critical、HitType 和 ImpactImpulse，供确认 Cue 消费。
+- Vulnerability 最多三层，按 Target 聚合、应用时刷新持续时间，并抑制叠层 Cue 重触发。
+- 死亡、复活、Ability/Task/临时 GE 清理和 ASC Avatar 重绑已形成服务器幂等链。
+- 原生 GameplayCue 已覆盖 Damage/Heal Cast、权威结果、Immunity/Vulnerability 生命周期和 Death 通知。
 
-## 2. 临时测试按键
+## 2. 正式输入与开发测试按键
 
-当前不依赖 InputAction 资产，直接使用：
+正式入口使用 Enhanced Input；为了可复现技术验收，仍保留以下开发按键：
 
 | 按键 | 能力 | 数值 |
 |---|---|---|
-| `4` | 攻击最近的另一名玩家 | 伤害 25、能量 10、冷却 1 秒、范围 600 |
+| `4` | 攻击范围内最近的 `Team.Enemy` GAS 目标 | 伤害 25、能量 10、冷却 1 秒、范围 600；玩家均为 `Team.Player`，不能互伤 |
 | `5` | 自我治疗 | 治疗 30、能量 20、冷却 3 秒 |
 | `6` | 状态免疫 | 持续 5 秒、能量 30、冷却 8 秒 |
+| `7` | 生成/重置 M0 敌对训练目标 | 服务器在玩家前方生成一个 `Team.Enemy` GAS 方块；仅用于技术验收 |
 
-后续创建 Enhanced Input 资产后，只替换输入绑定，不修改能力网络逻辑。
+按键和 InputAction 最终都进入同一 InputTag/ASC 调用链，不存在两套 Gameplay 权威逻辑。
 
 ## 3. 伤害网络链路
 
@@ -47,11 +58,14 @@
 Owning Client 按下 4
 -> ASC 根据 InputTag 找到 AbilitySpec
 -> LocalPredicted 激活并预测 Cost/Cooldown
--> AbilityTask 在本地选择目标
+-> AbilityTask 在本地生成只用于预览的 HitResult
+-> 生成 DamageIntent: ShotId / Origin / Direction / estimated ServerTime
 -> FScopedPredictionWindow
--> ServerSetReplicatedTargetData
+-> CallServerSetReplicatedTargetData
 -> Server 根据 SpecHandle + ActivationPredictionKey 接收数据
--> 验证目标类型、距离、视线、ASC 和 Health
+-> 验证 Schema/source/ShotId/频率/时间/Origin/方向
+-> 服务器当前世界 Sphere Sweep 重建 SingleTargetHit
+-> 验证 Team.Enemy / 非 Team.Player / 存活
 -> 服务器创建 Damage GameplayEffectSpec
 -> 服务器写入 Data.Damage SetByCaller
 -> IncomingDamage
@@ -60,7 +74,7 @@ Owning Client 按下 4
 -> Health 复制到两个客户端
 ```
 
-客户端不能提交伤害数值。上传的数据只有目标，伤害量来自服务器能力类默认值。
+客户端不能提交目标 Actor、HitResult 或伤害数值。服务器根据受限意图重建命中，伤害量来自服务器能力类默认值。语义结果 RPC 只用于日志/UI，不手工退还资源；Cost/Cooldown 交给 PredictionKey 对账。
 
 ## 4. 双客户端手工验证
 
@@ -70,19 +84,19 @@ Owning Client 按下 4
 2. Net Mode：`Play As Listen Server`。
 3. New Editor Window，两个窗口大小一致。
 4. 确认当前 GameMode 没有在蓝图里覆盖 PlayerState Class；正确类型是 `multiplayerGASPlayerState`。
-5. 两名玩家移动到 600 单位以内。
+5. 按 `7` 在当前玩家前方生成/重置 `Team.Enemy` GAS 训练方块。它是零资产 M0 验收脚手架，不是正式敌人；伤害玩法不能以玩家互相攻击代替。
 
 测试矩阵：
 
 | 场景 | 预期结果 |
 |---|---|
-| Client 按一次 `4` | Server 对另一名玩家扣除 25 Health |
+| Client 对敌对目标按一次 `4` | Server 对 `Team.Enemy` 目标扣除 25 Health |
 | 连续快速按 `4` | 1 秒冷却期间不能重复激活 |
 | 目标超过 650 单位 | 服务器拒绝结算伤害 |
 | 目标隔着阻挡 Visibility 的墙 | 服务器拒绝结算伤害 |
 | 玩家按 `5` | Health 最多恢复到 MaxHealth |
 | Energy 不足 | `CommitAbility` 失败，不产生技能结果 |
-| 玩家 A 按 `6`，玩家 B 立即按 `4` | 负面伤害 GE 被免疫组件阻止 |
+| 免疫目标受到敌对负面 GE | 负面伤害 GE 被免疫组件阻止；玩家互伤不是正式验收路径 |
 | 免疫 5 秒结束后再受击 | 正常扣除 Health |
 | Host 使用三个技能 | 与 Client 使用时遵循相同服务器结算规则 |
 
@@ -98,22 +112,20 @@ Net PktLoss=5
 
 ## 5. 当前边界
 
-第一版尚未包含：
+本文件最初记录的第一版缺口中，Enhanced Input、AbilitySet/HUD、死亡复活、ExecCalc、自定义 EffectContext、Vulnerability 堆叠和 GameplayCue 技术闭环已经在 M1～M5 完成。当前仍未包含：
 
-- 正式技能图标、Niagara、音效和 GameplayCue。
-- GAS 属性 HUD；目前已暴露 PlayerState getter 和属性变化委托。
-- 死亡、复活和 Energy 恢复。
-- 队友选择 UI；治疗第一版是自我治疗。
-- 正式 Enhanced Input、AbilitySet 与 Blueprint GE 数据资产接线。
-- `ExecutionCalculation`、自定义 `GameplayEffectContext` 和 Buff/Debuff 堆叠规则。
-- 预测拒绝/回滚可视化实验以及 GameplayCue 去重证据。
-- 双客户端功能自动化、Dedicated Server、晚加入和打包验收。
-- Network Insights 的带宽基线报告。
+- 正式技能图标、Niagara、音效和 Montage；现有 Cue 表现是零素材 PointLight 技术占位。
+- 队友选择 UI；治疗当前仍是自我治疗。
+- Energy 周期恢复以及更完整的 Blueprint GE 数值资产化。
+- DamageIntent 的 token bucket/异常 strike、专用 Trace Channel 和历史回溯；当前只有 50ms 最小间隔与当前世界权威 Sweep。
+- Host 反向输入、多轮丢包/更高延迟、非 Headless 视觉和持续 Cue 状态下死亡等补充矩阵。
+- 功能级双客户端自动化、Dedicated Server、晚加入和打包验收。
+- Network Insights 的带宽基线与同条件优化前后报告。
 
 完整未完成项、优先级和完成口径见
 [《Co-op GAS 架构与面试讲解手册》第 12.2 节](GAS_Architecture_Interview_Guide.md#122-完整未完成项矩阵)。
 
-这些内容不阻塞对 ASC 所有权、预测激活、TargetData、服务器验证、Cost/Cooldown 和属性复制基础链路的第一轮验证；但在双窗口与弱网测试真正执行前，不能声称回滚体验或多人行为已经验收通过。
+M5 已取得 Client 发起的 0ms 与每方向 150ms 双进程接受路径证据；M6 完成真激活拒绝回滚，也完成 DamageIntent 当前世界服务器权威验证。服务器 TargetData 等待现有 5 秒超时收口，AbilityTask 会在数据到达、超时和 Task 结束路径清理委托/Timer，Damage Ability 也会在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。`multiplayer.GAS.DamageIntent.Unit` 通过；0ms 运行 `20260813_163052` 与双方 `PktLag=150` 运行 `20260813_163248` 各 52/52 PASS，覆盖正常接受、Duplicate、Origin、Direction、Stale、Future、Miss 和预测 Energy/CD 收敛。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 仍缺专项双进程端到端分支；当前证据也不等于 loss 矩阵、服务器历史回溯或服务器+2 Clients 自动化已通过。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)。
 
 ## 6. 参考边界
 

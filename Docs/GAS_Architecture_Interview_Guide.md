@@ -5,6 +5,12 @@
 > 引擎版本：Unreal Engine 5.5
 > 文档目标：准确讲清已经实现的内容、尚未验证的内容，以及面对条件变化时如何演进架构。
 
+当前执行目标和阶段门禁以
+[《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)为准：完成合格、完整的 GAS，并通过预测回滚、有限服务器回溯和服务器验证实验达到接近进阶的网络同步深度。
+
+GAS 与多人网络常见面试题的项目化回答见
+[《Co-op GAS 与多人网络必问 Top 20》](GAS_Multiplayer_Interview_Top20_QA.md)。
+
 ## 0. 一分钟项目说明
 
 这是一个从双人合作机关 Demo 演进出的 GAS 网络实验项目，而不是 Aura 的换皮版本。
@@ -23,7 +29,7 @@
 
 > 客户端可以预测操作体验，但不能决定其他玩家的最终状态。
 
-当前项目的优势是闭环小、网络边界明确、代码可以完整解释。当前不足是视觉表现、双客户端人工验收、预测拒绝实验和 Network Insights 性能报告尚未完成。
+当前项目的优势是闭环小、网络边界明确、代码可以完整解释。M0～M5 已完成正式输入/HUD、团队目标、死亡复活、ExecCalc、自定义 Context、堆叠和 GameplayCue 接受路径；M6 已完成 Immunity 的真实 `ClientActivateAbilityFailed` 回滚实验，以及 DamageIntent Schema、ShotId 幂等/最小频率门禁、时间/Origin/方向校验和当前世界服务器权威 Sweep。当前不足是尚无 token bucket、历史回溯、完整丢包矩阵、Dedicated Server、晚加入、正式视听表现和 Network Insights 性能报告。
 
 ---
 
@@ -80,15 +86,188 @@ flowchart TB
 | 文件/目录 | 职责 |
 |---|---|
 | `AbilitySystem/multiplayerGameplayTags.*` | 原生 Input、Ability、State、Effect、Data、Cooldown 标签 |
-| `AbilitySystem/multiplayerAbilitySystemComponent.*` | 根据 InputTag 查找 AbilitySpec，转发按下/释放和 GAS 通用复制事件 |
+| `AbilitySystem/multiplayerAbilitySystemComponent.*` | 根据 InputTag 查找 AbilitySpec，转发按下/释放；分配 Damage ShotId，并在 PlayerState ASC 上维护服务器幂等/最小间隔守卫 |
+| `AbilitySystem/multiplayerGameplayAbilityTargetData.*` | 定义只含 ShotId、量化 Origin/方向和估算 ServerTime 的 DamageIntent，以及 Schema/字段校验 |
 | `AbilitySystem/multiplayerAttributeSet.*` | 属性复制、Clamp、伤害与治疗 Meta Attribute 结算 |
 | `AbilitySystem/multiplayerAbilitySet.*` | 批量授予 Ability、应用初始 Effect、保存撤销句柄 |
 | `AbilitySystem/Abilities/multiplayerGameplayAbility.*` | 三个能力的激活、Commit 和服务器效果应用 |
-| `AbilitySystem/AbilityTasks/multiplayerAbilityTask_TargetActor.*` | 本地选取目标，并在预测窗口内向服务器上传 TargetData |
+| `AbilitySystem/AbilityTasks/multiplayerAbilityTask_TargetActor.*` | 客户端本地选取只用于预测表现；向服务器只发 DamageIntent，服务器验证后重建权威 HitResult |
 | `AbilitySystem/multiplayerGameplayEffects.*` | 伤害、治疗、免疫、Cost、Cooldown 的 C++ 默认 GE |
 | `Player/multiplayerGASPlayerState.*` | ASC/AttributeSet 所有权、属性委托、默认能力授予 |
 | `multiplayerCharacter.*` | Avatar 初始化和临时 `4/5/6` 输入入口 |
 | `Tests/multiplayerGASAutomationTests.cpp` | 标签、预测策略、GE 配置和免疫组件的启动级验证 |
+
+### 1.4 C++ 与蓝图职责边界及当前项目设置清单
+
+> 当前开发范围：机关、钥匙和胜利链已经实现，下面对应条目仅作为配置/回归参考；下一阶段实际工作集中在 GAS 技能资产、队友治疗、GameplayCue、HUD、Montage 和网络调试展示，不重复搭建 Co-op 机关。
+
+本项目不是“C++ 或蓝图二选一”。边界按是否影响多人权威结果划分：
+
+| 层级 | 应负责什么 | 当前项目例子 |
+|---|---|---|
+| 服务器 C++ | 唯一可信的状态修改、去重、条件判定、复制和 ServerTravel | 钥匙计数、压力板占用集合、门开关、平台启停、WinArea 双人判定、GAS Commit/TargetData 验证、Session 回调 |
+| Blueprint/Data Asset 配置 | 资源引用、关卡实例之间的引用、端点和碰撞体尺寸、可调参数 | `RequiredPlates`、`ActivationPlate`、`DestinationSocket`、`OpenPoint`、`TargetPoint`、InputAction/InputTag、Widget Class |
+| 本地 Blueprint 表现 | 材质、音效、Niagara、Montage、UMG 排版和按钮意图 | `ReceivePlateVisualStateChanged`、`ReceiveGateVisualStateChanged`、HUD delegate、胜利菜单按钮 |
+
+下列内容不应迁入 Level Blueprint 或 Widget：`RegisterActivatedKey()`、`TryCompleteGame()`、`bPlateActive`/`bGateOpen` 的写入、`SetTransportActive()` 的客户端调用、伤害数值提交、TargetData 合法性判断、客户端 `OpenLevel` 形式的联机重开。蓝图只能配置引用或响应服务器已经复制的结果，不能成为第二个权威来源。
+
+#### 1.4.1 当前资产审查结论
+
+本节结论来自源码声明和 `.uasset` 引用字符串的只读核对，不等同于 Blueprint 编译或双窗口 PIE 验收：
+
+- 已存在正式输入资产：`/Game/GAS/M1/IA_GAS_Damage`、`IA_GAS_Heal`、`IA_GAS_Immunity`、`IMC_GAS_Abilities`、`DA_GAS_InputConfig`、`DA_GAS_DefaultAbilitySet`。
+- `BP_ThirdPersonCharacter` 已能确认引用 `DA_GAS_DefaultAbilitySet`、`DA_GAS_InputConfig`、`IMC_GAS_Abilities`，以及第三人称移动输入资产。
+- 已存在机关 Blueprint 子类：`pressplate`、`bpcoopgate`、`bpmovingplatform`、`bpkey`、`bpkeysocket`、`winaera`。是否正确填写关卡实例级引用仍需在关卡中逐个检查。
+- 当前没有发现继承 `UmultiplayerGASHUDWidget` 的正式 HUD Widget 资产；因此默认走 C++ 原生 fallback HUD，这是可运行基线，不是最终美术 HUD。
+- `BP_ThirdPersonCharacter` 的资产引用中尚未确认 `/Game/UI/winandquit`，必须在编辑器复核 `VictoryPresenter.VictoryWidgetClass`，不能声称胜利 UI 已接好。
+- `winandquit` 中能确认 `QuitGame`，但没有确认 `RequestRestartCoopGame`。重新开始按钮仍是明确的人工接线任务。
+- `/Game/UI/bpmaingamemode` 的父类是普通 `GameModeBase`，并把默认 Pawn 设为 `bpmainmenupawn`；它适合主菜单地图，不得作为玩法地图的 GameMode Override。
+
+#### 1.4.2 Character、输入和 GAS Data Asset
+
+必须设置：
+
+1. 打开 `/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter`，点击 `Class Defaults`。
+2. 在 `Input` 中确认：
+   - `DefaultMappingContext = /Game/ThirdPerson/Input/IMC_Default`；
+   - `JumpAction = IA_Jump`；
+   - `MoveAction = IA_Move`；
+   - `LookAction = IA_Look`。
+3. 在 `GAS` / `GAS|Input` 中确认：
+   - `StartupAbilitySet = /Game/GAS/M1/DA_GAS_DefaultAbilitySet`；
+   - `AbilityInputConfig = /Game/GAS/M1/DA_GAS_InputConfig`；
+   - `AbilityMappingContext = /Game/GAS/M1/IMC_GAS_Abilities`。
+4. 打开 `DA_GAS_DefaultAbilitySet`，在 `GrantedAbilities` 中保留 Damage、Heal、Immunity 能力类、等级和对应的 `InputTag.Ability.*`；`GrantedEffects` 中保留初始化属性用的 `multiplayerInitStatsEffect`。
+5. 打开 `DA_GAS_InputConfig`，逐项确认：
+   - `IA_GAS_Damage -> InputTag.Ability.Damage`；
+   - `IA_GAS_Heal -> InputTag.Ability.Heal`；
+   - `IA_GAS_Immunity -> InputTag.Ability.Immunity`。
+6. 打开 `IMC_GAS_Abilities`，确认正式按键为鼠标左键、`Q`、`E`；当前源码中的 `4/5/6` 只作为开发回退，不能替代正式输入验收。
+
+可选表现/数据化：可创建 Damage、Heal、Immunity 的 Blueprint Ability 子类，在 Class Defaults 调整 `DamageAmount`、`TargetRange`、`HealingAmount`，再让 AbilitySet 引用这些子类。当前直接引用 C++ Ability 也能使用 C++ 默认值；Cost、Cooldown、目标验证和最终结算不能复制到 Character Blueprint。
+
+验收：分别用两个窗口控制各自角色，确认鼠标左键、`Q`、`E` 都进入同一 InputTag 链；观察 `GAS_INIT`、能力激活日志和 Energy/Cooldown 变化。只证明资产可加载不等于按键行为通过，人工矩阵未执行时仍写“待验证”。
+
+#### 1.4.3 GAS HUD 与胜利 UI
+
+GAS HUD 有两种合法配置：
+
+- 基线方式无需 Blueprint：`GASHUDPresenter.HUDWidgetClass` 默认是 `UmultiplayerGASHUDWidget`，C++ 自动生成 Health、Energy 和状态文字。
+- 正式表现方式：创建继承 `multiplayerGASHUDWidget` 的 Widget Blueprint；在 Designer 排版，在 Event Graph 绑定 `OnHealthDisplayChanged`、`OnEnergyDisplayChanged`、`OnTagStateDisplayChanged`，或实现 `GAS HUD Initialized`；随后在 `BP_ThirdPersonCharacter -> Components -> GASHUDPresenter` 将 `HUDWidgetClass` 指向该 Widget。
+
+Widget 只消费 PlayerState/ASC 已同步的数据，不得在 Widget Tick 中改 Attribute、手工扣 Energy 或猜测 Cooldown。
+
+胜利 UI 属于必须补齐的蓝图配置：
+
+1. 打开 `BP_ThirdPersonCharacter`，在 Components 中选择继承的 `VictoryPresenter`。
+2. 将 `VictoryWidgetClass` 设为 `/Game/UI/winandquit`；`bShowMouseCursor` 和 `bSwitchToGameAndUIInput` 按当前需求保持 `true`。
+3. 打开 `winandquit`：退出按钮可使用现有 `Quit Game`。
+4. 重新开始按钮的准确节点链为：`OnClicked -> Get Owning Player Pawn -> Cast To multiplayerCharacter -> Request Restart Coop Game`。不要在客户端 Widget 直接 `Open Level`；该函数会请求服务器，由 `AmultiplayerGameMode::RestartCoopGame()` 对全体玩家执行 ServerTravel。
+5. 当前 `AmultiplayerCoopGameState::ReceiveGameWon()` 也是可选 Blueprint 表现入口。采用 Character 上的 `VictoryPresenter` 后不要再在 GameState Blueprint 重复创建同一个 Widget，否则可能弹出两份胜利界面。
+
+验收：一名玩家进入 WinArea 不显示；两人进入但钥匙不足不显示；四个 Socket 激活且两人同时进入后，两个本地窗口各出现一次 UI、鼠标可用。客户端点击重新开始后两个窗口一起回到同一关卡且目标清零；点击退出只退出点击者的进程。当前重新开始节点仍待人工接线和双窗口验证。
+
+#### 1.4.4 PressurePlate
+
+关卡搭建必须设置：
+
+1. 使用 `/Game/ThirdPerson/Blueprints/gameplayelements/pressplate`，在 Blueprint 的 Components 中给 `PlateMesh` 选择网格；当前资产能确认引用 `SM_building_part_07`。
+2. 选择 `ActivationTrigger`，调整 Relative Location 和 Box Extent，使玩家胶囊站在板上时发生 Overlap。它应保持 `Query Only`、Pawn=`Overlap`、其他通道=`Ignore`；它不是承重碰撞体。
+3. `PlateMesh` 应保持可移动并阻挡 Pawn；C++ 默认 Collision Profile 是 `BlockAll`。
+4. 在 Class Defaults 或关卡实例设置 `PressedOffset` 和 `PressMoveSpeed`。下压方向使用相对坐标，例如 Z 为负；下压移动已经由 C++ 完成，`On Plate Visual State Changed` 不应再次移动 `PlateMesh`。
+5. 普通“必须一直踩住”的板：`bLatchOnceActivated=false`、`bRequireObjectiveComplete=false`。
+6. 收齐钥匙后只踩一次的最终板：`bLatchOnceActivated=true`、`bRequireObjectiveComplete=true`。
+7. `bRequirePlayerControlledCharacter` 正常保持 `true`。
+
+可选表现：在 `On Plate Visual State Changed` 中切材质、播声音或粒子；也可监听 `OnPlateActiveChanged` 做只读提示。不要在关卡蓝图里手工维护占用人数或设置门状态。
+
+验收：服务器窗口日志 `PressurePlate[...] Evaluate` 中 Occupants 从 0 变 1；普通板离开后复位，Latch 板首次有效按压后保持激活；两个客户端看到一致下压深度。碰撞调试使用控制台 `show collision`，确认阻挡盒与 Overlap 盒没有混为一个组件。
+
+#### 1.4.5 CoopGate
+
+每个门实例必须设置：
+
+1. 打开 `/Game/ThirdPerson/Blueprints/gameplayelements/bpcoopgate`，给 `DoorMesh` 设置网格；当前资产能确认引用 `SM_part_ornament_05`。
+2. 在 Blueprint 编辑器 Components 面板显示继承组件，选择 `ClosedPoint` 和 `OpenPoint`，在 Viewport 或 Details 的 Relative Location 中定义关门/开门位置。应修改两个 Point，不要用 DoorMesh 的初始世界坐标表达行程；BeginPlay 会把门吸附到 `ClosedPoint`。
+3. 将 Blueprint 拖入关卡，选中关卡实例，在 `Coop Gate|Rules -> RequiredPlates` 点击 `+`，用吸管逐个选择场景中的独立 PressurePlate。
+4. `RequiredActivePlateCount` 设为需要同时激活的板数。数组为空时门一定不会打开；若要求两人协作，通常数组中放两块板并设为 2，C++ 还会检查是两个不同 Character。
+5. 按设计设置 `bStayOpenOnceActivated`、`bRequireObjectiveComplete` 和 `DoorMoveSpeed`。普通持续机关通常不锁存；最终门可要求目标完成并锁存。
+
+可选表现：`On Gate Visual State Changed` 和 `On Plate Progress Changed` 只驱动灯、声音、UI。无需在门 Blueprint 的 BeginPlay 中 `Bind Event to On Plate Active Changed`；C++ 的 `BindRequiredPlates()`/`UnbindRequiredPlates()` 已管理生命周期，手工再绑定会形成第二条调用链。
+
+验收：日志中 `CoopGate[...] Evaluate` 的 `Plates/Active/Required/Players` 与场景一致；一块板缺引用或同一玩家触发多板时不得错误开门；满足条件后 DoorMesh 从 ClosedPoint 到 OpenPoint，两个客户端一致。
+
+#### 1.4.6 MovingPlatform
+
+必须设置：
+
+1. 打开 `/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform`，配置 `PlatformMesh`；当前资产能确认引用 `SM_building_part_05`。网格应保持 Movable 和 `BlockAll`，否则玩家不能随平台承载移动。
+2. 在 Blueprint 编辑器移动继承的 `StartPoint`、`TargetPoint`，定义两个世界端点。C++ 在 BeginPlay 复制这两个世界坐标，因此平台移动后 Point 跟随 Actor 不会改变已经捕获的目标。
+3. 选择 `ActivationSource`：
+   - `ExternalPressurePlate`：在关卡实例的 `ActivationPlate` 用吸管指向独立 PressurePlate；这就是“一人一直踩板，另一人乘平台”的配置。
+   - `PlatformOccupancy`：设置 `RequiredPlayers`，并调整 `ActivationVolume` 的范围。
+4. 选择继承的 `Transporter` 组件设置 `MoveSpeed` 和 `bReturnWhenInactive`。MovingPlatform 总会调用 `ConfigureWorldTargets(StartPoint, TargetPoint)`，所以本 Actor 上实际行程由两个 Point 决定；`ActiveOffset`/`bOffsetUsesActorRotation` 是 Transporter 被其他 Actor 独立复用时的备用参数。
+
+可选表现：`On Platform Occupancy Visual Changed` 显示人数或灯光。禁止让客户端 Blueprint 调用 `SetTransportActive()`；平台启停和 Actor 移动由服务器执行，Actor Transform 再复制给客户端。
+
+验收：External 模式下玩家 A 踩板平台去 TargetPoint，离开后按 `bReturnWhenInactive` 返回或保持；玩家 B 站在平台上不穿透。PlatformOccupancy 模式达到/离开人数阈值时行为一致；两窗口观察位置同步且无客户端自行移动。
+
+#### 1.4.7 Key 与 KeySocket
+
+自动上架流程必须这样配置：
+
+1. 使用 `/Game/ThirdPerson/Blueprints/gameplayelements/bpkey`，设置 `KeyMesh`、`PickupTrigger` 半径/位置、`RotationSpeedDegrees` 和 `RotationAxis`。
+2. 在关卡中放置四个 `/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket`，给 `SocketMesh` 设置钥匙架/槽位表现，并在 Blueprint 中调整 `KeyDisplayPoint` 的相对位置和旋转。
+3. 选中每一把关卡 Key 实例，在 `Coop|Key -> DestinationSocket` 用吸管指向唯一的 Socket 实例。该属性是 `EditInstanceOnly`，不能只在 Key Blueprint Class Defaults 中配置同一个场景 Actor。
+4. 自动上架模式下 `CarrySocketName` 不参与主流程；只有 `DestinationSocket` 为空、钥匙先附着玩家时才需要角色骨骼上的同名 Socket。
+
+当前实现不是“钥匙架里预放一个隐藏副本再显示”，而是服务器把收集到的原 Key Actor 安装到 `KeyDisplayPoint`。因此钥匙架初始没有钥匙，收集后原钥匙出现并继续按 `RotationSpeedDegrees` 旋转，正好保持单一 Actor/单一状态来源。
+
+可选表现：`On Key Holder Changed` 和 `On Socket Visual Activated` 可播放音效、材质或提示，但不能手工增加钥匙数。`KeySocket::StoreCollectedKey()`/Overlap 成功后才由服务器调用 `GameState.RegisterActivatedKey()`，并且一个 Socket 只能激活一次。
+
+验收：逐把收集时世界中的 Key 消失并精确附着到对应 `KeyDisplayPoint`，仍持续旋转；四个不同 Socket 各激活一次，GameState 进度依次为 1/4～4/4；重复碰撞不增加到 5/4。两个客户端看到相同上架结果。
+
+#### 1.4.8 WinArea
+
+必须设置：
+
+1. 将 `/Game/ThirdPerson/Blueprints/gameplayelements/winaera` 放到最终区域。
+2. 选择 `WinTrigger` 调整 Box Extent；保持 `Query Only`、Pawn=`Overlap`、其他通道=`Ignore`。
+3. `RequiredPlayers=2`。不要用两个 Box 各自计数，也不要在 Level Blueprint 累加 Overlap 次数；C++ 使用 `TSet<TWeakObjectPtr<ACharacter>>` 按 Character 去重。
+
+WinArea 没有必须实现的 Blueprint Event。它只在服务器同时满足“唯一玩家数达到 2”和 `GameState.IsObjectiveComplete()` 时调用一次 `TryCompleteGame()`。
+
+验收矩阵：玩家 1 单独进入不胜利；玩家 2 单独进入不胜利；钥匙不足时两人进入不胜利；四钥匙完成且两人同时进入才胜利；一个角色的多个碰撞组件只算一人；胜利 UI 只出现一次。
+
+#### 1.4.9 GameMode、World Settings 与 PlayerStart
+
+玩法地图必须使用 `AmultiplayerGameMode` 或它的 Blueprint 子类，因为其构造函数指定了 `AmultiplayerCoopGameState`、`AmultiplayerGASPlayerState` 和 `BP_ThirdPersonCharacter`，BeginPlay 还会用 `RequiredKeys` 配置团队目标。
+
+编辑器操作：
+
+1. `Edit -> Project Settings -> Maps & Modes`：确认 Default GameMode 为 `multiplayerGameMode`（当前配置文件已有 `GlobalDefaultGameMode=/Script/multiplayer.multiplayerGameMode`）。
+2. 打开每个玩法地图，`Window -> World Settings -> GameMode Override`：选 `None` 以继承项目默认，或选择“父类为 `multiplayerGameMode`”的玩法 GameMode Blueprint。
+3. 不要在玩法地图选择 `/Game/UI/bpmaingamemode`；它是主菜单专用的普通 `GameModeBase`，使用 `bpmainmenupawn`，会绕过 Co-op GameState、GAS PlayerState 和 RequiredKeys 配置。
+4. 如果希望在编辑器调整 `RequiredKeys`，创建 `multiplayerGameMode` 的 Blueprint 子类并在 Class Defaults 设置为 4；不要把钥匙计数本身搬到该 Blueprint。
+5. 在玩法地图放至少两个互不重叠、未被阻挡的 `PlayerStart`。这只决定出生位置，不决定服务器玩家数量。
+6. `GameInstance Class` 应为 `multiplayerGameInstance`，当前配置文件已设置。当前 `GameDefaultMap=/Game/UI/主菜单.主菜单` 指向实际存在的中文命名地图，并非乱码；若后续 CI、Cook 或跨平台工具对非 ASCII 包名出现兼容问题，再在 `Maps & Modes` 中改选 `/Game/UI/mainmenu` 并完成重定向器/打包回归，不能仅凭控制台显示异常就改路径。
+
+验收：PIE 设 Number of Players=2、Net Mode=Play As Listen Server；两窗分别生成一个 `BP_ThirdPersonCharacter`，两端实际 PlayerState 类型为 `multiplayerGASPlayerState`，服务器 GameState 为 `multiplayerCoopGameState`，日志显示 `RequiredKeys=4`。
+
+#### 1.4.10 Session 主菜单
+
+`WBPmainmenu` 应只发送会话意图并显示异步结果：
+
+1. `Event Construct -> Get Game Instance -> Cast To multiplayerGameInstance`，保存为 `sessionGI`。
+2. 绑定 `OnFindComplete` 和 `OnSessionOperationChanged`；作品集级 UI 还应绑定 `OnHostComplete`、`OnJoinComplete`、`OnDestroyComplete`、`OnConnectionFailure`，用于恢复按钮状态和显示错误。Widget Destruct 时解除绑定。
+3. 创建按钮先调用 `SelectSessionMap`，再调用 `HostGame(ServerName, PublicConnections>=2, bIsLanMatch=true)`。
+4. 搜索按钮调用 `FindGames(MaxResults, bIsLanQuery=true)`；用返回的 `FmultiplayerSessionInfo` 构建列表。
+5. 加入按钮必须把所选条目的 `ResultIndex` 传给 `JoinGame`，不能把排序后的 UI 行号当作搜索结果索引。
+6. 操作期间通过 `IsSessionOperationInProgress` 或 `OnSessionOperationChanged` 禁用重复点击；失败时显示 `OnConnectionFailure`/`GetLastConnectionError`。
+
+当前资产静态检查能确认 `HostGame`、`FindGames`、`JoinGame`、`OnFindComplete` 和 `OnSessionOperationChanged` 节点存在；其余失败处理和完整按钮路径仍需打开 Blueprint 编译并运行确认。蓝图不应自己拼接 `?listen`、解析 ConnectString 或执行跨客户端地图切换，这些职责已在 `UmultiplayerGameInstance` 中统一处理。当前 `OnlineSubsystemNull` 只覆盖 LAN/本机发现，不能据此声称 Steam OSS 已验收。
+
+总验收顺序应为：先逐个 Blueprint `Compile/Save`，再检查玩法地图实例引用，最后做两窗口“建房 -> 搜索 -> 加入 -> 四钥匙 -> 机关 -> 双人 WinArea -> 两端胜利 UI -> 全体重开”的完整回归；性能或网络结论仍需单独的日志/Insights 证据。
 
 ---
 
@@ -164,7 +343,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Key["键盘 4 / 5 / 6"] --> Character["Character 输入函数"]
+    Key["LMB / Q / E 的 InputAction"] --> Config["InputConfig: Action -> InputTag"]
+    Debug["开发键 4 / 5 / 6"] --> Character
+    Config --> Character["Character 输入函数"]
     Character --> Tag["InputTag.Ability.*"]
     Tag --> ASC["AbilityInputTagPressed"]
     ASC --> Spec["AbilitySpec.GetDynamicSpecSourceTags"]
@@ -180,7 +361,7 @@ flowchart LR
 - 标签层级可以表达 `InputTag.Ability.*`；
 - 更容易扩展重绑定、技能栏和调试工具。
 
-当前 `4/5/6` 是无外部资产的验证入口，不是最终输入方案。正式版本应创建 InputAction、MappingContext 和 InputConfig DataAsset，仍然把结果转换为相同 InputTag。
+M1 已创建 InputAction、MappingContext 和 InputConfig DataAsset：鼠标左键伤害、`Q` 治疗、`E` 免疫。`4/5/6` 仅作为可复现开发入口；两条入口都转成同一 InputTag，不复制技能逻辑。资产加载/接线自动化已通过，正式按键与 HUD 的完整人工矩阵仍待补。
 
 ### 3.2 AbilitySet 与默认能力
 
@@ -204,16 +385,23 @@ Client Input
 -> ASC / AbilitySpec
 -> LocalPredicted Activate
 -> Predict Cost + Cooldown
--> AbilityTask selects Target
+-> Predicted Damage.Cast Cue
+-> AbilityTask: camera Sphere Sweep builds local-only preview hit
+-> DamageIntent: ShotId / quantized Origin / Direction / estimated ServerTime
 -> ScopedPredictionWindow
--> ServerSetReplicatedTargetData
--> Server validates Target
+-> CallServerSetReplicatedTargetData
+-> Server validates schema / source / ShotId / rate / time / origin / direction
+-> Server current-world Sphere Sweep builds authoritative SingleTargetHit
+-> Server validates hostile team / target alive
+-> Semantic result RPC reports Accepted/RejectReason for logs and UI only
 -> Server builds Damage Spec
 -> SetByCaller(Data.Damage)
+-> ExecCalc: base * Critical * Vulnerability
+-> custom EffectContext: Critical / HitType / ImpactImpulse
 -> IncomingDamage Meta Attribute
 -> PostGameplayEffectExecute
 -> Health RepNotify
--> Client UI
+-> authority Damage.Impact Cue + Client UI
 ```
 
 ### 4.2 时序图
@@ -226,37 +414,44 @@ sequenceDiagram
     participant Target as Target ASC / AttributeSet
     participant Remote as Other Client
 
-    C->>C_ASC: Press 4 / InputTag.Damage
+    C->>C_ASC: LMB or debug 4 / InputTag.Damage
     C_ASC->>C_ASC: LocalPredicted Activate
-    C_ASC->>C_ASC: Predict Cost and Cooldown
-    C_ASC->>C_ASC: Select nearest player target
-    C_ASC->>S_ASC: TargetData + ActivationPredictionKey
+    C_ASC->>C_ASC: Predict Cost, Cooldown and Cast Cue
+    C_ASC->>C_ASC: Camera Sphere Sweep builds local-only preview
+    C_ASC->>S_ASC: DamageIntent(ShotId, Origin, Direction, Time) + PredictionKey
     S_ASC->>S_ASC: Match SpecHandle and PredictionKey
-    S_ASC->>S_ASC: Validate class, alive, range, line of sight
+    S_ASC->>S_ASC: Validate schema, source, ShotId, rate, time, origin and direction
+    S_ASC->>S_ASC: Current-world authority Sweep -> server HitResult
+    S_ASC->>S_ASC: Validate hostile team and target alive
     alt Validation accepted
-        S_ASC->>Target: Damage GE Spec + server DamageAmount
-        Target->>Target: IncomingDamage -> Health
+        S_ASC-->>C_ASC: Accepted verdict (telemetry/UI only)
+        S_ASC->>Target: Damage GE Spec + server base damage
+        Target->>Target: ExecCalc + custom Context + IncomingDamage
+        Target->>Target: authority Impact Cue
         Target-->>C: Replicate Health / state
         Target-->>Remote: Replicate Health / state
     else Validation rejected
-        S_ASC-->>C_ASC: No authoritative damage; predicted state waits for GAS reconciliation
+        S_ASC-->>C_ASC: Semantic RejectReason (no manual refund)
+        C_ASC->>C_ASC: PredictionKey reconciliation removes predicted Cost/Cooldown
     end
 ```
 
 ### 4.3 信任边界
 
-客户端当前只提交目标，不提交可信伤害值：
+客户端只提交射击意图，不提交目标 Actor、命中点、伤害值或 Critical：
 
+- `FmultiplayerGameplayAbilityTargetData_DamageIntent` 只序列化 ShotId、`FVector_NetQuantize10` Origin、`FVector_NetQuantizeNormal` Direction 和估算 ServerTime；
+- PlayerState 上的 ASC 跨 Pawn 分配 ShotId，服务器拒绝重复/过旧/跳号与 50ms 内的过快请求；这是最小间隔门禁，不是 token bucket；
+- 服务器验证时间窗、Origin 偏差和方向夹角，并从服务器 EyeOrigin 在当前世界执行 Sphere Sweep；
+- Damage Context 中的 HitResult 由服务器 Sweep 创建，不复用客户端 HitResult；
 - `DamageAmount` 来自服务器上的 Ability CDO；
-- 服务器确认目标确实是另一个 `AmultiplayerCharacter`；
+- 服务器确认目标实现 GAS/团队契约且属于 `Team.Enemy`，玩家 `Team.Player` 不能互伤；
 - 服务器检查目标 ASC 和 Health；
-- 服务器重新计算距离，并留 50 单位网络容差；
-- 服务器执行 Visibility LineTrace；
 - 验证通过后才创建 Damage GE Spec。
 
 因此修改客户端内存中的伤害数值不能直接改变服务器最终结果。
 
-当前服务器遇到非法目标时会取消服务器能力实例，并且不会 Commit 或应用伤害。客户端已经预测的 Cost/Cooldown 是否按预期消除，需要在双窗口拒绝实验中观察 PredictionKey 的 catch-up/reject 日志；目前只有架构和代码路径，不能把“非法目标回滚已通过运行验收”当成既有结论。
+语义拒绝发生在 Ability 激活已被接受之后，因此不冒充 `ClientActivateAbilityFailed`。服务器不 Commit、不应用伤害，`ClientDamageIntentResult` 只传语义结果用于日志/UI，不手工退还资源；预测 Energy/Cooldown 由 GAS PredictionKey 对账收敛。服务器等待 TargetData 有 5 秒超时，AbilityTask 在收到数据、超时或所属 Ability 结束时清理委托和 Timer；Damage Ability 在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec 依赖。0ms 与双方 `PktLag=150`（约 300ms RTT）的专用核验均为 52/52 PASS，覆盖 Accept、Duplicate、Origin、Direction、Stale、Future 和 Miss；`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 的专项双进程端到端分支仍待扩展。证据见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)。
 
 ### 4.4 为什么使用 Meta Attribute
 
@@ -269,7 +464,7 @@ sequenceDiagram
 - Meta Attribute 不需要作为长期状态复制；
 - Damage GE 不必直接关心 Health Clamp。
 
-当前不足是还没有 `ExecutionCalculation`。目前服务器直接使用固定伤害值；加入攻击力、护甲、暴击和抗性后，应由服务器 ExecCalc 输出 IncomingDamage。
+M4 已改为服务器 `ExecutionCalculation`：基础伤害、目标 Vulnerability 层数和低血量确定性 Critical 在权威端计算后输出 `IncomingDamage`。现有自动化覆盖公式边界，双进程日志覆盖 `25 -> 27.5 -> 45 Critical`。当前尚未加入完整 AttackPower/Armor/Resistance 属性捕获与随机暴击体系。
 
 ---
 
@@ -322,7 +517,7 @@ InputTag.Immunity
 | 技能配置 | AbilitySet + C++ fallback | 只在 Character 数组硬编码 | 正式内容数据化，同时保持零资产测试能力 |
 | 机关架构 | 普通服务器权威 Actor | 全部 GAS 化 | 机关不需要 GAS 生命周期与预测能力 |
 | 第一版表现 | 无外部素材 | 迁移 Aura Content | 避免许可证、二进制依赖和教程辨识度 |
-| EffectContext | 使用引擎默认类型 | 立即自定义 NetSerialize | 当前没有必须携带的扩展字段，过早实现增加网络风险 |
+| EffectContext | 自定义 Context，仅携带已有消费者的数据 | 把所有命中临时数据都塞入 Context | M4 已实现 `GetScriptStruct`、`Duplicate`、`NetSerialize`；Critical/HitType/ImpactImpulse 被 M5 Cue 消费，避免复制无消费者字段 |
 
 ---
 
@@ -878,7 +1073,7 @@ GE constructor
 | 编号 | 类型 | 当前证据 | 风险或候选 | 需要怎样验证 |
 |---|---|---|---|---|
 | WIN-RISK-001 | 风险分析 | WinArea 使用 `TSet<TWeakObjectPtr<ACharacter>>`，服务器调用 `TryCompleteGame()`；GameState 有一次性胜利状态 | 角色销毁、断线或重叠事件丢失时，集合清理仍需双端压力测试 | 两玩家反复进出、单角色多组件、玩家销毁、晚加入、胜利后再次进入 |
-| GAS-RISK-001 | 风险分析 | 客户端预测上传 TargetData，服务器校验类型、距离、视线和存活 | 200ms 延迟、丢包和服务器拒绝时，Cost/Cooldown/Cue 的回滚体验尚无证据 | `Net PktLag/PktLoss` + 双端 GAS 日志 + Network Insights |
+| GAS-RISK-001 | 风险分析 | M6 DamageIntent 已实现 Schema、ShotId 幂等、50ms 最小间隔、时间/Origin/方向校验和当前世界服务器 Sweep；0ms/约 300ms RTT 各52/52 PASS | 当前频率保护不是 token bucket；无多轮丢包、快速移动、友军/遮挡专项运行样本，也无历史回溯 | 扩展 token bucket/strike telemetry，补齐运行矩阵；M7 单独实现有限回溯 |
 | PERF-RISK-001 | 优化候选 | Gate/Plate 使用较低频率更新，MovingPlatform 和 PlayerState 有经验频率 | 频率是否合理、主要带宽来自属性还是移动仍未知 | 固定场景比较 RPC、属性字节、Actor 更新次数和 P95/P99 帧时间 |
 | BP-RISK-001 | 风险分析 | C++ GameMode 设置 PlayerStateClass，但地图可能使用 Blueprint GameMode | 蓝图默认值可能覆盖 C++ 类配置，导致 ASC 初始化链不一致 | 检查 World Settings、GameMode BP、两端 PlayerState 实际类型 |
 | CONTENT-OPT-001 | 优化候选 | 默认 GE 和 AbilitySet 有 C++ fallback | 正式数值迭代继续写死 C++ 会增加编译和调参成本 | 引入一组 Blueprint GE/Data Asset 后比较配置、测试和版本管理成本 |
@@ -896,7 +1091,7 @@ GE constructor
 - 不重复授予能力，只更新 AvatarActor。
 - 明确决定哪些 Effect 跨死亡保留：用 Tag/Query 删除临时战斗 Effect，保留设计允许的 Cooldown。
 - UI 解除旧 Avatar 绑定，再监听相同 PlayerState ASC。
-- 当前尚未实现死亡/重生清理，这是后续验收项。
+- M3 已实现死亡幂等、输入/Ability/瞬态 GE 清理、3 秒复活、ASC Avatar 重绑且不重复授予；0ms 与约 300ms RTT 接受路径均回归通过。断线以及持有持续 Cue 时死亡仍是待验证边界。
 
 ### 10.2 “改成 Dedicated Server 呢？”
 
@@ -924,7 +1119,7 @@ GE constructor
 ### 10.5 “客户端把伤害改成 9999 怎么办？”
 
 - 当前客户端没有上传 DamageAmount，服务器从 Ability CDO 读取 25。
-- 服务器只接受目标意图，并验证类型、距离、视线和存活。
+- 服务器只接受 ShotId、量化 Origin/方向和估算 ServerTime，并从权威 EyeOrigin 在当前世界重新 Sweep；客户端不上传目标或 HitResult。
 - 如果将来客户端上传蓄力时长，服务器必须用权威开始时间、最大蓄力和资源状态重新计算伤害。
 
 ### 10.6 “200ms 延迟时怎样保证手感？”
@@ -933,7 +1128,7 @@ GE constructor
 - 其他玩家 Health 不做客户端权威预测，等待服务器结果。
 - 明确展示预测中、服务器确认和服务器拒绝三种日志。
 - 使用 `Net PktLag=200` 比较 ServerOnly 与 LocalPredicted。
-- 当前只有预测架构，尚未形成 200ms 的录屏和数据报告。
+- 当前有两端各 `PktLag=150`（约 300ms RTT）的接受路径日志；M6 Immunity 真 Reject 在 0ms、约 300ms RTT 和一组 5% 丢包下有回滚证据，DamageIntent 的接受与语义拒绝又在 0ms/约 300ms RTT 各通过 52/52 专用断言。仍缺 DamageIntent 丢包/快速移动/友军/遮挡专项矩阵和可视录屏；不能外推为所有技能完整回滚或延迟补偿。
 
 ### 10.7 “免疫只阻止眩晕，但仍允许伤害呢？”
 
@@ -951,10 +1146,10 @@ GE constructor
 
 ### 10.9 “需要暴击、护甲和元素抗性呢？”
 
-- 增加攻击、护甲、抗性属性和服务器 ExecCalc。
+- 复用现有服务器 ExecCalc，继续增加攻击、护甲和抗性捕获属性。
 - SetByCaller 只传技能配置值或伤害类型，不信任客户端最终伤害。
-- 随机暴击由服务器决定。
-- 如果 Cue 需要知道暴击/格挡，再引入自定义 GameplayEffectContext，并正确实现 `GetScriptStruct`、`Duplicate` 和 `NetSerialize`。
+- 现有低血量确定性 Critical 已由服务器决定；若改为随机暴击，随机源和最终结论仍只在服务器。
+- 复用现有自定义 GameplayEffectContext；新增格挡/元素字段前先确认 Cue、UI 或物理系统有真实消费者。
 
 ### 10.10 “如何降低网络带宽？”
 
@@ -986,11 +1181,11 @@ GE constructor
 
 | 类型 | 已完成 | 尚未完成 |
 |---|---|---|
-| C++ 实现 | 插件依赖、原生标签、ASC、AttributeSet、AbilitySet、三能力、Cost/Cooldown、TargetData、服务器验证、免疫组件、自动化配置测试 | ExecCalc、EffectContext、死亡重生、正式输入配置、GameplayCue |
-| 蓝图/资产接线 | 无新增外部资产；已有 Character BP 继承 C++ Character | 正式 InputAction/InputConfig、AbilitySet 资产、HUD、Cue、特效音效；检查地图 GameMode 是否覆盖 PlayerStateClass |
-| 编译/自动化证据 | UE5.5 Editor Development 编译通过；Win64 Development Game 编译通过；`multiplayer.GAS.Configuration` 成功 | Dedicated Server 构建、功能级多人自动化测试 |
-| 运行验收 | 无界面 Editor 已能加载模块和 GE CDO，配置测试通过 | 两窗口伤害/治疗/免疫、冷却/能量、超距/遮挡拒绝、晚加入、重生 |
-| 性能证据 | PlayerState 30Hz/10Hz 是待测基线 | Network Insights、RPC/字节数、Full/Mixed 对照、弱网延迟与丢包报告 |
+| C++ 实现 | M0～M5 核心；M6 Immunity 真 Reject/回滚；DamageIntent Schema、ASC ShotId guard、字段校验、当前世界权威 Sweep、语义结果 RPC 与行为核验器 | token bucket/异常 strike、服务器历史回溯、正式美术表现 |
+| 蓝图/资产接线 | InputAction/Mapping、AbilitySet/GE 配置入口、基础 HUD 和 Character BP 已接入 | Niagara、音效、Montage、正式图标；更完整的数据资产化和队友治疗 UI |
+| 编译/自动化证据 | UE5.5 Editor/Game Development 通过；`multiplayer.GAS.Configuration` 与 `multiplayer.GAS.DamageIntent.Unit` 通过；M6 DamageIntent 专用核验两轮各52/52 PASS | Dedicated Server 构建、带断言的服务器+双客户端功能自动化 |
+| 运行验收 | Client 接受路径；Immunity 真 Reject 在 0ms/约 300ms RTT/一组 5% 样本通过；DamageIntent 在 0ms/约 300ms RTT 验证 Accept、Duplicate、Origin、Direction、Stale、Future、Miss 及 Cost/CD 收敛 | Host 反向输入、DamageIntent 丢包/快速移动/友军/遮挡专项、更高延迟、晚加入、持持续 Cue 死亡、人工视觉/HUD 完整验收 |
+| 性能证据 | 约 300ms RTT 的 PredictionKey 时序与次数清点 | Network Insights、RPC/字节数、Full/Mixed 对照、P95/P99 和同条件优化前后数据 |
 
 面试中应使用下面的准确措辞：
 
@@ -1012,16 +1207,15 @@ GE constructor
 
 ### 12.1 已知不足
 
-1. 伤害没有 ExecCalc，数值深度有限。
-2. 没有正式 GameplayCue，无法验证预测表现去重与拒绝清理。
-3. 没有自定义 EffectContext，无法携带暴击、格挡、冲量等扩展命中数据。
-4. 没有正式 GAS HUD，属性委托虽已暴露但未接 UMG。
-5. 治疗只能治疗自己，合作性还不够强。
-6. 没有死亡、复活和跨 Pawn Effect 清理验收。
-7. 没有两客户端自动化功能测试。
-8. 没有 Network Insights 性能对照数据。
-9. 最近玩家目标选择只是测试策略，不是最终瞄准系统。
-10. C++ GE 适合零资产测试，但正式数值迭代应转为数据资产或 Blueprint GE。
+1. DamageIntent 当前只做 50ms 最小间隔，尚未实现 token bucket、异常 strike/封禁、专用 Trace Channel 和历史回溯；弱网也只有 0ms/约 300ms RTT，无 loss 样本。
+2. GameplayCue 目前是 PointLight 技术占位；没有 Niagara、音效、Montage 和可视录屏证据；瞬时 Cue 也不能倒放回滚。
+3. 治疗只能治疗自己，合作性还不够强。
+4. M5 日志工具只做清点；M6 Reject 和 DamageIntent 已有失败退出的行为断言，但仍只是 Listen Server + 1 Client，不是服务器+2 Clients 统一自动化。
+5. 丢包只有一组 5% 样本；Dedicated Server、晚加入、断线和持持续 Cue 时死亡尚未验证。
+6. 没有 Network Insights 性能对照数据。
+7. 准星 Sphere Sweep 和 M0 方块能验证网络链，但训练方块不是正式敌人系统。
+8. 现有 ExecCalc 是可解释的最小公式，尚未形成完整 AttackPower/Armor/Resistance 数值体系。
+9. C++ GE 适合零资产测试，但正式数值迭代仍应进一步转为数据资产或 Blueprint GE。
 
 ### 12.2 完整未完成项矩阵
 
@@ -1036,14 +1230,14 @@ GE constructor
 
 | 编号 | 未完成项 | 当前状态 | 完成定义 |
 |---|---|---|---|
-| P0-01 | 双窗口人工验收 | 待验证 | Host/Client 分别完成伤害、治疗、免疫、Cost、Cooldown；超距、遮挡、死亡目标被服务器拒绝；保存双端日志或录屏 |
-| P0-02 | 正式 Enhanced Input 接线 | 部分实现 | 用 InputAction/InputMappingContext 驱动 InputTag，移除 4/5/6 硬编码测试键作为正式入口 |
+| P0-01 | 双窗口人工验收 | 部分通过 | Client 接受、Immunity Reject 和 DamageIntent 语义拒绝日志链已通过；仍需 Host 反向输入和可视录屏 |
+| P0-02 | 正式 Enhanced Input 接线 | 已实现，待人工输入验收 | InputAction/InputMappingContext 已驱动 InputTag；数字键只保留为开发入口 |
 | P0-03 | AbilitySet/GE 数据化资产 | 部分实现 | 正式 Character 配置 AbilitySet；技能等级、Cost、Cooldown、持续时间不再只依赖 C++ 默认值；C++ fallback 仅用于测试 |
-| P0-04 | 正式 GAS HUD | 未实现 | 本地 UI 显示 Health、Energy、Cooldown、免疫状态和服务器拒绝提示；重复初始化不会重复绑定委托 |
-| P0-05 | 技能表现 | 未实现 | Montage、Niagara、音效和 GameplayCue 与预测确认/拒绝一致，不出现双播或残留效果 |
+| P0-04 | 正式 GAS HUD | 已实现，待完整人工验收 | 本地 UI 已显示属性、Cooldown 和状态并支持重绑；Reject 的技术状态日志通过，正式提示与可视回归仍待补 |
+| P0-05 | 技能表现 | 部分通过 | 原生 Cue 的预测/确认/生命周期与 Pending Reject 收口日志通过；Montage、Niagara、音效和人工视觉待补 |
 | P0-06 | 合作型目标选择 | 部分实现 | 治疗/免疫可选择队友；伤害、治疗和免疫根据队伍规则验证目标 |
-| P0-07 | 最终瞄准/选择方案 | 部分实现 | 将“最近玩家”测试策略替换为准星 Trace、TargetActor 或投射物；服务器重建关键校验 |
-| P0-08 | 死亡、复活与输入收口 | 未实现 | Health 到 0 只结算一次；阻止技能输入；取消相关 Ability/Task；复活时更新 AvatarActor、恢复规定属性且不重复授予能力 |
+| P0-07 | 最终瞄准/选择方案 | 核心实现 | 准星 Sweep 只生成本地预览；服务器校验 DamageIntent 后在当前世界重建 SingleTargetHit；快速移动/遮挡专项仍待验 |
+| P0-08 | 死亡、复活与输入收口 | 核心通过 | M3 的死亡幂等、清理、3 秒复活和 ASC 重绑已通过 0ms/弱网接受路径；断线/持续 Cue 死亡待验 |
 | P0-09 | 机关和胜利流程回归 | 待验证 | 两窗口完成钥匙、压力板、普通门、移动平台和 WinArea 全流程；胜利 UMG 的重开/退出按钮均可用 |
 | P0-10 | 打包运行验收 | 待验证 | Development 或 Shipping 客户端打包成功，至少两实例能从菜单进入同一局并完成一次胜利 |
 
@@ -1051,18 +1245,19 @@ GE constructor
 
 | 编号 | 未完成项 | 当前状态 | 完成定义 |
 |---|---|---|---|
-| P1-01 | `GameplayEffectExecutionCalculation` | 未实现 | 服务器以攻击、护甲、暴击/抗性等捕获属性计算 `IncomingDamage`；有确定性数值测试 |
-| P1-02 | 自定义 `GameplayEffectContext` | 未实现 | 正确实现 `GetScriptStruct`、`Duplicate`、`NetSerialize`；可携带暴击、格挡、命中类型或冲量，并验证跨网络复制 |
-| P1-03 | GameplayCue 预测、确认与去重 | 未实现 | 对 LocalPredicted 技能验证预测 Cue、服务器确认、拒绝清理和晚到结果；无双重特效/音效 |
-| P1-04 | Buff/Debuff 堆叠 | 未实现 | 明确 Aggregate by Source/Target、StackLimit、刷新/溢出/移除规则，并用 UI 和自动化测试证明 |
-| P1-05 | 预测拒绝/回滚可视化实验 | 未实现 | 在 0/150/300ms、丢包、超距和遮挡条件下显示 PredictionKey、预测 Cost/Cooldown、服务器拒绝与客户端校正 |
-| P1-06 | 双客户端功能自动化 | 未实现 | 自动启动服务器与两个客户端，断言属性复制、目标拒绝、免疫、Cooldown 和胜利幂等；与现有配置测试分开 |
+| P1-01 | `GameplayEffectExecutionCalculation` | 核心通过 | 服务器最小公式与确定性 Critical 已通过自动化/双端运行；完整攻击/护甲/抗性体系待扩展 |
+| P1-02 | 自定义 `GameplayEffectContext` | 核心通过 | `GetScriptStruct`/`Duplicate`/`NetSerialize` 自动化通过，Critical/HitType/ImpactImpulse 有双端 Cue 消费；物理冲量待补 |
+| P1-03 | GameplayCue 预测、确认与去重 | 核心通过 | 接受路径无双播，Immunity/Pending Reject 清理有证据；瞬时 Cue 不可倒放，正式视听与完整丢包矩阵待验 |
+| P1-04 | Buff/Debuff 堆叠 | 核心通过 | Aggregate by Target、三层、刷新、整组到期和 Cue 抑制已证；存活目标溢出、层数 UI、晚加入待验 |
+| P1-05 | 预测拒绝/回滚可视化实验 | 核心通过，人工表现待补 | Immunity 真 Reject 在 0ms/约 300ms RTT/一组 5% 样本通过；DamageIntent 语义拒绝在 0ms/约 300ms RTT 各52/52 PASS；约 600ms RTT、DamageIntent loss 和录屏待补 |
+| P1-06 | 双客户端功能自动化 | 单客户端行为断言已实现，完整自动化未实现 | 当前自动启动 Listen Server+1 Client，M6 核验器会失败退出；仍需服务器+2 Clients 的统一功能框架 |
 | P1-07 | Network Insights 前后对照 | 未实现 | 固定场景记录 RPC 次数/字节、属性/GE/Cue 流量、Actor 更新、P95/P99 帧时间；只在同条件对照后下优化结论 |
 | P1-08 | Dedicated Server | 待验证 | Server Target 编译和无渲染运行通过；两个客户端完成核心技能和胜利链；不存在 Listen Server 本地依赖 |
 | P1-09 | 晚加入状态一致性 | 待验证 | 晚加入客户端正确得到 Health、Energy、持续 GE/Tag、钥匙进度、门/平台和胜利状态；瞬时 Cue 不错误重播 |
-| P1-10 | 弱网生命周期测试 | 未实现 | Ability Cancel、Task 销毁、Delegate 解绑、Timer 清理在延迟/丢包/死亡/Travel 下无残留 |
-| P1-11 | 服务器验证边界 | 部分实现 | 在现有类型、距离、视线、存活校验上增加队伍规则、施法状态、速率/资源校验；若采用高速投射物，再单独设计回溯 |
+| P1-10 | 弱网生命周期测试 | 部分通过 | 每方向 150ms 的接受/Immunity Reject/DamageIntent 语义拒绝通过；Immunity 有一组 5% loss，DamageIntent 仍缺 loss、更高延迟、Travel/断线和并发请求 |
+| P1-11 | 服务器验证边界 | 核心实现，扩展待验 | DamageIntent 已校验 Schema/source、ShotId、50ms 最小间隔、时间/Origin/方向、敌我/存活，并由服务器当前世界 Sweep 决定命中；token bucket、strike、专用通道和更广矩阵待补 |
 | P1-12 | GAS Debug HUD 与日志关联 | 部分实现 | 双端日志包含 SpecHandle、PredictionKey、目标、拒绝原因和 GE Handle；能与 `showdebug abilitysystem`、Insights 时间线对应 |
+| P1-13 | 有限服务器回溯延迟补偿 | 未实现 | 只为一个 Hitscan 能力保存 250～500ms 历史查询数据；验证 ShotId、时间窗、起点、方向、射程和重复请求，并保存有/无回溯对照 |
 
 #### P2：作品集增强和研究型加分
 
@@ -1090,28 +1285,25 @@ GE constructor
 ### 12.4 推荐实施顺序
 
 ```text
-P0 双窗口手工验收 + 机关/胜利回归
--> 正式 Input / AbilitySet / HUD
--> 队友目标 + 死亡复活
--> 双端结构化日志 + 服务器拒绝/预测回滚实验
--> GameplayCue 预测与去重
--> ExecCalc + 自定义 EffectContext
--> Buff/Debuff 堆叠与状态标签细化
--> 双客户端自动化 + Dedicated Server + 晚加入
+M5 残余人工视觉 / Host 反向输入 / 持续状态死亡
+-> M6 真正 ClientActivateAbilityFailed + Cost/Cooldown/Cue 回滚（核心已通过）
+-> M6 DamageIntent Schema / ShotId / 语义拒绝 / 当前世界权威 Trace（核心已通过）
+-> 一个 Hitscan 能力的有限服务器回溯与异常请求拒绝
+-> 带断言的服务器+双客户端自动化 + Dedicated Server + 晚加入
 -> Network Insights 基线
 -> 一项有同条件数据支撑的优化
 -> 打包、录屏和作品集证据包
 ```
 
-这个顺序先证明当前链路正确，再增加数值与表现复杂度，最后才做有数据支撑的性能优化。
+M0～M5 的核心实现与客户端接受路径、M6 的真实激活拒绝回滚和 DamageIntent 当前世界权威验证已经完成核心闭环。后续先补 M6 运行矩阵与人工表现，再做 M7 服务器回溯，最后才做有数据支撑的性能优化。
 
 ### 12.5 阶段完成口径
 
 | 阶段 | 可以准确声称 | 仍不能声称 |
 |---|---|---|
-| 当前 | 完成 C++ GAS 核心闭环，并通过编译和配置自动化测试 | 已通过完整双客户端验收或已经完成网络优化 |
+| 当前 | 完成 M0～M5 数值/生命周期/Cue 接受路径；M6 Immunity 真 Reject 回滚与 DamageIntent 协议防护核心；DamageIntent 0ms/约 300ms RTT 各52/52 PASS | 已完成 token bucket/商业反作弊、历史回溯、完整丢包矩阵、Dedicated、服务器+双客户端自动化或网络优化 |
 | P0 完成 | 有可玩的双人 GAS Demo，包含正式输入、UI、表现和死亡复活 | 已掌握复杂数值、完整预测回滚或性能优化 |
-| P1 完成 | 能用实验解释预测拒绝、Cue 去重、ExecCalc、EffectContext、堆叠和网络数据 | 已解决所有大规模在线游戏问题 |
+| P1 完成 | 能用实验解释预测拒绝、Cue 去重、ExecCalc、EffectContext、堆叠、有限服务器回溯和网络数据 | 已解决所有技能类型的延迟补偿或商业反作弊问题 |
 | P2 选择性完成 | 有一到两项基于证据的架构/性能扩展，可作为作品集差异点 | Aura/Lyra 全量能力或商业项目规模经验 |
 
 ---
@@ -1142,10 +1334,10 @@ P0 双窗口手工验收 + 机关/胜利回归
 
 可以准确表述为：
 
-> 在 UE5.5 双人合作项目中独立接入 Gameplay Ability System，将 ASC 与 AttributeSet 放在 PlayerState，并以 Character 作为 Avatar；实现 Tag 驱动输入、LocalPredicted 伤害/治疗/免疫能力、自定义 TargetData AbilityTask、PredictionKey、服务器目标验证、Meta Attribute 结算和 Mixed 复制，同时通过 Editor/Game 编译与 GAS 配置自动化测试。
+> 在 UE5.5 双人合作项目中独立接入 Gameplay Ability System，将 ASC/AttributeSet 放在 PlayerState、Character 作为 Avatar；实现 Tag 驱动输入、LocalPredicted 伤害/治疗/免疫、TargetData 与团队/距离/视线复验、服务器 ExecCalc、自定义 EffectContext、三层 Vulnerability、死亡复活和原生 GameplayCue，并以 0ms 与约 300ms RTT 双进程日志验证 Client 接受/CatchUp、Cue 去重和持续状态清理。
 
 暂时不能表述为：
 
 > 已完成复杂战斗数值、完整预测回滚、Dedicated Server、弱网优化和性能提升。
 
-后一句需要 ExecCalc、GameplayCue、双客户端功能测试和 Network Insights 数据才能支撑。
+其中“复杂战斗数值”仍需要更完整的属性捕获/装备体系；“所有技能完整预测回滚、Dedicated、弱网优化和性能提升”仍需要 M6～M9 的请求防护、结果拒绝、完整丢包、专服与 Insights 证据。已有 Immunity 真 Reject、ExecCalc/Context/Cue 接受路径不能被抹掉，也不能被外推成完整网络优化。

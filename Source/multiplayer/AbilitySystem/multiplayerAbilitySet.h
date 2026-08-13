@@ -17,13 +17,13 @@ struct FmultiplayerAbilitySetAbility
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditDefaultsOnly, Category = "Ability")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ability")
 	TSubclassOf<UGameplayAbility> Ability;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Ability", meta = (ClampMin = "1"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ability", meta = (ClampMin = "1"))
 	int32 AbilityLevel = 1;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Ability", meta = (Categories = "InputTag"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Ability", meta = (Categories = "InputTag"))
 	FGameplayTag InputTag;
 };
 
@@ -32,10 +32,10 @@ struct FmultiplayerAbilitySetEffect
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditDefaultsOnly, Category = "Effect")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Effect")
 	TSubclassOf<UGameplayEffect> Effect;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Effect", meta = (ClampMin = "0"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Effect", meta = (ClampMin = "0"))
 	float EffectLevel = 1.0f;
 };
 
@@ -60,6 +60,16 @@ public:
 		UAbilitySystemComponent* AbilitySystemComponent,
 		FmultiplayerAbilitySetGrantedHandles* OutGrantedHandles,
 		UObject* SourceObject = nullptr) const;
+
+	const TArray<FmultiplayerAbilitySetAbility>& GetGrantedAbilities() const
+	{
+		return GrantedAbilities;
+	}
+
+	const TArray<FmultiplayerAbilitySetEffect>& GetGrantedEffects() const
+	{
+		return GrantedEffects;
+	}
 
 protected:
 	UPROPERTY(EditDefaultsOnly, Category = "GAS|Abilities")

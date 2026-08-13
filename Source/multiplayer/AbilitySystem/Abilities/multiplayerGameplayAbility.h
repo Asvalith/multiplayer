@@ -13,6 +13,24 @@ class MULTIPLAYER_API UmultiplayerGameplayAbility : public UGameplayAbility
 
 public:
 	UmultiplayerGameplayAbility();
+
+protected:
+	void ExecutePredictedCue(const FGameplayTag& CueTag, FName AbilityName);
+	void TrackPrediction(FName AbilityName);
+	bool IsPredictionLabEnabled() const;
+	void ApplyPredictionLabPendingEffect();
+	void LogPredictionState(const TCHAR* Phase, FName AbilityName, int16 PredictionKey) const;
+
+private:
+	void HandlePredictionRejected(
+		FName AbilityName,
+		FGameplayAbilitySpecHandle SpecHandle,
+		FPredictionKey ActivationPredictionKey,
+		FPredictionKey ActionPredictionKey);
+	void HandlePredictionCaughtUp(
+		FName AbilityName,
+		FGameplayAbilitySpecHandle SpecHandle,
+		int16 PredictionKey);
 };
 
 UCLASS()
@@ -37,6 +55,9 @@ protected:
 	float TargetRange = 600.0f;
 
 private:
+	UPROPERTY(Transient)
+	TObjectPtr<class UmultiplayerAbilityTask_TargetActor> ActiveTargetTask;
+
 	UFUNCTION()
 	void HandleTargetData(const FGameplayAbilityTargetDataHandle& TargetData);
 

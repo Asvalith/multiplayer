@@ -19,6 +19,7 @@ public class multiplayer : ModuleRules
 			"GameplayAbilities",
 			"GameplayTags",
 			"GameplayTasks",
+			"NetCore",
 			"UMG",
 			"OnlineSubsystem",
 			"OnlineSubsystemUtils"

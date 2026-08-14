@@ -2,7 +2,7 @@
 
 > 适用项目：UE5.5 `multiplayer` / `coop-GAS`
 >
-> 更新日期：2026-08-13
+> 更新日期：2026-08-15
 >
 > 使用方式：先回答“30 秒版本”，再结合项目调用链和证据展开。未完成内容必须使用“计划/待验证”，不能说成已经实现。
 
@@ -49,7 +49,7 @@ GAS 的核心不是一个组件，而是一套协作模型：ASC 保存和复制
 - ASC/AttributeSet 位于 [multiplayerGASPlayerState.cpp](../Source/multiplayer/Player/multiplayerGASPlayerState.cpp)。
 - 三个能力位于 [multiplayerGameplayAbility.cpp](../Source/multiplayer/AbilitySystem/Abilities/multiplayerGameplayAbility.cpp)。
 - TargetData Task 位于 [multiplayerAbilityTask_TargetActor.cpp](../Source/multiplayer/AbilitySystem/AbilityTasks/multiplayerAbilityTask_TargetActor.cpp)。
-- GE、Tag、AbilitySet、服务器 ExecCalc、自定义 EffectContext 和 Vulnerability 堆叠均已实现。
+- GE、Tag、AbilitySet、服务器 ExecCalc、自定义 EffectContext 和 Vulnerability 堆叠均已实现；AttributeSet 还包含复制的 AttackPower、Armor、CriticalChance、CriticalMultiplier、Resistance。
 - 7 个 GameplayCue 当前由原生 Handler 和 PointLight 技术占位表现消费；正式 Niagara/音效/Montage 资产仍未完成。
 
 ### 常见追问
@@ -82,7 +82,8 @@ GAS 的核心不是一个组件，而是一套协作模型：ASC 保存和复制
 -> 验证 Team.Enemy / 非 Team.Player / 存活
 -> CommitAbility(Cost + Cooldown)
 -> Apply Damage GE
--> Server ExecCalc 计算基础伤害、Vulnerability 和 Critical
+-> Server ExecCalc 捕获 Source Snapshot 进攻属性与 Target Live 防御/生命属性
+-> 计算 (Base+AttackPower) * Armor * Resistance * Vulnerability * Critical
 -> 自定义 EffectContext 携带 Critical / HitType / ImpactImpulse
 -> IncomingDamage
 -> AttributeSet::PostGameplayEffectExecute
@@ -98,6 +99,10 @@ GAS 的核心不是一个组件，而是一套协作模型：ASC 保存和复制
 - `TryActivateAbility` 成功不等于最终 Gameplay 结果一定发生。
 - Anim Montage 播放不等于服务器已经接受目标。
 - TargetData 是客户端候选意图，不是权威命中结论。
+
+### ExecCalc 的当前取舍
+
+AttackPower/CriticalChance/CriticalMultiplier 在创建 outgoing Spec 时 Snapshot，使同一次施法使用稳定的来源快照；Health/MaxHealth/Armor/Resistance 在执行时 Live Capture，使命中结算看到目标当时的防御和生命。客户端不提交暴击结果，真实 Roll 只在服务器 Execution 中生成；纯函数测试显式传入 Roll，才能稳定覆盖 0%、100% 和低血量 Critical。结果通过 `IncomingDamage` 进入 AttributeSet，自定义 Context 只携带已有 Cue 消费者使用的 Critical、HitType 和 ImpactImpulse。
 
 ---
 
@@ -570,6 +575,7 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 | 钥匙 | Server 拾取、安装和插槽激活 | RepNotify/引用复制 |
 | 团队目标 | GameState 的 ActivatedKeys/RequiredKeys/bGameWon | 结构体属性复制 + OnRep |
 | 胜利区 | Server 的玩家弱引用 TSet | 满足条件时调用 GameState 幂等结算 |
+| 胜利 UI | 本地 VictoryPresenter 消费复制结果 | Widget 幂等创建/清理；重开意图经 Character RPC 回服务器 |
 | GAS | PlayerState ASC Mixed；客户端预测意图 | GE/Attribute/Tag 复制 + TargetData |
 
 ### 关键保护
@@ -577,11 +583,12 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 - 玩家多个碰撞组件不会重复计数。
 - 玩家销毁时从压力板、平台和 WinArea 清理。
 - `TryCompleteGame` 的 `bGameWon` 保证胜利只结算一次。
+- VictoryPresenter 在 EndPlay/Travel 对称解绑、移除 Widget，并恢复自己修改过的输入与鼠标状态。
 - 玩家 `Team.Player`，伤害只接受 `Team.Enemy`，服务器二次验证。
 
 ### 尚缺证据
 
-完整机关+GAS 双窗口回归、晚加入、Dedicated Server、Damage 请求防护和 Network Insights 数据仍待完成；Immunity 真 Reject 回滚子实验已有独立证据。
+阶段 3 胜利 Widget 引用和生命周期已经通过编译/资产自动化，阶段 4 新公式完成 M5/M6/M6Intent Headless 回归；追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 为 52/52。完整机关+GAS 可见双窗口点击、晚加入、Dedicated Server、补充弱网矩阵和 Network Insights 数据仍待完成。
 
 ---
 
@@ -614,7 +621,7 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 | TargetData/PredictionKey | 接受、Immunity 真 Reject 和 DamageIntent 语义拒绝都有日志/断言 | 可解释 DamageIntent Schema、ShotId guard、当前世界 Trace 与两类拒绝；loss/快速移动/历史回溯待补 |
 | Cost/Cooldown | 已实现，Immunity 真 Reject 回滚通过 | 0ms/约 300ms RTT/一组 5% 样本有断言；精确 HUD 人工验收待补 |
 | GameplayCue | 原生 Cue 接受/确认/生命周期及 Pending 拒绝收口通过 | 可解释去重与 Context 消费；瞬时 Cue 不可倒放，正式视听与多轮丢包待补 |
-| ExecCalc/EffectContext | M4 核心实现，自动化与双端消费通过 | 可解释最小公式/序列化；完整 Armor/随机暴击待扩展 |
+| ExecCalc/EffectContext | M4 战斗属性扩展完成，自动化与双端消费通过 | 可解释 Snapshot/Live Capture、Armor/Resistance/服务器暴击 Roll、Meta Attribute 与 Context 序列化；装备资产和性能数据待补 |
 | Buff/Debuff Stacking | 三层 Vulnerability 核心与自然到期通过 | 可解释聚合/刷新/清理；溢出、层数 UI、晚加入待补 |
 | ENetRole/RPC/属性复制 | 项目已有多处实现 | 可以结合日志和源码解释 |
 | CharacterMovement 校正/插值 | 使用引擎默认实现 | 解释原理，不能说自行实现 |
@@ -645,7 +652,7 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 
 当前可以说：
 
-> 在 UE5.5 双人合作项目中实现 PlayerState ASC、Mixed 复制、Tag 驱动输入、LocalPredicted 能力、Cost/Cooldown、ExecCalc、自定义 EffectContext、堆叠、死亡复活和 GameplayCue；Damage 链只上传 ShotId/Origin/方向/时间意图，由服务器防重放、校验并在当前世界重建命中。Immunity 真 Reject 与 DamageIntent 语义拒绝均有 0ms/约 300ms RTT 证据。
+> 在 UE5.5 双人合作项目中实现 PlayerState ASC、Mixed 复制、Tag 驱动输入、LocalPredicted 能力、Cost/Cooldown、战斗属性 ExecCalc、自定义 EffectContext、堆叠、死亡复活和 GameplayCue；ExecCalc 区分 Source Snapshot 与 Target Live Capture，暴击 Roll 和最终伤害只由服务器决定。Damage 链只上传 ShotId/Origin/方向/时间意图，由服务器防重放、校验并在当前世界重建命中。Immunity 真 Reject 与 DamageIntent 语义拒绝均有 0ms/约 300ms RTT 证据。
 
 当前不能说：
 

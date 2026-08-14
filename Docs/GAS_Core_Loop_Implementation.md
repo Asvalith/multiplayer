@@ -3,7 +3,7 @@
 > 分支：`coop-GAS`
 >
 > UE 版本：5.5
-> 更新日期：2026-08-13
+> 更新日期：2026-08-15
 
 完整架构讲解、调用链、技术选型、问题复盘和面试场景题见：
 [《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)。本文件只维护实施状态和运行步骤。
@@ -23,7 +23,7 @@
 - 原生 GameplayTag 驱动技能输入与 AbilitySpec。
 - AbilitySet DataAsset 支持批量授予能力、应用初始效果和保存撤销句柄。
 - 默认 C++ 能力确保不创建资产也可以测试。
-- Health、MaxHealth、Energy、MaxEnergy 使用 RepNotify。
+- Health、MaxHealth、Energy、MaxEnergy，以及 AttackPower、Armor、CriticalChance、CriticalMultiplier、Resistance 使用 RepNotify；战斗属性 Clamp 分别在 AttributeSet 中收口。
 - IncomingDamage、IncomingHealing 是服务器结算用 Meta Attribute。
 - 伤害、治疗和免疫均使用 `LocalPredicted` 激活。
 - Cost 与 Cooldown 通过 GameplayEffect 预测并由服务器校正。
@@ -33,7 +33,7 @@
 - 免疫使用持续 GameplayEffect、`State.Immune` 和 `UImmunityGameplayEffectComponent`。
 - Enhanced Input 通过 InputTag 驱动唯一的正式能力入口；测试目标操作由显式 `-GASDeveloperControls` 夹具提供。
 - 基础 HUD 绑定 PlayerState ASC，显示属性、冷却和状态，并在 Avatar 更换时安全重绑。
-- 服务器用 `GameplayEffectExecutionCalculation` 计算基础伤害、低血量确定性 Critical 和 Vulnerability 修正；AttackPower/Armor/Resistance 捕获仍是下一阶段任务。
+- 服务器用 `GameplayEffectExecutionCalculation` 计算 AttackPower、Armor、Resistance、Critical 和 Vulnerability；进攻属性按 Source Snapshot 捕获，生命与防御按 Target Live 捕获，随机暴击 Roll 只在服务器生成。
 - 自定义 `GameplayEffectContext` 复制 Critical、HitType 和 ImpactImpulse，供确认 Cue 消费。
 - Vulnerability 最多三层，按 Target 聚合、应用时刷新持续时间，并抑制叠层 Cue 重触发。
 - 死亡、复活、Ability/Task/临时 GE 清理和 ASC Avatar 重绑已形成服务器幂等链。
@@ -75,6 +75,19 @@ Owning Client 按下鼠标左键
 ```
 
 客户端不能提交目标 Actor、HitResult 或伤害数值。服务器根据受限意图重建命中，伤害量来自服务器能力类默认值。语义结果 RPC 只用于日志/UI，不手工退还资源；Cost/Cooldown 交给 PredictionKey 对账。
+
+权威数值链：
+
+```text
+Raw = max(BaseDamage + AttackPower, 0)
+-> Armor: 100 / (100 + Armor)
+-> Resistance: 1 - clamp(Resistance, 0, 0.8)
+-> Vulnerability: 1 + 0.1 * clamp(Stacks, 0, 3)
+-> Critical: low-health OR server roll < CriticalChance
+-> IncomingDamage -> PostGameplayEffectExecute -> Health
+```
+
+默认 AttackPower/Armor/CriticalChance/Resistance 均为 0，CriticalMultiplier 为 1.5，因此旧 M5/M6 基线数值保持兼容。完整捕获策略、公式矩阵和阶段 3 胜利 UI 证据见[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
 
 ## 4. 双客户端手工验证
 
@@ -125,7 +138,7 @@ Net PktLoss=5
 完整未完成项、优先级和完成口径见
 [《Co-op GAS 架构与面试讲解手册》第 12.2 节](GAS_Architecture_Interview_Guide.md#122-完整未完成项矩阵)。
 
-M5 已取得 Client 发起的 0ms 与每方向 150ms 双进程接受路径证据；M6 完成真激活拒绝回滚，也完成 DamageIntent 当前世界服务器权威验证。服务器 TargetData 等待现有 5 秒超时收口，AbilityTask 会在数据到达、超时和 Task 结束路径清理委托/Timer，Damage Ability 也会在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。`multiplayer.GAS.DamageIntent.Unit` 通过；0ms 运行 `20260813_163052` 与双方 `PktLag=150` 运行 `20260813_163248` 各 52/52 PASS，覆盖正常接受、Duplicate、Origin、Direction、Stale、Future、Miss 和预测 Energy/CD 收敛。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 仍缺专项双进程端到端分支；当前证据也不等于 loss 矩阵、服务器历史回溯或服务器+2 Clients 自动化已通过。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)。
+M5/M6/M6Intent 在扩展公式后完成回归：M5 `20260815_002532` 日志清点正常，M6 `20260815_002809` 为 95/95 PASS；此前 M6Intent 0ms `20260815_002959` 与双方各 `PktLag=150ms`（配置约 300ms RTT）`20260815_003155` 均为 52/52 PASS，追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 再次为 52/52 PASS。服务器 TargetData 等待现有 5 秒超时收口，AbilityTask 会在数据到达、超时和 Task 结束路径清理委托/Timer，Damage Ability 也会在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 仍缺专项双进程端到端分支；当前 Headless 证据也不等于正式视觉、loss 矩阵、服务器历史回溯或服务器+2 Clients 自动化已通过。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)与[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
 
 ## 6. 参考边界
 

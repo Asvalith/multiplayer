@@ -8,12 +8,32 @@
 #include "GameplayEffectExtension.h"
 #include "Net/UnrealNetwork.h"
 
+namespace
+{
+	float ClampFinite(float Value, float Minimum, float Maximum, float Fallback)
+	{
+		return FMath::IsFinite(Value)
+			? FMath::Clamp(Value, Minimum, Maximum)
+			: Fallback;
+	}
+
+	float ClampFiniteMinimum(float Value, float Minimum, float Fallback)
+	{
+		return FMath::IsFinite(Value) ? FMath::Max(Value, Minimum) : Fallback;
+	}
+}
+
 UmultiplayerAttributeSet::UmultiplayerAttributeSet()
 {
 	InitMaxHealth(100.0f);
 	InitHealth(100.0f);
 	InitMaxEnergy(100.0f);
 	InitEnergy(100.0f);
+	InitAttackPower(0.0f);
+	InitArmor(0.0f);
+	InitCriticalChance(0.0f);
+	InitCriticalMultiplier(1.5f);
+	InitResistance(0.0f);
 }
 
 void UmultiplayerAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -24,6 +44,11 @@ void UmultiplayerAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, MaxHealth, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, Energy, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, MaxEnergy, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, AttackPower, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, Armor, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, CriticalChance, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, CriticalMultiplier, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerAttributeSet, Resistance, COND_None, REPNOTIFY_Always);
 }
 
 void UmultiplayerAttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue)
@@ -41,6 +66,22 @@ void UmultiplayerAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	else if (Attribute == GetMaxHealthAttribute() || Attribute == GetMaxEnergyAttribute())
 	{
 		NewValue = FMath::Max(NewValue, 1.0f);
+	}
+	else if (Attribute == GetAttackPowerAttribute() || Attribute == GetArmorAttribute())
+	{
+		NewValue = ClampFiniteMinimum(NewValue, 0.0f, 0.0f);
+	}
+	else if (Attribute == GetCriticalChanceAttribute())
+	{
+		NewValue = ClampFinite(NewValue, 0.0f, 1.0f, 0.0f);
+	}
+	else if (Attribute == GetCriticalMultiplierAttribute())
+	{
+		NewValue = ClampFiniteMinimum(NewValue, 1.0f, 1.0f);
+	}
+	else if (Attribute == GetResistanceAttribute())
+	{
+		NewValue = ClampFinite(NewValue, 0.0f, 0.8f, 0.0f);
 	}
 }
 
@@ -113,6 +154,26 @@ void UmultiplayerAttributeSet::PostGameplayEffectExecute(const FGameplayEffectMo
 	{
 		SetEnergy(FMath::Clamp(GetEnergy(), 0.0f, GetMaxEnergy()));
 	}
+	else if (Data.EvaluatedData.Attribute == GetAttackPowerAttribute())
+	{
+		SetAttackPower(ClampFiniteMinimum(GetAttackPower(), 0.0f, 0.0f));
+	}
+	else if (Data.EvaluatedData.Attribute == GetArmorAttribute())
+	{
+		SetArmor(ClampFiniteMinimum(GetArmor(), 0.0f, 0.0f));
+	}
+	else if (Data.EvaluatedData.Attribute == GetCriticalChanceAttribute())
+	{
+		SetCriticalChance(ClampFinite(GetCriticalChance(), 0.0f, 1.0f, 0.0f));
+	}
+	else if (Data.EvaluatedData.Attribute == GetCriticalMultiplierAttribute())
+	{
+		SetCriticalMultiplier(ClampFiniteMinimum(GetCriticalMultiplier(), 1.0f, 1.0f));
+	}
+	else if (Data.EvaluatedData.Attribute == GetResistanceAttribute())
+	{
+		SetResistance(ClampFinite(GetResistance(), 0.0f, 0.8f, 0.0f));
+	}
 }
 
 void UmultiplayerAttributeSet::OnRep_Health(const FGameplayAttributeData& OldValue)
@@ -133,4 +194,29 @@ void UmultiplayerAttributeSet::OnRep_Energy(const FGameplayAttributeData& OldVal
 void UmultiplayerAttributeSet::OnRep_MaxEnergy(const FGameplayAttributeData& OldValue)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerAttributeSet, MaxEnergy, OldValue);
+}
+
+void UmultiplayerAttributeSet::OnRep_AttackPower(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerAttributeSet, AttackPower, OldValue);
+}
+
+void UmultiplayerAttributeSet::OnRep_Armor(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerAttributeSet, Armor, OldValue);
+}
+
+void UmultiplayerAttributeSet::OnRep_CriticalChance(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerAttributeSet, CriticalChance, OldValue);
+}
+
+void UmultiplayerAttributeSet::OnRep_CriticalMultiplier(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerAttributeSet, CriticalMultiplier, OldValue);
+}
+
+void UmultiplayerAttributeSet::OnRep_Resistance(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerAttributeSet, Resistance, OldValue);
 }

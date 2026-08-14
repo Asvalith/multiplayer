@@ -3,6 +3,7 @@
 > 适用分支：`coop-GAS`
 >
 > 引擎版本：Unreal Engine 5.5
+> 更新日期：2026-08-15
 > 文档目标：准确讲清已经实现的内容、尚未验证的内容，以及面对条件变化时如何演进架构。
 
 当前执行目标和阶段门禁以
@@ -136,14 +137,14 @@ flowchart TB
 
 #### 1.4.1 当前资产审查结论
 
-本节结论来自源码声明和 `.uasset` 引用字符串的只读核对，不等同于 Blueprint 编译或双窗口 PIE 验收：
+本节结论来自源码声明、`.uasset` 核对，以及本轮 Editor Python 保存后由新编辑器进程执行的 CDO 自动化；它仍不等同于可见双窗口 PIE/点击验收：
 
 - 已存在正式输入资产：`/Game/GAS/M1/IA_GAS_Damage`、`IA_GAS_Heal`、`IA_GAS_Immunity`、`IMC_GAS_Abilities`、`DA_GAS_InputConfig`、`DA_GAS_DefaultAbilitySet`。
 - `BP_ThirdPersonCharacter` 已能确认引用 `DA_GAS_DefaultAbilitySet`、`DA_GAS_InputConfig`、`IMC_GAS_Abilities`，以及第三人称移动输入资产。
 - 已存在机关 Blueprint 子类：`pressplate`、`bpcoopgate`、`bpmovingplatform`、`bpkey`、`bpkeysocket`、`winaera`。是否正确填写关卡实例级引用仍需在关卡中逐个检查。
 - 当前没有发现继承 `UmultiplayerGASHUDWidget` 的正式 HUD Widget 资产；因此默认走 C++ 原生 fallback HUD，这是可运行基线，不是最终美术 HUD。
-- `BP_ThirdPersonCharacter` 的资产引用中尚未确认 `/Game/UI/winandquit`，必须在编辑器复核 `VictoryPresenter.VictoryWidgetClass`，不能声称胜利 UI 已接好。
-- `winandquit` 中能确认 `QuitGame`，但没有确认 `RequestRestartCoopGame`。重新开始按钮仍是明确的人工接线任务。
+- `BP_ThirdPersonCharacter.VictoryPresenter.VictoryWidgetClass` 已通过 Editor Python 保存为 `/Game/UI/winandquit`，并由新进程自动化重新加载 CDO 确认，不再是 `None`。
+- `winandquit` 的退出逻辑保留；重新开始按钮由 Presenter 按 Designer 名称 `重新开始` 绑定到 Character 的服务器重开意图，避免 Widget 直接 `OpenLevel`。正式双窗口点击和视觉仍待人工。
 - `/Game/UI/bpmaingamemode` 的父类是普通 `GameModeBase`，并把默认 Pawn 设为 `bpmainmenupawn`；它适合主菜单地图，不得作为玩法地图的 GameMode Override。
 
 #### 1.4.2 Character、输入和 GAS Data Asset
@@ -180,15 +181,15 @@ GAS HUD 有两种合法配置：
 
 Widget 只消费 PlayerState/ASC 已同步的数据，不得在 Widget Tick 中改 Attribute、手工扣 Energy 或猜测 Cooldown。
 
-胜利 UI 属于必须补齐的蓝图配置：
+胜利 UI 当前接入状态：
 
-1. 打开 `BP_ThirdPersonCharacter`，在 Components 中选择继承的 `VictoryPresenter`。
-2. 将 `VictoryWidgetClass` 设为 `/Game/UI/winandquit`；`bShowMouseCursor` 和 `bSwitchToGameAndUIInput` 按当前需求保持 `true`。
-3. 打开 `winandquit`：退出按钮可使用现有 `Quit Game`。
-4. 重新开始按钮的准确节点链为：`OnClicked -> Get Owning Player Pawn -> Cast To multiplayerCharacter -> Request Restart Coop Game`。不要在客户端 Widget 直接 `Open Level`；该函数会请求服务器，由 `AmultiplayerGameMode::RestartCoopGame()` 对全体玩家执行 ServerTravel。
-5. 当前 `AmultiplayerCoopGameState::ReceiveGameWon()` 也是可选 Blueprint 表现入口。采用 Character 上的 `VictoryPresenter` 后不要再在 GameState Blueprint 重复创建同一个 Widget，否则可能弹出两份胜利界面。
+1. `BP_ThirdPersonCharacter` 已保存 `VictoryWidgetClass=/Game/UI/winandquit`；`bShowMouseCursor` 和 `bSwitchToGameAndUIInput` 保持 `true`。
+2. 退出按钮继续使用 Widget 的 `Quit Game`。
+3. Presenter 运行时按名称 `重新开始` 查找按钮，进入 `Character.RequestRestartCoopGame -> Server RPC -> GameMode.ServerTravel`；GameMode 用 `bRestartTravelRequested` 合并并发请求，Travel 启动失败时解锁并记录 `COOP_RESTART`。客户端 Widget 不直接 `OpenLevel`。
+4. Presenter 使用 `AddUniqueDynamic/RemoveDynamic`、Widget 实例幂等门禁、`RemoveFromParent` 和输入/鼠标恢复治理 Travel/EndPlay 生命周期。
+5. `AmultiplayerCoopGameState::ReceiveGameWon()` 仍是可选 Blueprint 表现入口。采用 Character 上的 Presenter 后不要再重复创建同一 Widget。
 
-验收：一名玩家进入 WinArea 不显示；两人进入但钥匙不足不显示；四个 Socket 激活且两人同时进入后，两个本地窗口各出现一次 UI、鼠标可用。客户端点击重新开始后两个窗口一起回到同一关卡且目标清零；点击退出只退出点击者的进程。当前重新开始节点仍待人工接线和双窗口验证。
+验收：一名玩家进入 WinArea 不显示；两人进入但钥匙不足不显示；四个 Socket 激活且两人同时进入后，两个本地窗口各出现一次 UI、鼠标可用。客户端点击重新开始后两个窗口一起回到同一关卡且目标清零；点击退出只退出点击者的进程。资产引用、编译和 Headless GAS 回归已通过；上述可见双窗口点击与视觉仍待人工，不能由 Headless 结果代替。
 
 #### 1.4.4 PressurePlate
 
@@ -414,7 +415,8 @@ Client Input
 -> Semantic result RPC reports Accepted/RejectReason for logs and UI only
 -> Server builds Damage Spec
 -> SetByCaller(Data.Damage)
--> ExecCalc: base * Critical * Vulnerability
+-> ExecCalc captures Source Snapshot AP/Crit and Target Live Health/Armor/Resistance
+-> (Base + AttackPower) * Armor * Resistance * Vulnerability * Critical
 -> custom EffectContext: Critical / HitType / ImpactImpulse
 -> IncomingDamage Meta Attribute
 -> PostGameplayEffectExecute
@@ -482,7 +484,7 @@ sequenceDiagram
 - Meta Attribute 不需要作为长期状态复制；
 - Damage GE 不必直接关心 Health Clamp。
 
-M4 已改为服务器 `ExecutionCalculation`：基础伤害、目标 Vulnerability 层数和低血量确定性 Critical 在权威端计算后输出 `IncomingDamage`。现有自动化覆盖公式边界，双进程日志覆盖 `25 -> 27.5 -> 45 Critical`。当前尚未加入完整 AttackPower/Armor/Resistance 属性捕获与随机暴击体系。
+M4 已扩展为完整的服务器 `ExecutionCalculation` 数据链：Source Snapshot 捕获 AttackPower/CriticalChance/CriticalMultiplier，Target Live 捕获 Health/MaxHealth/Armor/Resistance，Vulnerability 读取目标当前层数；真实随机 Roll 只在服务器 Execution 中生成。公式输出 `IncomingDamage`，Context 同步写入 Critical/HitType/ImpactImpulse。自动化覆盖默认 25、AttackPower、100 Armor、0.2 Resistance、三层 Vulnerability、低血量与概率 Critical、Clamp、公式非有限输入，以及 AttributeSet `PreAttributeChange` 对 NaN/Inf 的安全值；纯函数显式传入 Roll，避免随机测试。默认新属性不改变旧 M5/M6 数值基线。
 
 ---
 
@@ -715,7 +717,7 @@ CoopGate / MovingPlatform
 5. 第 4 把钥匙激活时两人都在区域：预期胜利一次。
 6. 胜利后继续触发 Overlap 或目标事件：预期不再重复提交胜利事务。
 
-这些是已定义的验收步骤；当前没有完整双窗口执行证据，因此结果仍标为待验证。
+这些是已定义的验收步骤；当前已完成胜利 Presenter 的代码/资产配置与自动化检查，但没有完整可见双窗口执行证据，因此玩法结果仍标为待验证。
 
 #### 3. 为什么难
 
@@ -783,7 +785,9 @@ CoopGate / MovingPlatform
 -> GameState.TryCompleteGame()
 -> bGameWon 幂等门禁
 -> ObjectiveState 复制到各客户端
--> 各客户端 OnGameWon / ReceiveGameWon 创建本地 UMG
+-> 各本地 VictoryPresenter 创建一次 UMG
+-> “重新开始”按钮提交 Character RPC 意图
+-> GameMode 统一 ServerTravel
 ```
 
 关键保护：
@@ -793,6 +797,7 @@ CoopGate / MovingPlatform
 - WinArea 使用弱引用 `TSet` 按 Character 去重，并监听 `OnDestroyed` 清理。
 - `TryCompleteGame` 检查 `bGameWon`，把胜利设计为幂等事务。
 - `OnRep_ObjectiveState` 负责通知表现层，服务器不直接操作客户端 Widget。
+- VictoryPresenter 对称解除 GameState/按钮委托、移除 Widget，并只恢复自己修改过的输入与鼠标状态。
 
 关键源码：
 
@@ -800,6 +805,7 @@ CoopGate / MovingPlatform
 - [multiplayerKeySocket.cpp](../Source/multiplayer/multiplayerKeySocket.cpp)
 - [multiplayerCoopGameState.cpp](../Source/multiplayer/multiplayerCoopGameState.cpp)
 - [multiplayerWinArea.cpp](../Source/multiplayer/multiplayerWinArea.cpp)
+- [multiplayerVictoryPresenterComponent.cpp](../Source/multiplayer/multiplayerVictoryPresenterComponent.cpp)
 
 #### 9. 验证结果
 
@@ -809,7 +815,8 @@ CoopGate / MovingPlatform
 | 静态调用链检查 | 通过：钥匙注册、区域判断和胜利提交均有服务器门禁 |
 | 唯一玩家结构 | 通过：源码使用 Character 弱引用 `TSet`，不是裸整数 |
 | 一次性状态结构 | 通过：`TryCompleteGame` 检查并设置 `bGameWon` |
-| 蓝图胜利 UMG 接线 | 待验证：需要确认 GameState Blueprint 实现 `ReceiveGameWon` |
+| 胜利 UMG 资产配置 | 通过：新编辑器进程自动化确认 Character Presenter 引用 `winandquit` |
+| Presenter 生命周期 | 通过编译/静态检查：幂等创建、解绑、RemoveFromParent、输入/鼠标恢复和服务器重开意图均有实现 |
 | 双窗口 6 步验收 | 待验证 |
 | 玩家销毁/断线/晚加入 | 待验证 |
 | 性能证据 | 不适用/未采集；当前重点是权威正确性和幂等性 |
@@ -819,19 +826,21 @@ CoopGate / MovingPlatform
 - 正确性：代码结构覆盖“4 把钥匙 + 2 名唯一玩家 + 一次性结算”的组合条件。
 - 架构：共享状态、空间状态和本地 UI 各有唯一职责。
 - 网络：客户端只能观察复制结果，不能调用权威胜利路径改变状态。
-- 体验：理论上无论先收钥匙还是先进入区域，后到达的条件都会重新触发判断；仍需双窗口验证。
+- 体验：无论先收钥匙还是先进入区域，后到达的条件都会重新触发判断；Widget 具备本地幂等和重开保护，实际焦点、鼠标与按钮体验仍需双窗口验证。
 - 维护：将来修改钥匙数量或区域人数，不需要改 Widget 的结算逻辑。
 
 #### 11. 遗留问题
 
 - 当前缺少完整的两窗口验收记录，因此不能写“胜利流程已通过联机验收”。
-- 需要确认重新开始时旧 GameState/Widget 委托和输入模式被完全收口。
+- Presenter 已实现旧 GameState/Widget 委托、Widget 和输入模式的对称收口；仍需在真实 ServerTravel 后用日志与 Object List 验证无残留。
 - `OnRep_ObjectiveState` 在服务器也被手工调用以复用广播逻辑；以后若委托监听者增加，应清楚区分服务器监听者和本地 UI。
 - 若未来支持断线重连，需要定义离线玩家是否仍计入区域以及团队目标是否持久化。
 
 #### 12. 可复用经验
 
 > 多条件结算应把每类输入状态交给对应所有者，并让一个服务器权威对象执行幂等提交；组件级事件必须先归一化为玩法级唯一身份。
+
+本轮胜利 UI 的真实资产缺口、定位过程、候选方案和阶段 3～4 验证命令见[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
 
 ---
 
@@ -1199,10 +1208,10 @@ GE constructor
 
 | 类型 | 已完成 | 尚未完成 |
 |---|---|---|
-| C++ 实现 | M0～M5 核心；M6 Immunity 真 Reject/回滚；DamageIntent Schema、ASC ShotId guard、字段校验、当前世界权威 Sweep、语义结果 RPC 与行为核验器 | token bucket/异常 strike、服务器历史回溯、正式美术表现 |
-| 蓝图/资产接线 | InputAction/Mapping、AbilitySet/GE 配置入口、基础 HUD 和 Character BP 已接入 | Niagara、音效、Montage、正式图标；更完整的数据资产化和队友治疗 UI |
-| 编译/自动化证据 | UE5.5 Editor/Game Development 通过；`multiplayer.GAS.Configuration` 与 `multiplayer.GAS.DamageIntent.Unit` 通过；M6 DamageIntent 专用核验两轮各52/52 PASS | Dedicated Server 构建、带断言的服务器+双客户端功能自动化 |
-| 运行验收 | Client 接受路径；Immunity 真 Reject 在 0ms/约 300ms RTT/一组 5% 样本通过；DamageIntent 在 0ms/约 300ms RTT 验证 Accept、Duplicate、Origin、Direction、Stale、Future、Miss 及 Cost/CD 收敛 | Host 反向输入、DamageIntent 丢包/快速移动/友军/遮挡专项、更高延迟、晚加入、持持续 Cue 死亡、人工视觉/HUD 完整验收 |
+| C++ 实现 | M0～M6 核心；胜利 Presenter 生命周期；五项复制战斗属性；Source Snapshot/Target Live ExecCalc；DamageIntent 权威验证与行为核验器 | token bucket/异常 strike、服务器历史回溯、正式美术表现 |
+| 蓝图/资产接线 | InputAction/Mapping、AbilitySet/GE、基础 HUD；Character Presenter 已保存 `winandquit` 引用 | Niagara、音效、Montage、正式图标；更完整的数据资产化和队友治疗 UI |
+| 编译/自动化证据 | UE5.5 Editor/Game Development 通过；`multiplayer.GAS` 2/2；胜利 Widget CDO、9 项 InitStats、7 项 Capture 策略和公式矩阵通过；M6/M6Intent 行为核验通过 | Dedicated Server 构建、带断言的服务器+双客户端功能自动化 |
+| 运行验收 | M5 `20260815_002532` 清点正常；M6 `20260815_002809` 95/95；此前 M6Intent 0ms/约 300ms RTT 两轮各 52/52，最终二进制 0ms `20260815_004559` 再次 52/52 | 可见双窗口胜利 UI 点击、Host 反向输入、DamageIntent loss/快速移动/友军/遮挡、晚加入、持续 Cue 死亡、人工 HUD 验收 |
 | 性能证据 | 约 300ms RTT 的 PredictionKey 时序与次数清点 | Network Insights、RPC/字节数、Full/Mixed 对照、P95/P99 和同条件优化前后数据 |
 
 面试中应使用下面的准确措辞：
@@ -1232,7 +1241,7 @@ GE constructor
 5. 丢包只有一组 5% 样本；Dedicated Server、晚加入、断线和持持续 Cue 时死亡尚未验证。
 6. 没有 Network Insights 性能对照数据。
 7. 准星 Sphere Sweep 和 M0 方块能验证网络链，但训练方块不是正式敌人系统。
-8. 现有 ExecCalc 是可解释的最小公式，尚未形成完整 AttackPower/Armor/Resistance 数值体系。
+8. ExecCalc 已形成 AttackPower/Armor/Critical/Resistance/Vulnerability 的可测试核心公式，但装备、技能等级和 UI 尚未数据资产化，也没有数值平衡或性能证据。
 9. C++ GE 适合零资产测试，但正式数值迭代仍应进一步转为数据资产或 Blueprint GE。
 
 ### 12.2 完整未完成项矩阵
@@ -1256,14 +1265,14 @@ GE constructor
 | P0-06 | 合作型目标选择 | 部分实现 | 治疗/免疫可选择队友；伤害、治疗和免疫根据队伍规则验证目标 |
 | P0-07 | 最终瞄准/选择方案 | 核心实现 | 准星 Sweep 只生成本地预览；服务器校验 DamageIntent 后在当前世界重建 SingleTargetHit；快速移动/遮挡专项仍待验 |
 | P0-08 | 死亡、复活与输入收口 | 核心通过 | M3 的死亡幂等、清理、3 秒复活和 ASC 重绑已通过 0ms/弱网接受路径；断线/持续 Cue 死亡待验 |
-| P0-09 | 机关和胜利流程回归 | 待验证 | 两窗口完成钥匙、压力板、普通门、移动平台和 WinArea 全流程；胜利 UMG 的重开/退出按钮均可用 |
+| P0-09 | 机关和胜利流程回归 | 代码/资产完成，视觉待验证 | Presenter 生命周期、Widget 引用和服务器重开意图已接入；仍需两窗口完成钥匙、机关、WinArea、重开/退出并录像 |
 | P0-10 | 打包运行验收 | 待验证 | Development 或 Shipping 客户端打包成功，至少两实例能从菜单进入同一局并完成一次胜利 |
 
 #### P1：达到 GAS 与网络同步的重点面试深度
 
 | 编号 | 未完成项 | 当前状态 | 完成定义 |
 |---|---|---|---|
-| P1-01 | `GameplayEffectExecutionCalculation` | 核心通过 | 服务器最小公式与确定性 Critical 已通过自动化/双端运行；完整攻击/护甲/抗性体系待扩展 |
+| P1-01 | `GameplayEffectExecutionCalculation` | 核心通过 | AP/Armor/Crit/Resistance/Vulnerability、Snapshot/Live Capture、服务器 Roll、Clamp 和 Context 已通过自动化及旧网络回归；装备数据化待补 |
 | P1-02 | 自定义 `GameplayEffectContext` | 核心通过 | `GetScriptStruct`/`Duplicate`/`NetSerialize` 自动化通过，Critical/HitType/ImpactImpulse 有双端 Cue 消费；物理冲量待补 |
 | P1-03 | GameplayCue 预测、确认与去重 | 核心通过 | 接受路径无双播，Immunity/Pending Reject 清理有证据；瞬时 Cue 不可倒放，正式视听与完整丢包矩阵待验 |
 | P1-04 | Buff/Debuff 堆叠 | 核心通过 | Aggregate by Target、三层、刷新、整组到期和 Cue 抑制已证；存活目标溢出、层数 UI、晚加入待验 |

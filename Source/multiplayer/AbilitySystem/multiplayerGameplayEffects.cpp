@@ -243,4 +243,9 @@ UmultiplayerInitStatsEffect::UmultiplayerInitStatsEffect()
 	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetHealthAttribute(), 100.0f);
 	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetMaxEnergyAttribute(), 100.0f);
 	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetEnergyAttribute(), 100.0f);
+	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetAttackPowerAttribute(), 0.0f);
+	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetArmorAttribute(), 0.0f);
+	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetCriticalChanceAttribute(), 0.0f);
+	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetCriticalMultiplierAttribute(), 1.5f);
+	AddOverrideModifier(*this, UmultiplayerAttributeSet::GetResistanceAttribute(), 0.0f);
 }

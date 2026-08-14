@@ -36,6 +36,10 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|LAN")
 	FString LANServerAddress = TEXT("127.0.0.1");
+
+private:
+	/** Makes simultaneous restart clicks from both local victory screens idempotent. */
+	bool bRestartTravelRequested = false;
 };
 
 

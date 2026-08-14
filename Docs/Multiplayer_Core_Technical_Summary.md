@@ -1,6 +1,6 @@
 # UE5 Co-op 网络项目统一技术复习文档
 
-> 更新日期：2026-08-13
+> 更新日期：2026-08-15
 > 项目路径：`E:\ueprojrct\multiplayer`
 > 原则：只把代码和运行证据能够证明的内容写成成果；待蓝图接入或待双端验证的内容明确标注。
 
@@ -8,8 +8,7 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 [《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)。更长的源码阅读和扩展研究见
 [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)。
 
-分支边界：本文主体记录 `demov1` 的基础 Co-op 版本，因此后文“GAS 尚未开始”不代表 `coop-GAS` 的当前状态。
-`coop-GAS` 的已实现事实、调用链和验证证据见
+分支边界：本文前半部分保留 `demov1` 的基础 Co-op 演进记录；当前 `coop-GAS` 已完成 GAS M0～M6 核心，并在阶段 4 扩展战斗属性 ExecCalc。`coop-GAS` 的已实现事实、调用链和验证证据见
 [《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)。
 
 ---
@@ -18,11 +17,11 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 
 ### 1.1 完成度
 
-- C++ 核心系统：约 **80%～85%**。
-- 完整可演示双人 Co-op：约 **60%**。
-- 完整编译：已通过 UE5.5 UHT、C++ 编译和链接。
-- 无界面运行：已进入项目 GameMode 并加载 OnlineSubsystemNull。
-- 双客户端 Host / Find / Join 与机关联调：尚未完成，不能当成已验证成果。
+- Co-op 规则与 GAS C++ 核心：已形成可编译闭环；完成度不再用主观百分比代替门禁。
+- 完整编译：阶段 3～4 修改后 UE5.5 Development Editor/Game 均通过。
+- 自动化：`multiplayer.GAS` 2/2；M6 95/95；此前 M6Intent 0ms/约 300ms RTT 两轮各 52/52，追加安全门禁后的最终二进制 0ms `20260815_004559` 再次 52/52。
+- 胜利 UI：Presenter 生命周期和 Character Widget 引用已接入；可见双窗口真实点击、焦点与录屏待人工。
+- Dedicated、晚加入、完整丢包矩阵与 Network Insights：未完成，不能作为已有成果。
 
 ### 1.2 已完成的 C++ 模块
 
@@ -37,18 +36,19 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 | Key / KeySocket | 服务端拾取、Holder 复制、附着、插槽消费和目标进度 | Actor 所有权、对象生命周期 |
 | CoopGameState | 目标进度和胜利状态的原子复制 | 全局共享状态、晚加入一致性 |
 | WinArea | 双人进入且目标完成后由服务端结算 | 服务端胜负判定、弱引用 |
+| VictoryPresenter | 本地消费复制胜利状态、幂等创建/清理 UMG、提交服务器重开意图 | UI 生命周期、输入恢复、权限边界 |
+| PlayerState ASC / AttributeSet | Mixed 复制、能力/GE/Tag、9 项初始化属性 | GAS 所有权、属性复制、跨 Pawn 生命周期 |
+| Damage ExecCalc | Source Snapshot 进攻属性、Target Live 防御属性、服务器暴击与 Meta Attribute | 权威结算、捕获策略、可测试公式 |
 
 ### 1.3 尚未完成
 
-1. 创建蓝图子类、配置 Mesh、碰撞体和关卡参数。
-2. 菜单按钮连接 `HostGame / FindGames / JoinGame / DestroyGameSession`。
-3. 两窗口实际验证房间创建、搜索、加入、销毁和地图切换。
-4. 两端实际验证压力板、平台、钥匙、插槽和胜利区。
-5. 100/200 ms 延迟、丢包、晚加入和断线边界测试。
-6. 共享胜利 UI、演示视频、README 和可执行版本。
-7. GAS 进阶版本尚未开始；它不阻塞基础 Co-op 版本验收。
+1. 可见双窗口完成完整 Session、机关、四钥匙、WinArea、胜利 UI、重开和退出回归。
+2. 正式技能 Niagara、音效、Montage、图标和美术 HUD。
+3. Dedicated Server、晚加入、Travel/断线生命周期和服务器+2 Clients 自动化。
+4. 0/150/300ms 每方向与 5% loss 多轮矩阵；当前本轮只回归 0ms 与双方各 150ms 的 M6Intent。
+5. Network Insights 优化前后数据、打包版本、README 和演示视频。
 
-明确不声称已完成：Steam 实测、Dedicated Server 部署、客户端预测回滚、延迟补偿、断线重连、GAS。
+明确不声称已完成：Steam 实测、Dedicated Server 部署、服务器回溯延迟补偿、断线重连、Network Insights 优化或正式 UI 视觉验收。GAS 客户端预测、真实激活拒绝和语义拒绝已有专项证据，但不能外推为所有技能和所有网络条件均已完成。
 
 ---
 
@@ -1617,26 +1617,27 @@ GameState 对蓝图提供的读取和事件接口：
 每个本地 Character 都包含 `VictoryPresenter` 组件。它只在 `IsLocallyControlled()` 为真时绑定
 `GameState.OnGameWon`，因此 Listen Server 和远端 Client 会各自创建一份本地胜利界面。
 
-角色蓝图必须把 `VictoryPresenter.VictoryWidgetClass` 设置为 `Content/UI/winandquit`。胜利时组件会：
+角色蓝图已经把 `VictoryPresenter.VictoryWidgetClass` 保存为 `/Game/UI/winandquit`，并由新编辑器进程自动化重新加载确认。胜利时组件会：
 
 ```text
 CreateWidget
 → AddToViewport(100)
 → Show Mouse Cursor
 → Set Input Mode Game And UI
+→ 按名称绑定“重新开始”按钮
 ```
 
-重新开始按钮的正确蓝图链：
+重新开始按钮的当前调用链：
 
 ```text
-OnClicked
-→ Get Owning Player Pawn
-→ Cast To multiplayerCharacter
+Presenter.HandleRestartClicked
 → Request Restart Coop Game
 → ServerRestartCoopGame RPC
-→ GameMode::RestartCoopGame
+→ GameMode::RestartCoopGame（bRestartTravelRequested 并发门禁）
 → ServerTravel(CurrentMap + "?listen")
 ```
+
+Presenter 用 `bRestartRequested` 和按钮禁用防本地重复请求，GameMode 用 `bRestartTravelRequested` 合并两个客户端同时到达的请求；ServerTravel 启动失败会解锁并记录 `COOP_RESTART`。在 EndPlay/Travel 时 Presenter 解除 GameState/按钮委托、`RemoveFromParent`，并只恢复自己修改过的输入和鼠标状态。Widget 不直接 `OpenLevel`。
 
 退出按钮的正确蓝图链：
 
@@ -1646,8 +1647,7 @@ OnClicked
 → Quit Game
 ```
 
-静态资源检查已经发现 `winandquit` 中存在 `OnClicked` 和 `QuitGame`，但没有发现
-`RequestRestartCoopGame` 节点。重新开始按钮仍需要在编辑器中连接、编译并保存后再做双端验收。
+退出按钮仍使用 Widget 已有的 `QuitGame`。重开不再要求 Widget 图中存在 `RequestRestartCoopGame` 节点，但 Designer 名称 `重新开始` 是 Presenter 的配置契约；名称变化会产生 `Phase=RestartButtonMissing` 日志。代码/资产和 Headless 回归已通过，正式双端点击与视觉仍待人工。
 
 ### 18.8 机关碰撞基线
 
@@ -1694,11 +1694,28 @@ OnGameWon 在两个本地客户端各执行一次
 1. `TSet` 可以防止同一 Character 的多个碰撞组件在 BeginOverlap 时重复加人；但当前 EndOverlap 收到任意
    一个组件离开事件后就会移除整个 Character。若角色确实有多个参与 Pawn Overlap 的组件，需要增加组件级
    引用计数，或确认 Actor 已完全离开 Trigger 后再移除。WinArea、压力板和平台都应做相同审计。
-2. `winandquit` 的重新开始按钮仍需连接 `RequestRestartCoopGame`，然后 Compile/Save。
-3. 需要在 `BP_ThirdPersonCharacter` 中确认 `VictoryWidgetClass=winandquit`。
+2. 胜利 Presenter 和 Widget Class 已接入；仍需可见双窗口实际点击重开/退出并确认鼠标、焦点和两端 Travel。
+3. 需要在 Travel 后结合 `COOP_VICTORY_UI Phase=Cleared/Bound` 与 Object List 验证旧 Widget/Delegate 无残留。
 4. 需要确认玩法地图 World Settings 没有使用错误的 GameMode Override；项目默认值已经指向
    `/Script/multiplayer.multiplayerGameMode`。
 5. 独立游戏目标已经构建成功，但机关、钥匙、胜利、重开仍需完整双窗口运行证据。
+
+阶段 3～4 的实现、真实问题、命令和 RunId 见[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
+
+### 18.11 阶段 4 GAS 数值链
+
+AttributeSet 现在除 Health/Energy 外，还复制 AttackPower、Armor、CriticalChance、CriticalMultiplier 和 Resistance；InitStats 用 9 个 Override Modifier 建立确定基线。伤害 Spec 创建时 Snapshot Source 进攻属性，Execution 时实时捕获 Target 的 Health/Armor/Resistance；暴击 Roll 只由服务器产生，最终结果写入 `IncomingDamage`，Critical/HitType/ImpactImpulse 写入自定义 EffectContext。
+
+```text
+(BaseDamage + AttackPower)
+-> Armor 100/(100+Armor)
+-> Resistance (1-clamp)
+-> Vulnerability (1+0.1*Stacks)
+-> CriticalMultiplier
+-> IncomingDamage
+```
+
+Editor/Game 编译、`multiplayer.GAS` 2/2 和扩展后的 M5/M6/M6Intent 回归均通过；最终二进制 0ms 回归为 `20260815_004559`，52/52。旧 `GAS_DAMAGE_EXEC` 前六字段保持不变，新中间值只追加在后面，避免破坏既有 M6Intent 正则证据链。装备数值资产化、正式 UI、Dedicated、晚加入和 Network Insights 仍待完成。
 
 ---
 

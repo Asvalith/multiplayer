@@ -14,6 +14,8 @@
 #include "AbilitySystem/multiplayerGameplayTags.h"
 #include "AbilitySystem/Executions/multiplayerDamageExecution.h"
 #include "AbilitySystemGlobals.h"
+#include "Blueprint/UserWidget.h"
+#include "Components/Button.h"
 #include "GameplayAbilitiesDeveloperSettings.h"
 #include "GameplayCueInterface.h"
 #include "GameplayEffectComponents/ImmunityGameplayEffectComponent.h"
@@ -24,6 +26,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "multiplayerCharacter.h"
 #include "multiplayerGASTargetDummy.h"
+#include "multiplayerVictoryPresenterComponent.h"
 #include "Player/multiplayerGASPlayerState.h"
 #include "Team/multiplayerCoopTeamAgentInterface.h"
 #include "UI/multiplayerGASHUDWidget.h"
@@ -153,6 +156,70 @@ bool FmultiplayerGASConfigurationTest::RunTest(const FString& Parameters)
 			DamageEffect,
 			MultiplayerGameplayTags::GameplayCue_Coop_Damage_Impact));
 
+	const TArray<FGameplayEffectAttributeCaptureDefinition>& DamageCaptures =
+		GetDefault<UmultiplayerDamageExecution>()->GetAttributeCaptureDefinitions();
+	TestEqual(TEXT("Damage execution declares seven attribute captures"), DamageCaptures.Num(), 7);
+	const auto TestCapture = [this, &DamageCaptures](
+		const TCHAR* Description,
+		const FGameplayAttribute& Attribute,
+		EGameplayEffectAttributeCaptureSource ExpectedSource,
+		bool bExpectedSnapshot)
+	{
+		const FGameplayEffectAttributeCaptureDefinition* Capture =
+			DamageCaptures.FindByPredicate(
+				[&Attribute](const FGameplayEffectAttributeCaptureDefinition& Candidate)
+				{
+					return Candidate.AttributeToCapture == Attribute;
+				});
+		TestNotNull(Description, Capture);
+		if (Capture != nullptr)
+		{
+			TestEqual(
+				FString::Printf(TEXT("%s source"), Description),
+				Capture->AttributeSource,
+				ExpectedSource);
+			TestEqual(
+				FString::Printf(TEXT("%s snapshot policy"), Description),
+				Capture->bSnapshot,
+				bExpectedSnapshot);
+		}
+	};
+	TestCapture(
+		TEXT("AttackPower capture"),
+		UmultiplayerAttributeSet::GetAttackPowerAttribute(),
+		EGameplayEffectAttributeCaptureSource::Source,
+		true);
+	TestCapture(
+		TEXT("CriticalChance capture"),
+		UmultiplayerAttributeSet::GetCriticalChanceAttribute(),
+		EGameplayEffectAttributeCaptureSource::Source,
+		true);
+	TestCapture(
+		TEXT("CriticalMultiplier capture"),
+		UmultiplayerAttributeSet::GetCriticalMultiplierAttribute(),
+		EGameplayEffectAttributeCaptureSource::Source,
+		true);
+	TestCapture(
+		TEXT("Health capture"),
+		UmultiplayerAttributeSet::GetHealthAttribute(),
+		EGameplayEffectAttributeCaptureSource::Target,
+		false);
+	TestCapture(
+		TEXT("MaxHealth capture"),
+		UmultiplayerAttributeSet::GetMaxHealthAttribute(),
+		EGameplayEffectAttributeCaptureSource::Target,
+		false);
+	TestCapture(
+		TEXT("Armor capture"),
+		UmultiplayerAttributeSet::GetArmorAttribute(),
+		EGameplayEffectAttributeCaptureSource::Target,
+		false);
+	TestCapture(
+		TEXT("Resistance capture"),
+		UmultiplayerAttributeSet::GetResistanceAttribute(),
+		EGameplayEffectAttributeCaptureSource::Target,
+		false);
+
 	const UmultiplayerVulnerabilityEffect* VulnerabilityEffect =
 		GetDefault<UmultiplayerVulnerabilityEffect>();
 	TestEqual(
@@ -202,6 +269,91 @@ bool FmultiplayerGASConfigurationTest::RunTest(const FString& Parameters)
 			25.0f, 50.0f, 100.0f, 2, bCritical),
 		45.0f);
 	TestTrue(TEXT("Half-health damage is critical"), bCritical);
+
+	const FmultiplayerDamageCalculationResult AttackPowerResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			25.0f, 15.0f, 0.0f, 0.0f, 100.0f, 100.0f, 0, 0.0f, 1.5f, 0.5f);
+	TestTrue(
+		TEXT("AttackPower is added before mitigation"),
+		FMath::IsNearlyEqual(AttackPowerResult.RawDamage, 40.0f));
+	TestTrue(
+		TEXT("AttackPower changes final damage with default defenses"),
+		FMath::IsNearlyEqual(AttackPowerResult.FinalDamage, 40.0f));
+
+	const FmultiplayerDamageCalculationResult ArmorResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			25.0f, 0.0f, 100.0f, 0.0f, 100.0f, 100.0f, 0, 0.0f, 1.5f, 0.5f);
+	TestTrue(
+		TEXT("One hundred Armor halves damage"),
+		FMath::IsNearlyEqual(ArmorResult.FinalDamage, 12.5f));
+
+	const FmultiplayerDamageCalculationResult ResistanceResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			25.0f, 0.0f, 0.0f, 0.2f, 100.0f, 100.0f, 0, 0.0f, 1.5f, 0.5f);
+	TestTrue(
+		TEXT("Twenty percent resistance reduces damage by twenty percent"),
+		FMath::IsNearlyEqual(ResistanceResult.FinalDamage, 20.0f));
+
+	const FmultiplayerDamageCalculationResult ChanceCriticalResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			25.0f, 0.0f, 0.0f, 0.0f, 100.0f, 100.0f, 0, 1.0f, 2.0f, 0.999f);
+	TestTrue(TEXT("CriticalChance one always crits a living target"), ChanceCriticalResult.bCritical);
+	TestTrue(
+		TEXT("Captured CriticalMultiplier controls critical damage"),
+		FMath::IsNearlyEqual(ChanceCriticalResult.FinalDamage, 50.0f));
+
+	const FmultiplayerDamageCalculationResult NoChanceCriticalResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			25.0f, 0.0f, 0.0f, 0.0f, 100.0f, 100.0f, 0, 0.0f, 3.0f, 0.0f);
+	TestFalse(
+		TEXT("CriticalChance zero does not crit a full-health target"),
+		NoChanceCriticalResult.bCritical);
+	TestTrue(
+		TEXT("CriticalMultiplier is not applied to a normal hit"),
+		FMath::IsNearlyEqual(NoChanceCriticalResult.FinalDamage, 25.0f));
+
+	const FmultiplayerDamageCalculationResult CombinedResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			25.0f, 15.0f, 100.0f, 0.2f, 50.0f, 100.0f, 3, 0.0f, 2.0f, 1.0f);
+	TestTrue(TEXT("Low health remains a deterministic critical"), CombinedResult.bCritical);
+	TestTrue(
+		TEXT("Combined offensive, defensive, stack and critical factors are ordered deterministically"),
+		FMath::IsNearlyEqual(CombinedResult.FinalDamage, 41.6f, 0.001f));
+
+	const FmultiplayerDamageCalculationResult ClampedResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			-25.0f,
+			-10.0f,
+			-100.0f,
+			2.0f,
+			100.0f,
+			100.0f,
+			99,
+			-1.0f,
+			0.2f,
+			0.5f);
+	TestFalse(TEXT("Clamped invalid critical inputs do not create a critical"), ClampedResult.bCritical);
+	TestTrue(TEXT("Negative raw damage clamps to zero"), FMath::IsNearlyZero(ClampedResult.FinalDamage));
+	TestTrue(
+		TEXT("Resistance is capped at eighty percent"),
+		FMath::IsNearlyEqual(ClampedResult.ResistanceMultiplier, 0.2f, 0.0001f));
+	TestTrue(
+		TEXT("Vulnerability stacks are capped at three"),
+		FMath::IsNearlyEqual(ClampedResult.VulnerabilityMultiplier, 1.3f));
+
+	const FmultiplayerDamageCalculationResult NonFiniteResult =
+		UmultiplayerDamageExecution::CalculateDamage(
+			std::numeric_limits<float>::quiet_NaN(),
+			std::numeric_limits<float>::infinity(),
+			std::numeric_limits<float>::quiet_NaN(),
+			std::numeric_limits<float>::infinity(),
+			100.0f,
+			100.0f,
+			0,
+			std::numeric_limits<float>::quiet_NaN(),
+			std::numeric_limits<float>::infinity(),
+			std::numeric_limits<float>::quiet_NaN());
+	TestTrue(TEXT("Malformed formula inputs still produce finite damage"), FMath::IsFinite(NonFiniteResult.FinalDamage));
 
 	FGameplayEffectContext* AllocatedContext =
 		UAbilitySystemGlobals::Get().AllocGameplayEffectContext();
@@ -315,7 +467,111 @@ bool FmultiplayerGASConfigurationTest::RunTest(const FString& Parameters)
 			MultiplayerGameplayTags::Cooldown_Ability_Damage));
 
 	const UmultiplayerInitStatsEffect* InitStats = GetDefault<UmultiplayerInitStatsEffect>();
-	TestEqual(TEXT("Init stats effect configures four attributes"), InitStats->Modifiers.Num(), 4);
+	TestEqual(TEXT("Init stats effect configures nine attributes"), InitStats->Modifiers.Num(), 9);
+	const auto TestInitModifier = [this, InitStats](
+		const TCHAR* Description,
+		const FGameplayAttribute& Attribute,
+		float ExpectedMagnitude)
+	{
+		const FGameplayModifierInfo* Modifier = InitStats->Modifiers.FindByPredicate(
+			[&Attribute](const FGameplayModifierInfo& Candidate)
+			{
+				return Candidate.Attribute == Attribute;
+			});
+		TestNotNull(Description, Modifier);
+		if (Modifier != nullptr)
+		{
+			TestEqual(
+				FString::Printf(TEXT("%s operation"), Description),
+				Modifier->ModifierOp,
+				EGameplayModOp::Override);
+			float Magnitude = 0.0f;
+			TestTrue(
+				FString::Printf(TEXT("%s uses a static value"), Description),
+				Modifier->ModifierMagnitude.GetStaticMagnitudeIfPossible(1.0f, Magnitude));
+			TestTrue(
+				FString::Printf(TEXT("%s value"), Description),
+				FMath::IsNearlyEqual(Magnitude, ExpectedMagnitude));
+		}
+	};
+	TestInitModifier(TEXT("MaxHealth initializer"), UmultiplayerAttributeSet::GetMaxHealthAttribute(), 100.0f);
+	TestInitModifier(TEXT("Health initializer"), UmultiplayerAttributeSet::GetHealthAttribute(), 100.0f);
+	TestInitModifier(TEXT("MaxEnergy initializer"), UmultiplayerAttributeSet::GetMaxEnergyAttribute(), 100.0f);
+	TestInitModifier(TEXT("Energy initializer"), UmultiplayerAttributeSet::GetEnergyAttribute(), 100.0f);
+	TestInitModifier(TEXT("AttackPower initializer"), UmultiplayerAttributeSet::GetAttackPowerAttribute(), 0.0f);
+	TestInitModifier(TEXT("Armor initializer"), UmultiplayerAttributeSet::GetArmorAttribute(), 0.0f);
+	TestInitModifier(TEXT("CriticalChance initializer"), UmultiplayerAttributeSet::GetCriticalChanceAttribute(), 0.0f);
+	TestInitModifier(TEXT("CriticalMultiplier initializer"), UmultiplayerAttributeSet::GetCriticalMultiplierAttribute(), 1.5f);
+	TestInitModifier(TEXT("Resistance initializer"), UmultiplayerAttributeSet::GetResistanceAttribute(), 0.0f);
+
+	const UmultiplayerAttributeSet* AttributeDefaults = GetDefault<UmultiplayerAttributeSet>();
+	TestTrue(TEXT("AttackPower default preserves legacy damage"), FMath::IsNearlyZero(AttributeDefaults->GetAttackPower()));
+	TestTrue(TEXT("Armor default preserves legacy damage"), FMath::IsNearlyZero(AttributeDefaults->GetArmor()));
+	TestTrue(TEXT("CriticalChance default preserves deterministic tests"), FMath::IsNearlyZero(AttributeDefaults->GetCriticalChance()));
+	TestTrue(TEXT("CriticalMultiplier defaults to one point five"), FMath::IsNearlyEqual(AttributeDefaults->GetCriticalMultiplier(), 1.5f));
+	TestTrue(TEXT("Resistance default preserves legacy damage"), FMath::IsNearlyZero(AttributeDefaults->GetResistance()));
+	const auto TestReplicatedCombatAttribute = [this](
+		const TCHAR* Description,
+		FName PropertyName)
+	{
+		const FProperty* Property = FindFProperty<FProperty>(
+			UmultiplayerAttributeSet::StaticClass(),
+			PropertyName);
+		TestNotNull(Description, Property);
+		if (Property != nullptr)
+		{
+			TestTrue(
+				FString::Printf(TEXT("%s is replicated"), Description),
+				Property->HasAnyPropertyFlags(CPF_Net));
+			TestTrue(
+				FString::Printf(TEXT("%s uses RepNotify"), Description),
+				Property->HasAnyPropertyFlags(CPF_RepNotify));
+		}
+	};
+	TestReplicatedCombatAttribute(
+		TEXT("AttackPower"),
+		GET_MEMBER_NAME_CHECKED(UmultiplayerAttributeSet, AttackPower));
+	TestReplicatedCombatAttribute(
+		TEXT("Armor"),
+		GET_MEMBER_NAME_CHECKED(UmultiplayerAttributeSet, Armor));
+	TestReplicatedCombatAttribute(
+		TEXT("CriticalChance"),
+		GET_MEMBER_NAME_CHECKED(UmultiplayerAttributeSet, CriticalChance));
+	TestReplicatedCombatAttribute(
+		TEXT("CriticalMultiplier"),
+		GET_MEMBER_NAME_CHECKED(UmultiplayerAttributeSet, CriticalMultiplier));
+	TestReplicatedCombatAttribute(
+		TEXT("Resistance"),
+		GET_MEMBER_NAME_CHECKED(UmultiplayerAttributeSet, Resistance));
+
+	UmultiplayerAttributeSet* AttributeClampProbe = NewObject<UmultiplayerAttributeSet>();
+	float AttributeProbeValue = std::numeric_limits<float>::quiet_NaN();
+	AttributeClampProbe->PreAttributeChange(
+		UmultiplayerAttributeSet::GetAttackPowerAttribute(),
+		AttributeProbeValue);
+	TestTrue(TEXT("AttackPower rejects non-finite values"), FMath::IsNearlyZero(AttributeProbeValue));
+	AttributeProbeValue = 2.0f;
+	AttributeClampProbe->PreAttributeChange(
+		UmultiplayerAttributeSet::GetCriticalChanceAttribute(),
+		AttributeProbeValue);
+	TestTrue(TEXT("CriticalChance clamps to one"), FMath::IsNearlyEqual(AttributeProbeValue, 1.0f));
+	AttributeProbeValue = -1.0f;
+	AttributeClampProbe->PreAttributeChange(
+		UmultiplayerAttributeSet::GetCriticalMultiplierAttribute(),
+		AttributeProbeValue);
+	TestTrue(TEXT("CriticalMultiplier clamps to one"), FMath::IsNearlyEqual(AttributeProbeValue, 1.0f));
+	AttributeProbeValue = std::numeric_limits<float>::infinity();
+	AttributeClampProbe->PreAttributeChange(
+		UmultiplayerAttributeSet::GetResistanceAttribute(),
+		AttributeProbeValue);
+	TestTrue(TEXT("Resistance rejects non-finite values"), FMath::IsNearlyZero(AttributeProbeValue));
+	AttributeProbeValue = 1.0f;
+	AttributeClampProbe->PreAttributeChange(
+		UmultiplayerAttributeSet::GetResistanceAttribute(),
+		AttributeProbeValue);
+	TestTrue(
+		TEXT("Resistance clamps to eighty percent"),
+		FMath::IsNearlyEqual(AttributeProbeValue, 0.8f));
 
 	const UmultiplayerInputConfig* InputConfig = LoadObject<UmultiplayerInputConfig>(
 		nullptr,
@@ -389,6 +645,42 @@ bool FmultiplayerGASConfigurationTest::RunTest(const FString& Parameters)
 			TestTrue(
 				TEXT("Character uses M1 AbilitySet"),
 				CharacterCDO->GetStartupAbilitySet() == AbilitySet);
+
+			const UmultiplayerVictoryPresenterComponent* VictoryPresenter =
+				CharacterCDO->FindComponentByClass<UmultiplayerVictoryPresenterComponent>();
+			TestNotNull(TEXT("Character owns the victory presenter"), VictoryPresenter);
+			const TSubclassOf<UUserWidget> ExpectedVictoryWidget = LoadClass<UUserWidget>(
+				nullptr,
+				TEXT("/Game/UI/winandquit.winandquit_C"));
+			TestNotNull(TEXT("Victory widget Blueprint class exists"), ExpectedVictoryWidget.Get());
+			if (VictoryPresenter != nullptr && ExpectedVictoryWidget != nullptr)
+			{
+				TestEqual(
+					TEXT("Victory presenter is configured with winandquit"),
+					VictoryPresenter->GetVictoryWidgetClass().Get(),
+					ExpectedVictoryWidget.Get());
+				TestEqual(
+					TEXT("Victory presenter targets the existing restart button"),
+					VictoryPresenter->GetRestartButtonName(),
+					FName(TEXT("\u91cd\u65b0\u5f00\u59cb")));
+
+				UUserWidget* VictoryWidgetProbe = NewObject<UUserWidget>(
+					GetTransientPackage(),
+					ExpectedVictoryWidget);
+				TestNotNull(
+					TEXT("Victory widget can be instantiated for configuration validation"),
+					VictoryWidgetProbe);
+				if (VictoryWidgetProbe != nullptr)
+				{
+					TestTrue(
+						TEXT("Victory widget tree initializes"),
+						VictoryWidgetProbe->Initialize());
+					TestNotNull(
+						TEXT("Configured restart button exists in the victory widget tree"),
+						Cast<UButton>(VictoryWidgetProbe->GetWidgetFromName(
+							VictoryPresenter->GetRestartButtonName())));
+				}
+			}
 		}
 	}
 

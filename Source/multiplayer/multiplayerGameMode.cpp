@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "multiplayerGameMode.h"
+#include "multiplayer.h"
 #include "multiplayerCharacter.h"
 #include "multiplayerCoopGameState.h"
 #include "Player/multiplayerGASPlayerState.h"
@@ -72,11 +73,23 @@ void AmultiplayerGameMode::RestartCoopGame()
 	{
 		return;
 	}
+	if (bRestartTravelRequested)
+	{
+		UE_LOG(
+			LogMultiplayerGAS,
+			Verbose,
+			TEXT("COOP_RESTART Phase=Ignored Reason=AlreadyRequested"));
+		return;
+	}
 
 	const AmultiplayerCoopGameState* CoopState =
 		GetGameState<AmultiplayerCoopGameState>();
 	if (CoopState == nullptr || !CoopState->GetObjectiveState().bGameWon)
 	{
+		UE_LOG(
+			LogMultiplayerGAS,
+			Warning,
+			TEXT("COOP_RESTART Phase=Ignored Reason=GameNotWon"));
 		return;
 	}
 
@@ -88,5 +101,22 @@ void AmultiplayerGameMode::RestartCoopGame()
 
 	const FString CurrentMap = UWorld::RemovePIEPrefix(
 		World->GetOutermost()->GetName());
-	World->ServerTravel(CurrentMap + TEXT("?listen"));
+	const FString TravelUrl = CurrentMap + TEXT("?listen");
+	bRestartTravelRequested = true;
+	if (!World->ServerTravel(TravelUrl))
+	{
+		bRestartTravelRequested = false;
+		UE_LOG(
+			LogMultiplayerGAS,
+			Error,
+			TEXT("COOP_RESTART Phase=TravelFailed Url=%s"),
+			*TravelUrl);
+		return;
+	}
+
+	UE_LOG(
+		LogMultiplayerGAS,
+		Display,
+		TEXT("COOP_RESTART Phase=TravelRequested Url=%s"),
+		*TravelUrl);
 }

@@ -2,7 +2,7 @@
 
 > 适用分支：`coop-GAS`
 >
-> 更新日期：2026-08-13
+> 更新日期：2026-08-15
 >
 > 唯一目标：完成一个**合格、完整的 GAS 双人 Demo**，并用可复现实验达到**接近进阶的网络同步深度**。
 
@@ -68,7 +68,10 @@
 - 团队规则、准星 Sphere Sweep、SingleTargetHit 与服务器二次校验。
 - 死亡幂等、临时状态清理、3 秒复活和 ASC Avatar 重绑。
 - 服务器 ExecCalc、自定义 EffectContext NetSerialize、三层 Vulnerability 堆叠。
+- AttackPower、Armor、CriticalChance、CriticalMultiplier、Resistance 五项复制战斗属性；InitStats 共 9 项。
+- ExecCalc 已区分 Source Snapshot 进攻属性和 Target Live 防御/生命属性，随机暴击由服务器 Roll，纯函数接受确定性 Roll 用于自动化。
 - 7 个原生 GameplayCue、PredictionKey CatchUp 日志和持续 Cue 生命周期。
+- 胜利 Presenter 已完成 Widget 幂等创建/清理、输入与鼠标恢复、重开按钮服务器意图链；Character Blueprint 已保存 `winandquit` 类引用。
 - Editor/Game 编译与 `multiplayer.GAS.Configuration` 配置测试。
 
 ### 2.2 已取得的运行证据
@@ -79,6 +82,7 @@
 - 弱网自动序列另有 1 次输入在创建 PredictionKey 前被本地 Cooldown 门禁；它不是服务器 Reject，也不是丢包。
 - M6 真实激活拒绝子阶段：0ms、每方向 150ms（约 300ms RTT）以及一组每方向 150ms + 5% 丢包样本均通过 95/95 日志断言；拒绝事务的预测 Energy Cost、Cooldown、Immunity GE/Cue 与 Pending 表现均已清理，下一次合法激活使用新 Key 并正常 CatchUp。
 - M6 DamageIntent：`multiplayer.GAS.DamageIntent.Unit` 通过；0ms 运行 `20260813_163052` 与双方 `PktLag=150` 运行 `20260813_163248` 各 52/52 PASS。Shot 1/7 各只 Commit/伤害一次，Duplicate、Origin、Direction、Stale、Future、Miss 均被拒绝，预测 Energy/CD 最终收敛。TargetData 等待已有 5 秒超时，Task 在数据到达、超时/结束时清理委托和 Timer，Damage Ability 在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。
+- 阶段 3～4 回归：Editor/Game Development 通过，`multiplayer.GAS` 2/2；M5 `20260815_002532` 清点正常、M6 `20260815_002809` 95/95；此前 M6Intent 0ms `20260815_002959` 与约 300ms RTT `20260815_003155` 均 52/52，追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 再次 52/52。这些均为 Headless 技术证据，不替代胜利 UI 人工点击/视觉验收。
 
 ### 2.3 尚未取得的关键证据
 
@@ -190,11 +194,11 @@ flowchart LR
 
 ### M4：ExecCalc、EffectContext 和堆叠（第 4～6 周）
 
-当前状态：**核心通过**。实现的是服务器基础伤害 × 低血量确定性 Critical × Vulnerability，而不是尚不存在的完整装备属性体系；Context 自动化与双端 Cue 消费已通过，存活目标溢出/层数 UI/晚加入待测。
+当前状态：**核心通过并完成战斗属性扩展**。服务器已计算 AttackPower、Armor、Resistance、Critical 与 Vulnerability；Context 自动化与双端 Cue 消费已通过，存活目标溢出/层数 UI/晚加入待测。
 
 代码任务：
 
-- 实现 AttackPower、Armor、CriticalChance/CriticalDamage 和必要抗性。
+- 已实现 AttackPower、Armor、CriticalChance/CriticalMultiplier 和 Resistance，并为复制、Clamp 与 InitStats 建立自动化契约。
 - 用 `GameplayEffectExecutionCalculation` 输出 IncomingDamage。
 - 实现自定义 EffectContext 的 `GetScriptStruct`、`Duplicate`、`NetSerialize`。
 - 携带暴击、格挡、命中类型或冲量等确有消费者的数据。
@@ -202,7 +206,7 @@ flowchart LR
 
 测试任务：
 
-- 伤害公式边界、暴击、免疫和 Clamp 的确定性自动化。
+- 已完成伤害公式边界、概率/低血量暴击、Armor/Resistance、Vulnerability、Clamp 和非有限输入的确定性自动化。
 - EffectContext 跨网络复制测试。
 - 堆叠、到期、移除、死亡清理和晚加入测试。
 
@@ -352,14 +356,12 @@ flowchart LR
 
 当前执行范围只补充 GAS 内容，不返工已经稳定的门、压力板、钥匙、移动平台和胜利流程。严格按以下顺序执行：
 
-1. **补齐合作型技能语义**：保留 Damage 只攻击 `Team.Enemy`、Immunity 自用；把当前 Self Heal 扩展为服务器验证的队友治疗，或增加独立 Ally Heal，明确不能治疗敌人、死亡目标或超距/遮挡目标。
-2. **先整理 C++/资产边界**：把 Damage、Vulnerability、Healing、Immunity Effect Class 以及 Montage/Cue 表现引用暴露为 `EditDefaultsOnly`；AbilitySet 保持唯一授予源，核心 Commit、ExecCalc、Context、PredictionKey、TargetData 和服务器验证不得复制到蓝图。
-3. **创建正式数据资产**：建立 `BP_GA_Damage`、`BP_GA_HealAlly`、`BP_GA_Immunity` 和对应 Cost/Cooldown/状态 GE 资产，让 `DA_GAS_DefaultAbilitySet` 引用正式技能类。蓝图只配置数值、类引用、图标和表现资源。
-4. **完成 GameplayCue 内容层**：在 `/Game/GAS/GameplayCues` 为 Cast、Impact、Heal、Immunity、Vulnerability、Death 制作 Niagara/音效/材质表现；每个 Tag 只保留一个表现所有者，并验证预测 Owner 不双播、持续 Cue 正确 Removed。
-5. **完成正式 GAS UI**：创建继承 `multiplayerGASHUDWidget` 的 Widget Blueprint，显示 Health、Energy、Cooldown、Immune/Vulnerable/Dead；再增加开发版 PredictionKey、ShotId、Role、RejectReason 调试面板。Widget 只读 ASC/PlayerState，不能修改权威状态。
-6. **加入 Montage 与输入反馈**：LMB、Q、E 使用正式 InputAction；技能用 GAS AbilityTask/ASC 动画链处理 Completed/Interrupted/Cancelled，不能在 Character Blueprint 另写第二套技能状态机。
-7. **补资产与人工证据**：逐个蓝图 Compile/Save，运行 Host/Client 非 Headless 矩阵并录像，验证队友治疗、Cue 颜色/次数、Cooldown UI、死亡/复活清理和持持续 Cue 时死亡。
-8. **网络专题继续收口**：保留 Reject Lab 和 DamageIntent 已通过结果；补 loss、快速移动、友军、遮挡、Host 反向输入与约 600ms RTT。完成 M6 后再进入 M7 有限服务器回溯，不提前引入 Replication Graph 或 Iris。
+1. **先做阶段 3 人工封板**：在两个可见窗口完成四钥匙、双人 WinArea、两端胜利 UI、Client 重开和退出；保存 `COOP_VICTORY_UI` 日志与录屏。当前资产引用和 C++ 生命周期已通过编译/自动化，但视觉与真实点击仍待人工。
+2. **补齐合作型技能语义**：保留 Damage 只攻击 `Team.Enemy`、Immunity 自用；把当前 Self Heal 扩展为服务器验证的队友治疗，或增加独立 Ally Heal，明确不能治疗敌人、死亡目标或超距/遮挡目标。
+3. **整理 C++/资产边界**：把 Damage、Vulnerability、Healing、Immunity Effect Class 以及 Montage/Cue 表现引用暴露为 `EditDefaultsOnly`；AbilitySet 保持唯一授予源，核心 Commit、ExecCalc、Context、PredictionKey、TargetData 和服务器验证不得复制到蓝图。
+4. **完成正式内容层**：创建技能数据资产、正式 GameplayCue、GAS HUD 和 Montage；每个 Tag 只保留一个表现所有者，Widget 只读 ASC/PlayerState。
+5. **补资产与人工证据**：逐个蓝图 Compile/Save，运行 Host/Client 非 Headless 矩阵并录像，验证队友治疗、Cue 次数、Cooldown UI、死亡/复活清理和持持续 Cue 时死亡。
+6. **网络专题继续收口**：补 loss、快速移动、友军、遮挡、Host 反向输入与更高延迟，再进入 Dedicated、晚加入和 Network Insights；不在没有数据时提前引入 Replication Graph 或 Iris。
 
 下一批结束时应交付：
 

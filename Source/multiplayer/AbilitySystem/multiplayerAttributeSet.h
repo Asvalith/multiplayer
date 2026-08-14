@@ -41,6 +41,31 @@ public:
 	FGameplayAttributeData MaxEnergy;
 	MULTIPLAYER_ATTRIBUTE_ACCESSORS(UmultiplayerAttributeSet, MaxEnergy);
 
+	/** Additive source-side contribution captured by damage executions. */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_AttackPower, Category = "GAS|Attributes|Combat")
+	FGameplayAttributeData AttackPower;
+	MULTIPLAYER_ATTRIBUTE_ACCESSORS(UmultiplayerAttributeSet, AttackPower);
+
+	/** Non-negative target-side physical mitigation input. */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Armor, Category = "GAS|Attributes|Combat")
+	FGameplayAttributeData Armor;
+	MULTIPLAYER_ATTRIBUTE_ACCESSORS(UmultiplayerAttributeSet, Armor);
+
+	/** Server-authoritative critical chance expressed in the inclusive range [0, 1]. */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_CriticalChance, Category = "GAS|Attributes|Combat")
+	FGameplayAttributeData CriticalChance;
+	MULTIPLAYER_ATTRIBUTE_ACCESSORS(UmultiplayerAttributeSet, CriticalChance);
+
+	/** Damage multiplier applied to critical hits; never lower than 1. */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_CriticalMultiplier, Category = "GAS|Attributes|Combat")
+	FGameplayAttributeData CriticalMultiplier;
+	MULTIPLAYER_ATTRIBUTE_ACCESSORS(UmultiplayerAttributeSet, CriticalMultiplier);
+
+	/** Target-side proportional mitigation expressed in the inclusive range [0, 0.8]. */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Resistance, Category = "GAS|Attributes|Combat")
+	FGameplayAttributeData Resistance;
+	MULTIPLAYER_ATTRIBUTE_ACCESSORS(UmultiplayerAttributeSet, Resistance);
+
 	/** Server-only transient accumulator used by damage effects. */
 	UPROPERTY(BlueprintReadOnly, Category = "GAS|Meta")
 	FGameplayAttributeData IncomingDamage;
@@ -63,6 +88,21 @@ protected:
 
 	UFUNCTION()
 	void OnRep_MaxEnergy(const FGameplayAttributeData& OldValue);
+
+	UFUNCTION()
+	void OnRep_AttackPower(const FGameplayAttributeData& OldValue);
+
+	UFUNCTION()
+	void OnRep_Armor(const FGameplayAttributeData& OldValue);
+
+	UFUNCTION()
+	void OnRep_CriticalChance(const FGameplayAttributeData& OldValue);
+
+	UFUNCTION()
+	void OnRep_CriticalMultiplier(const FGameplayAttributeData& OldValue);
+
+	UFUNCTION()
+	void OnRep_Resistance(const FGameplayAttributeData& OldValue);
 };
 
 #undef MULTIPLAYER_ATTRIBUTE_ACCESSORS

@@ -1,0 +1,496 @@
+{
+  "RunId": "20260815_002809",
+  "Passed": true,
+  "Network": {
+    "PktLagPerDirectionMs": "0",
+    "ApproxRoundTripLagMs": "0",
+    "PktLossPercentPerDirection": "0"
+  },
+  "PredictionPendingCueInventory": {
+    "OnActive": 2,
+    "WhileActive": 2,
+    "Removed": 1
+  },
+  "ImmunityCueInventory": {
+    "OnActive": 2,
+    "WhileActive": 2,
+    "Removed": 2
+  },
+  "Checks": [
+    {
+      "Name": "RunInfo Stage",
+      "Passed": true,
+      "Details": "Stage=M6"
+    },
+    {
+      "Name": "RunInfo AutoSequence",
+      "Passed": true,
+      "Details": "ClientAutoSequence=True"
+    },
+    {
+      "Name": "Host reached listen state",
+      "Passed": true,
+      "Details": "HostReady=true"
+    },
+    {
+      "Name": "Client joined host",
+      "Passed": true,
+      "Details": "ClientJoined=true"
+    },
+    {
+      "Name": "Host lag injection was applied",
+      "Passed": true,
+      "Details": "PktLag=0"
+    },
+    {
+      "Name": "Client lag injection was applied",
+      "Passed": true,
+      "Details": "PktLag=0"
+    },
+    {
+      "Name": "Host loss injection was applied",
+      "Passed": true,
+      "Details": "PktLoss=0"
+    },
+    {
+      "Name": "Client loss injection was applied",
+      "Passed": true,
+      "Details": "PktLoss=0"
+    },
+    {
+      "Name": "Host has no fatal/assert/ensure",
+      "Passed": true,
+      "Details": "Fatal/Critical/Ensure scan"
+    },
+    {
+      "Name": "Client has no fatal/assert/ensure",
+      "Passed": true,
+      "Details": "Fatal/Critical/Ensure scan"
+    },
+    {
+      "Name": "Authority armed once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Authority arm result succeeded once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Authority rejected once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Authority accepted recovery once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Client arm acknowledgement once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Forced reject input once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Recovery input once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Client predicted exactly two activations",
+      "Passed": true,
+      "Details": "Expected=2 Actual=2"
+    },
+    {
+      "Name": "Client rejection callback once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Engine ClientActivateAbilityFailed once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Rejected state snapshot once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Accepted CatchUp once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Accepted state snapshot once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Rejected pending visual cleared once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Accepted pending visual cleared once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Post-reject checkpoint once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Post-recovery checkpoint once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Sequence pass once",
+      "Passed": true,
+      "Details": "Expected=1 Actual=1"
+    },
+    {
+      "Name": "Sequence has no failure",
+      "Passed": true,
+      "Details": "Expected=0 Actual=0"
+    },
+    {
+      "Name": "Rejected key numeric field matches serialized key",
+      "Passed": true,
+      "Details": "Key=1"
+    },
+    {
+      "Name": "Forced rejection consumed its server-only tag",
+      "Passed": true,
+      "Details": "TagRemaining=0"
+    },
+    {
+      "Name": "Rejected activation uses one prediction key",
+      "Passed": true,
+      "Details": "RejectedKey=1"
+    },
+    {
+      "Name": "Rejected key did not become an accepted authority commit",
+      "Passed": true,
+      "Details": "Rejected=1 AuthorityAccepted=2"
+    },
+    {
+      "Name": "Rejected key did not become normal client acceptance",
+      "Passed": true,
+      "Details": "Rejected=1 Accepted=2"
+    },
+    {
+      "Name": "Recovery uses a new key",
+      "Passed": true,
+      "Details": "Rejected=1 Recovery=2"
+    },
+    {
+      "Name": "Ability spec is stable across reject and recovery",
+      "Passed": true,
+      "Details": "Spec=6"
+    },
+    {
+      "Name": "TrialId is stable across both processes",
+      "Passed": true,
+      "Details": "TrialId=6001"
+    },
+    {
+      "Name": "PredictedReject EnergyCurrent",
+      "Passed": true,
+      "Details": "EnergyCurrent Expected=70.0 Actual=70.0"
+    },
+    {
+      "Name": "PredictedReject PendingGECount",
+      "Passed": true,
+      "Details": "PendingGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject PendingCueCount",
+      "Passed": true,
+      "Details": "PendingCueCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject Spec",
+      "Passed": true,
+      "Details": "Spec Expected=6 Actual=6"
+    },
+    {
+      "Name": "PredictedReject CooldownGECount",
+      "Passed": true,
+      "Details": "CooldownGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject CooldownTagCount",
+      "Passed": true,
+      "Details": "CooldownTagCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject PredictionKey",
+      "Passed": true,
+      "Details": "PredictionKey Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject TrialId",
+      "Passed": true,
+      "Details": "TrialId Expected=6001 Actual=6001"
+    },
+    {
+      "Name": "PredictedReject EnergyBase",
+      "Passed": true,
+      "Details": "EnergyBase Expected=100.0 Actual=100.0"
+    },
+    {
+      "Name": "PredictedReject CostGECount",
+      "Passed": true,
+      "Details": "CostGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject ImmuneCount",
+      "Passed": true,
+      "Details": "ImmuneCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedReject PersistentGECount",
+      "Passed": true,
+      "Details": "PersistentGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery EnergyCurrent",
+      "Passed": true,
+      "Details": "EnergyCurrent Expected=70.0 Actual=70.0"
+    },
+    {
+      "Name": "PredictedRecovery PendingGECount",
+      "Passed": true,
+      "Details": "PendingGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery PendingCueCount",
+      "Passed": true,
+      "Details": "PendingCueCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery Spec",
+      "Passed": true,
+      "Details": "Spec Expected=6 Actual=6"
+    },
+    {
+      "Name": "PredictedRecovery CooldownGECount",
+      "Passed": true,
+      "Details": "CooldownGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery CooldownTagCount",
+      "Passed": true,
+      "Details": "CooldownTagCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery PredictionKey",
+      "Passed": true,
+      "Details": "PredictionKey Expected=2 Actual=2"
+    },
+    {
+      "Name": "PredictedRecovery TrialId",
+      "Passed": true,
+      "Details": "TrialId Expected=6001 Actual=6001"
+    },
+    {
+      "Name": "PredictedRecovery EnergyBase",
+      "Passed": true,
+      "Details": "EnergyBase Expected=100.0 Actual=100.0"
+    },
+    {
+      "Name": "PredictedRecovery CostGECount",
+      "Passed": true,
+      "Details": "CostGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery ImmuneCount",
+      "Passed": true,
+      "Details": "ImmuneCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PredictedRecovery PersistentGECount",
+      "Passed": true,
+      "Details": "PersistentGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "Post-reject CatchUp is classified as bookkeeping only",
+      "Passed": true,
+      "Details": "Count=1 RejectedKey=1"
+    },
+    {
+      "Name": "PostReject PendingGECount",
+      "Passed": true,
+      "Details": "PendingGECount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject PersistentGECount",
+      "Passed": true,
+      "Details": "PersistentGECount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject PendingCue",
+      "Passed": true,
+      "Details": "PendingCue Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject CooldownGECount",
+      "Passed": true,
+      "Details": "CooldownGECount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject TrialId",
+      "Passed": true,
+      "Details": "TrialId Expected=6001 Actual=6001"
+    },
+    {
+      "Name": "PostReject EnergyBase",
+      "Passed": true,
+      "Details": "EnergyBase Expected=100.0 Actual=100.0"
+    },
+    {
+      "Name": "PostReject PendingVisual",
+      "Passed": true,
+      "Details": "PendingVisual Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject EnergyCurrent",
+      "Passed": true,
+      "Details": "EnergyCurrent Expected=100.0 Actual=100.0"
+    },
+    {
+      "Name": "PostReject ImmuneCount",
+      "Passed": true,
+      "Details": "ImmuneCount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject CostGECount",
+      "Passed": true,
+      "Details": "CostGECount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject ImmunityCooldown",
+      "Passed": true,
+      "Details": "ImmunityCooldown Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject CaughtUpKey",
+      "Passed": true,
+      "Details": "CaughtUpKey Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostReject RejectedKey",
+      "Passed": true,
+      "Details": "RejectedKey Expected=1 Actual=1"
+    },
+    {
+      "Name": "PostRecovery PendingGECount",
+      "Passed": true,
+      "Details": "PendingGECount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostRecovery PersistentGECount",
+      "Passed": true,
+      "Details": "PersistentGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PostRecovery PendingCue",
+      "Passed": true,
+      "Details": "PendingCue Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostRecovery CooldownGECount",
+      "Passed": true,
+      "Details": "CooldownGECount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PostRecovery TrialId",
+      "Passed": true,
+      "Details": "TrialId Expected=6001 Actual=6001"
+    },
+    {
+      "Name": "PostRecovery EnergyBase",
+      "Passed": true,
+      "Details": "EnergyBase Expected=70.0 Actual=70.0"
+    },
+    {
+      "Name": "PostRecovery PendingVisual",
+      "Passed": true,
+      "Details": "PendingVisual Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostRecovery EnergyCurrent",
+      "Passed": true,
+      "Details": "EnergyCurrent Expected=70.0 Actual=70.0"
+    },
+    {
+      "Name": "PostRecovery ImmuneCount",
+      "Passed": true,
+      "Details": "ImmuneCount Expected=1 Actual=1"
+    },
+    {
+      "Name": "PostRecovery CostGECount",
+      "Passed": true,
+      "Details": "CostGECount Expected=0 Actual=0"
+    },
+    {
+      "Name": "PostRecovery ImmunityCooldown",
+      "Passed": true,
+      "Details": "ImmunityCooldown Expected=1 Actual=1"
+    },
+    {
+      "Name": "PostRecovery CaughtUpKey",
+      "Passed": true,
+      "Details": "CaughtUpKey Expected=2 Actual=2"
+    },
+    {
+      "Name": "PostRecovery RejectedKey",
+      "Passed": true,
+      "Details": "RejectedKey Expected=1 Actual=1"
+    },
+    {
+      "Name": "Client event order is valid",
+      "Passed": true,
+      "Details": "143707 < 143969 < 146038 < 148036 < 149784 < 150095 < 152160 < 153696 < 154310 < 165095"
+    },
+    {
+      "Name": "Host event order is valid",
+      "Passed": true,
+      "Details": "146544 < 146908 < 148177"
+    },
+    {
+      "Name": "Pending Cue entered twice",
+      "Passed": true,
+      "Details": "OnActive=2 WhileActive=2"
+    },
+    {
+      "Name": "Rejected Pending Cue emitted one Removed callback",
+      "Passed": true,
+      "Details": "Removed=1; accepted presentation is explicitly reconciled"
+    },
+    {
+      "Name": "Immunity Cue entered twice",
+      "Passed": true,
+      "Details": "OnActive=2 WhileActive=2"
+    },
+    {
+      "Name": "Immunity Cue emitted reject cleanup and recovery expiry",
+      "Passed": true,
+      "Details": "Removed=2; first is reject cleanup, second is recovery natural expiry after checkpoint"
+    },
+    {
+      "Name": "Immunity Cue Removed callbacks are ordered by transaction",
+      "Passed": true,
+      "Details": "147574 < Reject=148036; 160688 > RecoveryCheckpoint=154310"
+    }
+  ]
+}

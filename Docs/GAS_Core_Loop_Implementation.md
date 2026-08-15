@@ -38,6 +38,7 @@
 - Vulnerability 最多三层，按 Target 聚合、应用时刷新持续时间，并抑制叠层 Cue 重触发。
 - 死亡、复活、Ability/Task/临时 GE 清理和 ASC Avatar 重绑已形成服务器幂等链。
 - 原生 GameplayCue 已覆盖 Damage/Heal Cast、权威结果、Immunity/Vulnerability 生命周期和 Death 通知。
+- 胜利 UI 使用清晰的 C++/蓝图边界：`VictoryPresenter` 只在本地 Character 监听 `GameState.OnGameWon`，一次性调用 `ReceiveCoopGameWon`（蓝图显示名 `On Coop Game Won`）；Character Blueprint 负责创建 `winandquit` 与输入/鼠标，中文重开按钮只调用 `Request Restart Coop Game`。RPC、胜利校验和 ServerTravel 仍由 C++ 拥有。
 
 ## 2. 正式输入与开发夹具
 
@@ -88,6 +89,8 @@ Raw = max(BaseDamage + AttackPower, 0)
 ```
 
 默认 AttackPower/Armor/CriticalChance/Resistance 均为 0，CriticalMultiplier 为 1.5，因此旧 M5/M6 基线数值保持兼容。完整捕获策略、公式矩阵和阶段 3 胜利 UI 证据见[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
+
+胜利 UI 新接口的 Development Game Target 已编译通过。由于编辑器当时仍占用模块，当前 Editor Target、`BP_ThirdPersonCharacter.On Coop Game Won -> Create Widget`、`重新开始.OnClicked -> Get Owning Player Pawn -> Request Restart Coop Game` 及双窗口点击均是待验证项。必须先安全关闭 Editor，再重编 Editor Target、刷新蓝图节点、Compile/Save 和运行验收。旧 Presenter 在运行时按中文名称查找按钮的方案已被取代，不是当前运行时架构。
 
 ## 4. 双客户端手工验证
 

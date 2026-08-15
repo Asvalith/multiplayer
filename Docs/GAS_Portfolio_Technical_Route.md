@@ -71,7 +71,7 @@
 - AttackPower、Armor、CriticalChance、CriticalMultiplier、Resistance 五项复制战斗属性；InitStats 共 9 项。
 - ExecCalc 已区分 Source Snapshot 进攻属性和 Target Live 防御/生命属性，随机暴击由服务器 Roll，纯函数接受确定性 Roll 用于自动化。
 - 7 个原生 GameplayCue、PredictionKey CatchUp 日志和持续 Cue 生命周期。
-- 胜利 Presenter 已完成 Widget 幂等创建/清理、输入与鼠标恢复、重开按钮服务器意图链；Character Blueprint 已保存 `winandquit` 类引用。
+- 胜利 Presenter 已完成本地 `GameState.OnGameWon -> Character.ReceiveCoopGameWon` 一次性转发；`RequestRestartCoopGame` 保留服务器权威重开链。`winandquit` 的中文按钮、Widget 创建、焦点和鼠标由蓝图负责，正式资产接线待安全关闭 Editor 后完成。
 - Editor/Game 编译与 `multiplayer.GAS.Configuration` 配置测试。
 
 ### 2.2 已取得的运行证据

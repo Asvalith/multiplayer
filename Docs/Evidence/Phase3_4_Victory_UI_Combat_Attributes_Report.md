@@ -9,12 +9,13 @@
 ### 1.1 阶段 3：胜利 UI 生命周期闭环
 
 - `UmultiplayerVictoryPresenterComponent` 只在本地控制角色上监听 `GameState.OnGameWon`。
-- 创建胜利 Widget 前检查已有实例，重复通知记录 `Phase=AlreadyVisible`，不会重复加入 Viewport。
-- `ClearBinding()` 对称解除 GameState 和按钮委托、执行 `RemoveFromParent()`、清空对象引用，并在组件确实修改过输入状态时恢复 `GameOnly` 与原鼠标状态。
-- 组件按 Designer 名称 `重新开始` 找到按钮并绑定 `AmultiplayerCharacter::RequestRestartCoopGame()`；按钮点击后立即禁用并用 `bRestartRequested` 防止重复提交。
+- Presenter 不创建 Widget、不按字符串查找 Designer 按钮；它只调用 Character 的 `BlueprintImplementableEvent ReceiveCoopGameWon`（节点显示名 `On Coop Game Won`）。
+- `bVictoryNotified` 以 GameState 为生命周期门禁；同一局 Controller/PlayerState 重绑不会重复触发，新 GameState 可重新开始本地表现生命周期。
+- Character Blueprint 负责创建/保存 `winandquit`、显示鼠标、设置 Game and UI 输入模式；Widget 中文按钮名保持不变。
+- `重新开始.OnClicked` 通过 `Get Owning Player Pawn -> Request Restart Coop Game` 提交意图；蓝图可禁用按钮防止重复点击，但不得直接 `OpenLevel`。
 - 重开请求仍沿用拥有者 RPC：`Character -> ServerRestartCoopGame -> GameMode::RestartCoopGame -> ServerTravel`。GameMode 用 `bRestartTravelRequested` 合并两个客户端可能同时到达的请求；ServerTravel 启动失败会解除门禁并记录 `COOP_RESTART`，允许后续重试。Widget 不直接决定 Travel。
-- `BP_ThirdPersonCharacter` 已由 `Scripts/Editor/ConfigureVictoryUI.py` 配置 `VictoryWidgetClass=/Game/UI/winandquit`，新编辑器进程中的自动化重新加载资产后确认该引用存在。
-- 结构化日志使用 `COOP_VICTORY_UI Phase=Bound/Created/AlreadyVisible/Cleared/MissingWidgetClass/RestartRequested`，便于区分绑定、创建、幂等和清理阶段。
+- 旧的 `ConfigureVictoryUI.py`、`VictoryWidgetClass` 和按名称查找按钮方案已删除，避免本地化 Designer 名称与 C++ 运行时耦合。
+- 结构化日志使用 `COOP_VICTORY_UI Phase=Bound/BlueprintEvent/BlueprintEventIgnored`，用于区分绑定、首次转发和重复抑制。
 
 ### 1.2 阶段 4：复制属性、捕获策略与权威 ExecCalc
 
@@ -51,10 +52,10 @@ Source 进攻属性在 Spec 创建时 Snapshot，保证一次施法事务使用�
 
 | 层级 | 结果 | 说明 |
 |---|---|---|
-| Blueprint 资产配置 | 通过 | 新编辑器进程加载 `BP_ThirdPersonCharacter` 后确认 `VictoryWidgetClass=winandquit` |
-| UE5.5 Development Editor | 通过 | UHT、编译、链接通过 |
-| UE5.5 Development Game | 通过 | 游戏 Target 编译、链接通过 |
-| `multiplayer.GAS` 自动化 | 2/2 PASS | 配置/公式及 DamageIntent Unit 均通过 |
+| Blueprint 资产接线 | 待执行 | 正式 Character 的 `On Coop Game Won` 与 `winandquit.重新开始` 图表需在安全关闭当前 Editor 后接线、Compile/Save |
+| UE5.5 Development Editor | 待本轮重编 | 运行中的 Editor 正占用 DLL；未强制关闭，避免丢失另一个项目的未保存内容 |
+| UE5.5 Development Game | 通过 | 新蓝图接口、重复门禁、旧 GameState UI 入口删除及自动化代码均完成 UHT、编译和链接 |
+| `multiplayer.GAS` 自动化 | 旧阶段 2/2；本轮待运行 | 当前只检查原生胜利/重开接口及两个中文按钮存在；蓝图事件图与 OnClicked 接线仍需 Compile 和双窗口证明 |
 | M5 `20260815_002532` | 日志清点正常 | 0ms，技术接受路径；M5 工具不是严格行为断言器 |
 | M6 `20260815_002809` | 95/95 PASS | 0ms，真实激活拒绝与预测清理回归 |
 | M6Intent `20260815_002959` | 52/52 PASS | 0ms，DamageIntent 权威验证回归 |
@@ -64,7 +65,7 @@ Source 进攻属性在 Spec 创建时 Snapshot，保证一次施法事务使用�
 | Dedicated/晚加入/Travel 后对象审计 | 待验证 | 本轮未执行 |
 | Network Insights | 待采集 | 本轮没有优化前后性能结论 |
 
-自动化覆盖默认 25 点伤害、AttackPower 加法、100 Armor 减半、0.2 Resistance、三层 Vulnerability、低血量确定性暴击、100%/0% 暴击概率、组合公式、Clamp 与非有限输入；同时检查战斗属性 `PreAttributeChange` 的 NaN/Inf 安全值、7 个 Capture Definition 的 Source/Target 与 Snapshot 策略、9 个初始化 Modifier 和胜利 Widget 引用。
+自动化覆盖默认 25 点伤害、AttackPower 加法、100 Armor 减半、0.2 Resistance、三层 Vulnerability、低血量确定性暴击、100%/0% 暴击概率、组合公式、Clamp 与非有限输入；同时检查战斗属性 `PreAttributeChange` 的 NaN/Inf 安全值、7 个 Capture Definition 的 Source/Target 与 Snapshot 策略、9 个初始化 Modifier。当前胜利配置检查只证明原生事件/重开接口存在，以及 `winandquit` 保留两个中文按钮；它不能证明正式 Character 已实现事件图或重开按钮已接线，这两项必须由 Blueprint Compile 和双窗口点击验收关闭。
 
 本轮五组核验器输出、原始日志哈希和证据限制归档在[Phase 3-4 network regression evidence](Runs/Phase34/README.md)；最终回归 `20260815_004559` 的原始 `RunInfo/Host/Client` 证据位于本地 `Saved/GASBaseline/20260815_004559`。
 
@@ -97,7 +98,7 @@ Source 进攻属性在 Spec 创建时 Snapshot，保证一次施法事务使用�
 
 工具回答的问题：
 
-- Unreal Python/Editor Asset Library：修改后重新加载 `.uasset`，确认 CDO 中的 Widget Class 真正持久化，而不是只看脚本执行返回值。
+- Unreal Python/Editor Asset Library：历史上曾用于确认 CDO 的 Widget Class；最终方案已取消该配置脚本，避免自动保存覆盖运行中 Editor 的资产。
 - Automation Framework：确定公式、Clamp、Capture Source/Snapshot、Init GE 和资产引用是否满足配置契约。
 - Host/Client 分离日志与核验脚本：确认新 ExecCalc 日志没有破坏 M5/M6/M6Intent 的既有行为和解析协议。
 - Headless 双进程：验证网络事务与日志断言；它不能回答按钮是否可见、焦点是否舒服或鼠标是否能被真人正确点击。
@@ -109,11 +110,11 @@ Source 进攻属性在 Spec 创建时 Snapshot，保证一次施法事务使用�
 
 #### 1. 现象与复现条件
 
-代码审查和资产检查发现 `BP_ThirdPersonCharacter.VictoryPresenter.VictoryWidgetClass=None`；`winandquit` 能确认退出逻辑，但没有调用 `RequestRestartCoopGame`。最小复现是加载正式角色蓝图检查组件默认值，或触发胜利后观察 Presenter 因 Widget Class 为空无法创建界面。正常预期是两端本地各创建一次 UI，Client 重开请求由服务器统一 Travel。
+最初代码审查发现胜利状态可以复制，但 `winandquit` 没有接入重开意图。第一版曾把 Widget Class 和中文 Designer 按钮名配置给 C++ Presenter；后续审查确认该方案让 C++ 依赖本地化名称，也让 UI 布局、鼠标和输入表现越过蓝图边界。最终要求是两端本地蓝图各创建一次 UI，Client 重开请求仍由服务器统一 Travel。
 
 #### 2. 为什么难
 
-C++ 胜利状态、复制委托和重开 RPC 已存在，但最后一段依赖二进制 Blueprint 资产配置；“代码编译通过”不能证明 Widget Class、Designer 按钮名和事件链有效。UI 又是本地对象，不能把服务器规则和本地输入恢复混在一起。
+C++ 胜利状态、复制委托和重开 RPC 已存在，但最后一段依赖二进制 Blueprint 图表；“代码编译通过”不能证明事件、中文按钮、焦点和鼠标链有效。UI 又是本地对象，不能把服务器规则和本地输入恢复混在一起。
 
 #### 3. 初始假设与定位
 
@@ -121,38 +122,39 @@ C++ 胜利状态、复制委托和重开 RPC 已存在，但最后一段依赖�
 |---|---|---|---|
 | `GameState.OnGameWon` 没有复制到客户端 | 胜利后 UI 不出现 | 静态检查 RepNotify/委托链 | 排除；复制通知路径存在 |
 | Presenter 没有挂到 Character | 没有本地消费者 | 检查 Character 默认组件与自动化 CDO | 排除；组件存在 |
-| Widget Class/按钮事件未配置 | C++ 有创建入口但资产引用缺失 | Unreal Python 加载 CDO、检查 Widget 引用和资产图 | 确认 |
+| 蓝图胜利事件/按钮意图未配置 | 权威状态已完成，但本地表现无消费者 | 检查正式 Character 与 Widget 事件图 | 确认；待接线 |
 
-使用 Unreal Python/Editor Asset Library 回答“配置是否真正保存”；使用 `rg` 和 C++ 调用链检查回答“重开权限是否仍经服务器”；使用新进程自动化回答“是否只是当前 Editor 内存中的临时值”。
+使用 `rg` 和 C++ 调用链检查回答“重开权限是否仍经服务器”；使用 UHT/Game Build 回答接口是否可编译；关闭 Editor 后再用 Blueprint Compile、自动化与双窗口回答“图表是否真正保存并可点击”。
 
 #### 4. 根因、候选方案与取舍
 
-根因是表现层资产没有完成最后引用与按钮意图接入，同时原 `ClearBinding()` 只解绑 GameState，没有移除 Widget 和恢复输入。
+根因是表现层资产没有完成最后的本地事件与按钮意图接入；第一版修复又把 Widget 和本地化按钮名称放进了 C++ Presenter，造成不必要的表现层耦合。
 
 | 方案 | 成本 | 取舍 |
 |---|---|---|
-| Widget Blueprint 直接 `OpenLevel` | 接线短 | 放弃；Client 会绕过服务器统一重开 |
-| 在每个 Widget 图里复制 RPC 调用链 | 依赖蓝图节点与资产维护 | 可用，但容易随 Widget 改版漂移 |
-| Presenter 按按钮名绑定 Character 公开意图 | C++ 依赖稳定 Designer 名称 | 采用；权限链唯一、可日志化、可防重复 |
+| Widget 蓝图直接 `OpenLevel` | 接线最短 | 放弃；Client 会绕过服务器统一重开 |
+| Presenter 按按钮名绑定 Character 公开意图 | 可集中日志 | 放弃；C++ 与中文 Designer 名称及具体 Widget 耦合 |
+| C++ 提供胜利事件与重开意图，蓝图拥有表现 | 需要两处明确接线 | 采用；权威链唯一，中文按钮和 UI 生命周期留在蓝图 |
 
 #### 5. 最终修改与边界保护
 
 ```text
 GameState replicated win
 -> local VictoryPresenter
--> CreateWidget once
--> bind “重新开始” once
+-> Character.On Coop Game Won once
+-> Character Blueprint creates/stores winandquit
+-> winandquit.重新开始 OnClicked
 -> Character.RequestRestartCoopGame
 -> owning Client Server RPC
 -> GameMode bRestartTravelRequested idempotency gate
 -> ServerTravel; failure clears gate and logs COOP_RESTART
 ```
 
-保护包括 `IsLocallyControlled`、Widget 幂等检查、`AddUniqueDynamic/RemoveDynamic`、Presenter 的 `bRestartRequested`、GameMode 的 `bRestartTravelRequested`、按钮禁用、`RemoveFromParent`、弱 Controller 引用，以及只恢复由组件实际覆盖的鼠标状态。
+保护包括 `IsLocallyControlled`、按 GameState 的 `bVictoryNotified`、`AddUniqueDynamic/RemoveDynamic`、GameMode 的 `bRestartTravelRequested` 以及 Blueprint 保存的 Widget 引用。按钮禁用、`RemoveFromParent` 和输入/鼠标恢复属于蓝图验收项，不能在接线前写成已通过。
 
 #### 6. 验证与遗留
 
-Editor/Game 编译通过；新进程自动化确认 Widget Class；M5/M6/M6Intent 回归通过。正式两窗口胜利触发、真人点击重开/退出、焦点和鼠标体验仍为待人工，不能写成已通过。
+新接口的 Game Target 编译通过；此前 M5/M6/M6Intent 证据仍有效。Editor Target、正式蓝图 Compile/Save、两窗口胜利触发、真人点击重开/退出、焦点和鼠标体验均需在安全关闭 Editor 后重验，不能写成已通过。
 
 可复用经验：网络 UI 必须同时处理“权威结果来源、本地创建幂等、操作意图回到服务器、Travel/EndPlay 对称清理”四条链。
 

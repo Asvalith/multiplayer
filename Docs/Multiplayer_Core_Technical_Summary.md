@@ -18,9 +18,9 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 ### 1.1 完成度
 
 - Co-op 规则与 GAS C++ 核心：已形成可编译闭环；完成度不再用主观百分比代替门禁。
-- 完整编译：阶段 3～4 修改后 UE5.5 Development Editor/Game 均通过。
+- 完整编译：阶段 4 与旧胜利 UI 版本曾通过 UE5.5 Development Editor/Game；当前 `ReceiveCoopGameWon` 蓝图事件接口已通过 Development Game，Editor Target 需在安全关闭运行中 Editor 后重编。
 - 自动化：`multiplayer.GAS` 2/2；M6 95/95；此前 M6Intent 0ms/约 300ms RTT 两轮各 52/52，追加安全门禁后的最终二进制 0ms `20260815_004559` 再次 52/52。
-- 胜利 UI：Presenter 生命周期和 Character Widget 引用已接入；可见双窗口真实点击、焦点与录屏待人工。
+- 胜利 UI：Presenter 已完成 `GameState.OnGameWon -> Character.ReceiveCoopGameWon`的本地一次性转发；`BP_ThirdPersonCharacter` 创建 `winandquit`、输入/鼠标以及中文重开按钮节点待 Editor 关闭后接线、编译和双窗口验收。
 - Dedicated、晚加入、完整丢包矩阵与 Network Insights：未完成，不能作为已有成果。
 
 ### 1.2 已完成的 C++ 模块
@@ -36,7 +36,7 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 | Key / KeySocket | 服务端拾取、Holder 复制、附着、插槽消费和目标进度 | Actor 所有权、对象生命周期 |
 | CoopGameState | 目标进度和胜利状态的原子复制 | 全局共享状态、晚加入一致性 |
 | WinArea | 双人进入且目标完成后由服务端结算 | 服务端胜负判定、弱引用 |
-| VictoryPresenter | 本地消费复制胜利状态、幂等创建/清理 UMG、提交服务器重开意图 | UI 生命周期、输入恢复、权限边界 |
+| VictoryPresenter | 仅在本地 Character 消费复制胜利状态，一次性转发 `ReceiveCoopGameWon` 蓝图事件 | 复制结果与本地 UI 表现分层、委托生命周期 |
 | PlayerState ASC / AttributeSet | Mixed 复制、能力/GE/Tag、9 项初始化属性 | GAS 所有权、属性复制、跨 Pawn 生命周期 |
 | Damage ExecCalc | Source Snapshot 进攻属性、Target Live 防御属性、服务器暴击与 Meta Attribute | 权威结算、捕获策略、可测试公式 |
 
@@ -1486,7 +1486,8 @@ DestroySession
 → 服务器 TryCompleteGame
 → GameState.bGameWon = true
 → 属性复制到两个客户端
-→ 每个本地 VictoryPresenter 创建胜利 UMG
+→ 每个本地 VictoryPresenter 只调用一次 Character.On Coop Game Won
+→ Character Blueprint 创建并显示胜利 UMG
 → 玩家可选择重新开始或退出游戏
 ```
 
@@ -1513,6 +1514,8 @@ DestroySession
 钥匙.DestinationSocket ──引用──> 对应钥匙架插槽实例
 WinArea ──运行时获取──> CoopGameState
 VictoryPresenter ──运行时监听──> CoopGameState.OnGameWon
+VictoryPresenter ──本地一次性转发──> Character.ReceiveCoopGameWon
+Character Blueprint ──表现接线──> winandquit
 ```
 
 ### 18.3 压力板配置
@@ -1605,39 +1608,42 @@ GameState 对蓝图提供的读取和事件接口：
 | `ConfigureRequiredKeys()` | `BlueprintAuthorityOnly` | 服务器配置钥匙需求 |
 | `OnObjectiveProgressChanged` | `BlueprintAssignable` | UI 或机关监听钥匙进度 |
 | `OnGameWon` | `BlueprintAssignable` | 本地 UI 监听胜利结果 |
-| `On Game Won UI` | `BlueprintImplementableEvent` | 可选的 GameState 蓝图扩展入口 |
+| `On Coop Game Won` | Character `BlueprintImplementableEvent` | Presenter 当前转发的本地胜利表现入口 |
 
 `RegisterActivatedKey()` 和 `TryCompleteGame()` 保持为 C++ 内部接口，没有暴露为普通客户端可调用的
 `BlueprintCallable`。这是有意的权限边界，不是接口遗漏。
 
-`bGameWon` 先检查旧值再写入，因此服务器只结算一次；VictoryPresenter 也检查现有 Widget，避免本地重复创建。
+`bGameWon` 先检查旧值再写入，因此服务器只结算一次；VictoryPresenter 用 `bVictoryNotified` 保证每个本地 Character 只收到一次 `On Coop Game Won`。Widget 实例幂等由 Character Blueprint 自己保存的引用保证。
 
 ### 18.7 胜利 UI、重新开始与退出
 
 每个本地 Character 都包含 `VictoryPresenter` 组件。它只在 `IsLocallyControlled()` 为真时绑定
-`GameState.OnGameWon`，因此 Listen Server 和远端 Client 会各自创建一份本地胜利界面。
+`GameState.OnGameWon`，然后调用 Character C++ 声明的 `BlueprintImplementableEvent ReceiveCoopGameWon`（蓝图显示名 `On Coop Game Won`）。Presenter 不创建 Widget、不按字符串查找按钮，也不设置本地输入状态。
 
-角色蓝图已经把 `VictoryPresenter.VictoryWidgetClass` 保存为 `/Game/UI/winandquit`，并由新编辑器进程自动化重新加载确认。胜利时组件会：
+`BP_ThirdPersonCharacter` 应在 `On Coop Game Won` 中完成：
 
 ```text
-CreateWidget
-→ AddToViewport(100)
-→ Show Mouse Cursor
-→ Set Input Mode Game And UI
-→ 按名称绑定“重新开始”按钮
+On Coop Game Won
+→ 检查已保存的胜利 Widget 引用（防重）
+→ Create Widget（Class = /Game/UI/winandquit，Owning Player = 本地 Controller）
+→ 保存 Widget 引用
+→ Add to Viewport
+→ Set Show Mouse Cursor = true
+→ Set Input Mode Game and UI（Widget to Focus = 新建 Widget）
 ```
 
 重新开始按钮的当前调用链：
 
 ```text
-Presenter.HandleRestartClicked
-→ Request Restart Coop Game
+重新开始.OnClicked（winandquit）
+→ Get Owning Player Pawn
+→ Request Restart Coop Game（multiplayerCharacter）
 → ServerRestartCoopGame RPC
 → GameMode::RestartCoopGame（bRestartTravelRequested 并发门禁）
 → ServerTravel(CurrentMap + "?listen")
 ```
 
-Presenter 用 `bRestartRequested` 和按钮禁用防本地重复请求，GameMode 用 `bRestartTravelRequested` 合并两个客户端同时到达的请求；ServerTravel 启动失败会解锁并记录 `COOP_RESTART`。在 EndPlay/Travel 时 Presenter 解除 GameState/按钮委托、`RemoveFromParent`，并只恢复自己修改过的输入和鼠标状态。Widget 不直接 `OpenLevel`。
+Character 的 owning-client Server RPC 和 GameMode 的 `bRestartTravelRequested` 仍是权威与并发门禁；ServerTravel 启动失败会解锁并记录 `COOP_RESTART`。蓝图可在点击后禁用按钮作为本地反馈，但不能以此替代服务器门禁，也不得直接 `OpenLevel`。Presenter 只在 EndPlay/Refresh 解除 GameState 委托；Widget 移除与输入/鼠标恢复是蓝图表现生命周期的验收项。
 
 退出按钮的正确蓝图链：
 
@@ -1647,7 +1653,7 @@ OnClicked
 → Quit Game
 ```
 
-退出按钮仍使用 Widget 已有的 `QuitGame`。重开不再要求 Widget 图中存在 `RequestRestartCoopGame` 节点，但 Designer 名称 `重新开始` 是 Presenter 的配置契约；名称变化会产生 `Phase=RestartButtonMissing` 日志。代码/资产和 Headless 回归已通过，正式双端点击与视觉仍待人工。
+退出按钮仍使用 Widget 已有的本地 `QuitGame`。中文 `重新开始` 是蓝图设计器中的直接节点引用，不再是 Presenter 使用的运行时字符串契约。旧的 `GetWidgetFromName("重新开始")` 方案已被取代，其历史问题和取舍保留在阶段 3～4 报告中。当前接口只确认 C++ Game Target 通过；Editor/蓝图 Compile/Save 和正式双端点击待关闭 Editor 后验收。
 
 ### 18.8 机关碰撞基线
 
@@ -1694,8 +1700,8 @@ OnGameWon 在两个本地客户端各执行一次
 1. `TSet` 可以防止同一 Character 的多个碰撞组件在 BeginOverlap 时重复加人；但当前 EndOverlap 收到任意
    一个组件离开事件后就会移除整个 Character。若角色确实有多个参与 Pawn Overlap 的组件，需要增加组件级
    引用计数，或确认 Actor 已完全离开 Trigger 后再移除。WinArea、压力板和平台都应做相同审计。
-2. 胜利 Presenter 和 Widget Class 已接入；仍需可见双窗口实际点击重开/退出并确认鼠标、焦点和两端 Travel。
-3. 需要在 Travel 后结合 `COOP_VICTORY_UI Phase=Cleared/Bound` 与 Object List 验证旧 Widget/Delegate 无残留。
+2. 胜利 Presenter 的 C++ 事件转发已通过 Game Target；需关闭 Editor 后在 `BP_ThirdPersonCharacter` 接入 `On Coop Game Won -> Create winandquit`，并给中文重开按钮接 `Get Owning Player Pawn -> Request Restart Coop Game`。
+3. 需在 Editor/蓝图 Compile/Save 后做可见双窗口点击验收；Travel 后结合 `COOP_VICTORY_UI Phase=Bound/BlueprintEvent` 与 Object List 验证蓝图保存的 Widget 引用、GameState Delegate 和输入状态无残留。
 4. 需要确认玩法地图 World Settings 没有使用错误的 GameMode Override；项目默认值已经指向
    `/Script/multiplayer.multiplayerGameMode`。
 5. 独立游戏目标已经构建成功，但机关、钥匙、胜利、重开仍需完整双窗口运行证据。

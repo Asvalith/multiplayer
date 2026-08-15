@@ -43,7 +43,7 @@
 - Authority、Ownership、Server/Client/Multicast RPC。
 - 属性复制、RepNotify、GameMode / GameState 分工。
 - 服务端权威压力板、门、平台、钥匙和胜利判定。
-- 双人共享目标、胜利 UMG、重新开始服务端请求。
+- 双人共享目标与重新开始服务端请求；胜利 UI 的 C++ 边界为 `VictoryPresenter -> Character.ReceiveCoopGameWon`，Widget/鼠标/输入由 Character Blueprint 负责。
 - Git LFS 资源管理和双窗口测试脚本。
 
 这些能力可以直接复用到 GAS 网络测试，不需要重新开发房间系统。
@@ -59,7 +59,7 @@
 - 已实现正式 Enhanced Input、基础 HUD、团队规则、敌对训练目标、死亡/复活与 ASC 清理。
 - 已实现服务器 `ExecutionCalculation`、自定义 `GameplayEffectContext::NetSerialize` 和三层 Vulnerability 堆叠。
 - 已实现原生 GameplayCue 的预测 Cast、服务器确认 Impact、持续 Cue 生命周期和叠层 Cue 抑制。
-- Editor/Game 编译和 `multiplayer.GAS.Configuration` 配置自动化测试已通过。
+- GAS 基线的 Editor/Game 编译和 `multiplayer.GAS.Configuration` 配置自动化测试已通过。后续胜利 UI 改为 `ReceiveCoopGameWon` 接口后，当前 Game Target 已通过；Editor Target 与 `On Coop Game Won -> Create winandquit -> 中文重开按钮` 接线需在安全关闭 Editor 后重新验收。
 - 0ms 与每方向 150ms（约 300ms RTT）的双进程接受路径已验证；预测 Cue 未双播，持续 Cue 能到期或 Reset 清理。
 
 当前已完成真正 `ClientActivateAbilityFailed` 对预测 Cost、Cooldown、Immunity GE/Cue 和 Pending 表现的回滚实验；DamageIntent 也已完成 Schema/source、ShotId 幂等、50ms 最小间隔、时间/Origin/方向校验、服务器当前世界 Sweep 和语义结果 RPC。TargetData 等待已增加 5 秒超时，Task 在数据到达、超时/结束时清理等待状态、委托和 Timer，并在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。0ms/约 300ms RTT 各52/52 PASS。仍缺 `TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 的专项端到端分支，以及 DamageIntent loss/快速移动/友军/遮挡专项、token bucket、Host 反向输入、Dedicated Server、晚加入、功能级双客户端自动化、正式表现和 Network Insights 前后数据。完整状态矩阵见

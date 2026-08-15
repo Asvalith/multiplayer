@@ -649,24 +649,44 @@ bool FmultiplayerGASConfigurationTest::RunTest(const FString& Parameters)
 			const UmultiplayerVictoryPresenterComponent* VictoryPresenter =
 				CharacterCDO->FindComponentByClass<UmultiplayerVictoryPresenterComponent>();
 			TestNotNull(TEXT("Character owns the victory presenter"), VictoryPresenter);
-			const TSubclassOf<UUserWidget> ExpectedVictoryWidget = LoadClass<UUserWidget>(
+
+			const UFunction* VictoryEvent =
+				AmultiplayerCharacter::StaticClass()->FindFunctionByName(
+					TEXT("ReceiveCoopGameWon"));
+			TestNotNull(
+				TEXT("Character exposes the Blueprint victory event"),
+				VictoryEvent);
+			if (VictoryEvent != nullptr)
+			{
+				TestTrue(
+					TEXT("Victory presentation hook is a Blueprint event"),
+					VictoryEvent->HasAnyFunctionFlags(FUNC_BlueprintEvent));
+			}
+
+			const UFunction* RestartRequest =
+				AmultiplayerCharacter::StaticClass()->FindFunctionByName(
+					TEXT("RequestRestartCoopGame"));
+			TestNotNull(
+				TEXT("Character exposes the Blueprint restart request"),
+				RestartRequest);
+			if (RestartRequest != nullptr)
+			{
+				TestTrue(
+					TEXT("Restart request is Blueprint callable"),
+					RestartRequest->HasAnyFunctionFlags(FUNC_BlueprintCallable));
+			}
+
+			const TSubclassOf<UUserWidget> VictoryWidgetClass = LoadClass<UUserWidget>(
 				nullptr,
 				TEXT("/Game/UI/winandquit.winandquit_C"));
-			TestNotNull(TEXT("Victory widget Blueprint class exists"), ExpectedVictoryWidget.Get());
-			if (VictoryPresenter != nullptr && ExpectedVictoryWidget != nullptr)
+			TestNotNull(
+				TEXT("Victory widget Blueprint class exists"),
+				VictoryWidgetClass.Get());
+			if (VictoryWidgetClass != nullptr)
 			{
-				TestEqual(
-					TEXT("Victory presenter is configured with winandquit"),
-					VictoryPresenter->GetVictoryWidgetClass().Get(),
-					ExpectedVictoryWidget.Get());
-				TestEqual(
-					TEXT("Victory presenter targets the existing restart button"),
-					VictoryPresenter->GetRestartButtonName(),
-					FName(TEXT("\u91cd\u65b0\u5f00\u59cb")));
-
 				UUserWidget* VictoryWidgetProbe = NewObject<UUserWidget>(
 					GetTransientPackage(),
-					ExpectedVictoryWidget);
+					VictoryWidgetClass);
 				TestNotNull(
 					TEXT("Victory widget can be instantiated for configuration validation"),
 					VictoryWidgetProbe);
@@ -676,9 +696,13 @@ bool FmultiplayerGASConfigurationTest::RunTest(const FString& Parameters)
 						TEXT("Victory widget tree initializes"),
 						VictoryWidgetProbe->Initialize());
 					TestNotNull(
-						TEXT("Configured restart button exists in the victory widget tree"),
+						TEXT("Victory widget retains the Chinese restart button"),
 						Cast<UButton>(VictoryWidgetProbe->GetWidgetFromName(
-							VictoryPresenter->GetRestartButtonName())));
+							TEXT("\u91cd\u65b0\u5f00\u59cb"))));
+					TestNotNull(
+						TEXT("Victory widget retains the Chinese quit button"),
+						Cast<UButton>(VictoryWidgetProbe->GetWidgetFromName(
+							TEXT("\u9000\u51fa\u6e38\u620f"))));
 				}
 			}
 		}

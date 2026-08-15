@@ -316,6 +316,7 @@ void AmultiplayerCharacter::InitializeAbilitySystem()
 	}
 
 	GASHUDPresenter->RefreshBinding();
+	VictoryPresenter->RefreshBinding();
 	ApplyDeathState(GASPlayerState->IsDead());
 	if (GASDeveloperHarness != nullptr)
 	{

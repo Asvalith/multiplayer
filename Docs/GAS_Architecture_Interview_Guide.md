@@ -143,8 +143,8 @@ flowchart TB
 - `BP_ThirdPersonCharacter` 已能确认引用 `DA_GAS_DefaultAbilitySet`、`DA_GAS_InputConfig`、`IMC_GAS_Abilities`，以及第三人称移动输入资产。
 - 已存在机关 Blueprint 子类：`pressplate`、`bpcoopgate`、`bpmovingplatform`、`bpkey`、`bpkeysocket`、`winaera`。是否正确填写关卡实例级引用仍需在关卡中逐个检查。
 - 当前没有发现继承 `UmultiplayerGASHUDWidget` 的正式 HUD Widget 资产；因此默认走 C++ 原生 fallback HUD，这是可运行基线，不是最终美术 HUD。
-- `BP_ThirdPersonCharacter.VictoryPresenter.VictoryWidgetClass` 已通过 Editor Python 保存为 `/Game/UI/winandquit`，并由新进程自动化重新加载 CDO 确认，不再是 `None`。
-- `winandquit` 的退出逻辑保留；重新开始按钮由 Presenter 按 Designer 名称 `重新开始` 绑定到 Character 的服务器重开意图，避免 Widget 直接 `OpenLevel`。正式双窗口点击和视觉仍待人工。
+- Character C++ 已暴露 `BlueprintImplementableEvent ReceiveCoopGameWon`（蓝图显示名 `On Coop Game Won`），`VictoryPresenter` 只把复制到本地角色的胜利结果转发到该事件。
+- `/Game/UI/winandquit` 仍作为现有胜利界面；`BP_ThirdPersonCharacter` 需在 `On Coop Game Won` 中创建并显示它、设置鼠标和输入模式。中文 `重新开始` 按钮的 `OnClicked` 通过 `Get Owning Player Pawn -> Request Restart Coop Game` 提交意图，不得直接 `OpenLevel`。该新接口的 C++ Game Target 已编译通过；Editor 重编、蓝图接线和双窗口验收需在关闭当前编辑器后执行。
 - `/Game/UI/bpmaingamemode` 的父类是普通 `GameModeBase`，并把默认 Pawn 设为 `bpmainmenupawn`；它适合主菜单地图，不得作为玩法地图的 GameMode Override。
 
 #### 1.4.2 Character、输入和 GAS Data Asset
@@ -181,15 +181,15 @@ GAS HUD 有两种合法配置：
 
 Widget 只消费 PlayerState/ASC 已同步的数据，不得在 Widget Tick 中改 Attribute、手工扣 Energy 或猜测 Cooldown。
 
-胜利 UI 当前接入状态：
+胜利 UI 当前接入边界：
 
-1. `BP_ThirdPersonCharacter` 已保存 `VictoryWidgetClass=/Game/UI/winandquit`；`bShowMouseCursor` 和 `bSwitchToGameAndUIInput` 保持 `true`。
-2. 退出按钮继续使用 Widget 的 `Quit Game`。
-3. Presenter 运行时按名称 `重新开始` 查找按钮，进入 `Character.RequestRestartCoopGame -> Server RPC -> GameMode.ServerTravel`；GameMode 用 `bRestartTravelRequested` 合并并发请求，Travel 启动失败时解锁并记录 `COOP_RESTART`。客户端 Widget 不直接 `OpenLevel`。
-4. Presenter 使用 `AddUniqueDynamic/RemoveDynamic`、Widget 实例幂等门禁、`RemoveFromParent` 和输入/鼠标恢复治理 Travel/EndPlay 生命周期。
-5. `AmultiplayerCoopGameState::ReceiveGameWon()` 仍是可选 Blueprint 表现入口。采用 Character 上的 Presenter 后不要再重复创建同一 Widget。
+1. `VictoryPresenter` 只在本地控制的 Character 上监听 `GameState.OnGameWon`，通过 `bVictoryNotified` 保证本地仅转发一次。
+2. Presenter 调用 Character 的 `ReceiveCoopGameWon`；蓝图中对应事件节点名为 `On Coop Game Won`。C++ 不再持有 Widget Class、不查找 Designer 按钮，也不负责鼠标/输入表现。
+3. `BP_ThirdPersonCharacter.On Coop Game Won` 负责 `Create Widget(winandquit) -> Add to Viewport -> Set Show Mouse Cursor(true) -> Set Input Mode Game and UI`，并应保存 Widget 引用以便本地幂等与 Travel 收口。
+4. `winandquit` 中文 `重新开始.OnClicked` 负责 `Get Owning Player Pawn -> Request Restart Coop Game`。该 BlueprintCallable 函数仍进入 `Character -> owning-client Server RPC -> GameMode::RestartCoopGame -> ServerTravel`；GameMode 仍用 `bRestartTravelRequested` 合并并发请求。
+5. `退出游戏` 按钮保留 Widget 中的本地 `Quit Game`。蓝图只拥有 UI 创建、焦点和本地按钮表现；胜利结算、RPC 校验和全体 Travel 仍由 C++ 拥有。
 
-验收：一名玩家进入 WinArea 不显示；两人进入但钥匙不足不显示；四个 Socket 激活且两人同时进入后，两个本地窗口各出现一次 UI、鼠标可用。客户端点击重新开始后两个窗口一起回到同一关卡且目标清零；点击退出只退出点击者的进程。资产引用、编译和 Headless GAS 回归已通过；上述可见双窗口点击与视觉仍待人工，不能由 Headless 结果代替。
+该接口的 C++ Game Target 已编译通过。关闭当前 Editor 后仍需执行：重编 Editor Target，打开 `BP_ThirdPersonCharacter` 刷新/接入 `On Coop Game Won`，接好 `winandquit` 的两个按钮，Compile/Save，再完成双窗口视觉与 Travel 验收。未完成这些步骤前，不能声称新蓝图接线已验收。
 
 #### 1.4.4 PressurePlate
 
@@ -785,8 +785,9 @@ CoopGate / MovingPlatform
 -> GameState.TryCompleteGame()
 -> bGameWon 幂等门禁
 -> ObjectiveState 复制到各客户端
--> 各本地 VictoryPresenter 创建一次 UMG
--> “重新开始”按钮提交 Character RPC 意图
+-> 各本地 VictoryPresenter 仅一次调用 Character.On Coop Game Won
+-> Character Blueprint 创建 winandquit 并设置本地输入/鼠标
+-> winandquit.重新开始 OnClicked 提交 Character RPC 意图
 -> GameMode 统一 ServerTravel
 ```
 
@@ -797,7 +798,7 @@ CoopGate / MovingPlatform
 - WinArea 使用弱引用 `TSet` 按 Character 去重，并监听 `OnDestroyed` 清理。
 - `TryCompleteGame` 检查 `bGameWon`，把胜利设计为幂等事务。
 - `OnRep_ObjectiveState` 负责通知表现层，服务器不直接操作客户端 Widget。
-- VictoryPresenter 对称解除 GameState/按钮委托、移除 Widget，并只恢复自己修改过的输入与鼠标状态。
+- VictoryPresenter 对称绑定/解除 GameState 委托，并用 `bVictoryNotified` 抑制重复蓝图事件；Widget 引用、移除与输入/鼠标恢复是 Character Blueprint 的本地表现职责。
 
 关键源码：
 
@@ -811,12 +812,12 @@ CoopGate / MovingPlatform
 
 | 验证层级 | 结果 |
 |---|---|
-| C++ 编译 | 通过：当前 Editor/Game 全模块编译 |
+| C++ 编译 | 当前新接口的 Game Target 通过；Editor Target 待关闭运行中 Editor 后重编 |
 | 静态调用链检查 | 通过：钥匙注册、区域判断和胜利提交均有服务器门禁 |
 | 唯一玩家结构 | 通过：源码使用 Character 弱引用 `TSet`，不是裸整数 |
 | 一次性状态结构 | 通过：`TryCompleteGame` 检查并设置 `bGameWon` |
-| 胜利 UMG 资产配置 | 通过：新编辑器进程自动化确认 Character Presenter 引用 `winandquit` |
-| Presenter 生命周期 | 通过编译/静态检查：幂等创建、解绑、RemoveFromParent、输入/鼠标恢复和服务器重开意图均有实现 |
+| 胜利 UMG 蓝图接线 | 待验证：`On Coop Game Won -> Create winandquit`、输入/鼠标及两个按钮节点需在关闭 Editor 后刷新、Compile/Save |
+| Presenter 生命周期 | 通过 Game 编译/静态检查：本地所有权检查、GameState 委托解绑和一次性蓝图事件门禁已实现 |
 | 双窗口 6 步验收 | 待验证 |
 | 玩家销毁/断线/晚加入 | 待验证 |
 | 性能证据 | 不适用/未采集；当前重点是权威正确性和幂等性 |
@@ -826,13 +827,13 @@ CoopGate / MovingPlatform
 - 正确性：代码结构覆盖“4 把钥匙 + 2 名唯一玩家 + 一次性结算”的组合条件。
 - 架构：共享状态、空间状态和本地 UI 各有唯一职责。
 - 网络：客户端只能观察复制结果，不能调用权威胜利路径改变状态。
-- 体验：无论先收钥匙还是先进入区域，后到达的条件都会重新触发判断；Widget 具备本地幂等和重开保护，实际焦点、鼠标与按钮体验仍需双窗口验证。
+- 体验：无论先收钥匙还是先进入区域，后到达的条件都会重新触发判断；C++ 只保证每个本地 Character 发送一次胜利表现事件，Widget 幂等、焦点、鼠标与按钮体验需由蓝图接线后双窗口验证。
 - 维护：将来修改钥匙数量或区域人数，不需要改 Widget 的结算逻辑。
 
 #### 11. 遗留问题
 
 - 当前缺少完整的两窗口验收记录，因此不能写“胜利流程已通过联机验收”。
-- Presenter 已实现旧 GameState/Widget 委托、Widget 和输入模式的对称收口；仍需在真实 ServerTravel 后用日志与 Object List 验证无残留。
+- Presenter 只收口 GameState 委托；蓝图必须保存并清理自己创建的 Widget，并在真实 ServerTravel 后用日志与 Object List 验证 Widget 和输入状态无残留。
 - `OnRep_ObjectiveState` 在服务器也被手工调用以复用广播逻辑；以后若委托监听者增加，应清楚区分服务器监听者和本地 UI。
 - 若未来支持断线重连，需要定义离线玩家是否仍计入区域以及团队目标是否持久化。
 
@@ -1208,9 +1209,9 @@ GE constructor
 
 | 类型 | 已完成 | 尚未完成 |
 |---|---|---|
-| C++ 实现 | M0～M6 核心；胜利 Presenter 生命周期；五项复制战斗属性；Source Snapshot/Target Live ExecCalc；DamageIntent 权威验证与行为核验器 | token bucket/异常 strike、服务器历史回溯、正式美术表现 |
-| 蓝图/资产接线 | InputAction/Mapping、AbilitySet/GE、基础 HUD；Character Presenter 已保存 `winandquit` 引用 | Niagara、音效、Montage、正式图标；更完整的数据资产化和队友治疗 UI |
-| 编译/自动化证据 | UE5.5 Editor/Game Development 通过；`multiplayer.GAS` 2/2；胜利 Widget CDO、9 项 InitStats、7 项 Capture 策略和公式矩阵通过；M6/M6Intent 行为核验通过 | Dedicated Server 构建、带断言的服务器+双客户端功能自动化 |
+| C++ 实现 | M0～M6 核心；VictoryPresenter 本地监听/一次性 `ReceiveCoopGameWon` 转发；服务器重开校验；五项复制战斗属性；Source Snapshot/Target Live ExecCalc；DamageIntent 权威验证与行为核验器 | token bucket/异常 strike、服务器历史回溯、正式美术表现 |
+| 蓝图/资产接线 | InputAction/Mapping、AbilitySet/GE、基础 HUD；现有 `winandquit` 资产和中文按钮 | `BP_ThirdPersonCharacter.On Coop Game Won -> Create Widget`、鼠标/输入模式、`重新开始 -> Request Restart Coop Game` 需在关闭 Editor 后接线并 Compile/Save；另待 Niagara、音效、Montage 和正式图标 |
+| 编译/自动化证据 | 新胜利事件接口的 UE5.5 Game Development 通过；之前阶段的 `multiplayer.GAS` 2/2、9 项 InitStats、7 项 Capture 策略、公式矩阵与 M6/M6Intent 行为核验通过 | 当前胜利接口的 Editor Target/蓝图编译回归；Dedicated Server 构建；带断言的服务器+双客户端功能自动化 |
 | 运行验收 | M5 `20260815_002532` 清点正常；M6 `20260815_002809` 95/95；此前 M6Intent 0ms/约 300ms RTT 两轮各 52/52，最终二进制 0ms `20260815_004559` 再次 52/52 | 可见双窗口胜利 UI 点击、Host 反向输入、DamageIntent loss/快速移动/友军/遮挡、晚加入、持续 Cue 死亡、人工 HUD 验收 |
 | 性能证据 | 约 300ms RTT 的 PredictionKey 时序与次数清点 | Network Insights、RPC/字节数、Full/Mixed 对照、P95/P99 和同条件优化前后数据 |
 
@@ -1265,7 +1266,7 @@ GE constructor
 | P0-06 | 合作型目标选择 | 部分实现 | 治疗/免疫可选择队友；伤害、治疗和免疫根据队伍规则验证目标 |
 | P0-07 | 最终瞄准/选择方案 | 核心实现 | 准星 Sweep 只生成本地预览；服务器校验 DamageIntent 后在当前世界重建 SingleTargetHit；快速移动/遮挡专项仍待验 |
 | P0-08 | 死亡、复活与输入收口 | 核心通过 | M3 的死亡幂等、清理、3 秒复活和 ASC 重绑已通过 0ms/弱网接受路径；断线/持续 Cue 死亡待验 |
-| P0-09 | 机关和胜利流程回归 | 代码/资产完成，视觉待验证 | Presenter 生命周期、Widget 引用和服务器重开意图已接入；仍需两窗口完成钥匙、机关、WinArea、重开/退出并录像 |
+| P0-09 | 机关和胜利流程回归 | C++ 接口完成，蓝图待接线 | Presenter 的本地一次性胜利事件和服务器重开意图已接入；仍需在正式 Character/`winandquit` 中完成蓝图图表，并两窗口完成钥匙、机关、WinArea、重开/退出及录像 |
 | P0-10 | 打包运行验收 | 待验证 | Development 或 Shipping 客户端打包成功，至少两实例能从菜单进入同一局并完成一次胜利 |
 
 #### P1：达到 GAS 与网络同步的重点面试深度

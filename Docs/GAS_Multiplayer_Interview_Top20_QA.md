@@ -575,7 +575,7 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 | 钥匙 | Server 拾取、安装和插槽激活 | RepNotify/引用复制 |
 | 团队目标 | GameState 的 ActivatedKeys/RequiredKeys/bGameWon | 结构体属性复制 + OnRep |
 | 胜利区 | Server 的玩家弱引用 TSet | 满足条件时调用 GameState 幂等结算 |
-| 胜利 UI | 本地 VictoryPresenter 消费复制结果 | Widget 幂等创建/清理；重开意图经 Character RPC 回服务器 |
+| 胜利 UI | 本地 VictoryPresenter 消费复制结果 | C++ 仅一次转发 Character `On Coop Game Won`；蓝图创建 `winandquit`，中文按钮经 Character RPC 提交重开意图 |
 | GAS | PlayerState ASC Mixed；客户端预测意图 | GE/Attribute/Tag 复制 + TargetData |
 
 ### 关键保护
@@ -583,12 +583,12 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 - 玩家多个碰撞组件不会重复计数。
 - 玩家销毁时从压力板、平台和 WinArea 清理。
 - `TryCompleteGame` 的 `bGameWon` 保证胜利只结算一次。
-- VictoryPresenter 在 EndPlay/Travel 对称解绑、移除 Widget，并恢复自己修改过的输入与鼠标状态。
+- VictoryPresenter 在 EndPlay/Refresh 对称解除 GameState 委托，用 `bVictoryNotified` 防止重复转发；Widget 引用、RemoveFromParent 和输入/鼠标恢复是 Character Blueprint 的本地表现职责。
 - 玩家 `Team.Player`，伤害只接受 `Team.Enemy`，服务器二次验证。
 
 ### 尚缺证据
 
-阶段 3 胜利 Widget 引用和生命周期已经通过编译/资产自动化，阶段 4 新公式完成 M5/M6/M6Intent Headless 回归；追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 为 52/52。完整机关+GAS 可见双窗口点击、晚加入、Dedicated Server、补充弱网矩阵和 Network Insights 数据仍待完成。
+阶段 4 新公式完成 M5/M6/M6Intent Headless 回归；追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 为 52/52。胜利 UI 后续改为 `Presenter -> ReceiveCoopGameWon -> Character Blueprint`，当前 C++ Game Target 通过，但 Editor Target、`On Coop Game Won -> Create winandquit`、`重新开始 -> Request Restart Coop Game` 需关闭 Editor 后编译/接线验收。完整机关+GAS 可见双窗口点击、晚加入、Dedicated Server、补充弱网矩阵和 Network Insights 数据仍待完成。
 
 ---
 

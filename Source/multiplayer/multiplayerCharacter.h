@@ -41,7 +41,7 @@ class AmultiplayerCharacter : public ACharacter, public IAbilitySystemInterface,
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
 
-	/** Local-only bridge from replicated game-over state to the configured victory UMG. */
+	/** Local bridge from replicated game-over state to the Character Blueprint event. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Victory", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UmultiplayerVictoryPresenterComponent> VictoryPresenter;
 	
@@ -110,8 +110,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "GAS")
 	UmultiplayerAbilitySet* GetStartupAbilitySet() const { return StartupAbilitySet; }
 
+	/** Local Blueprint presentation hook fired once when replicated victory arrives. */
+	UFUNCTION(
+		BlueprintImplementableEvent,
+		Category = "Coop|Victory",
+		meta = (DisplayName = "On Coop Game Won"))
+	void ReceiveCoopGameWon();
+
 	/** May be called by the victory widget on either player's owning client. */
-	UFUNCTION(BlueprintCallable, Category = "Coop|Match")
+	UFUNCTION(
+		BlueprintCallable,
+		Category = "Coop|Victory",
+		meta = (DisplayName = "Request Restart Coop Game"))
 	void RequestRestartCoopGame();
 
 	/** Called on server and clients by the persistent PlayerState death state. */

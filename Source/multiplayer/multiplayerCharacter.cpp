@@ -114,6 +114,14 @@ void AmultiplayerCharacter::GameplayCueDefaultHandler(
 	}
 }
 
+void AmultiplayerCharacter::HandleAbilityPresentation_Implementation(
+	const FmultiplayerAbilityPresentationEvent& Event)
+{
+	// The C++ interface deliberately has no gameplay side effects. The formal
+	// Character Blueprint may override "On Ability Presentation Phase" to add
+	// camera, animation-layer, or debug UI reactions without becoming authority.
+}
+
 UAbilitySystemComponent* AmultiplayerCharacter::GetAbilitySystemComponent() const
 {
 	if (AbilitySystemComponent != nullptr)

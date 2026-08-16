@@ -1,10 +1,12 @@
 # Co-op GAS 与多人网络必问 Top 20
 
+> **归档题库（不再维护项目状态）**：完整、去重后的当前口述内容只维护在[面试复习资料](GAS_Interview_Completed_Snapshot.md)。本文件仅保留扩展题目，不得新增任务状态或完成矩阵。
+
 > 适用项目：UE5.5 `multiplayer` / `coop-GAS`
 >
-> 更新日期：2026-08-15
+> 更新日期：2026-08-16
 >
-> 使用方式：先回答“30 秒版本”，再结合项目调用链和证据展开。未完成内容必须使用“计划/待验证”，不能说成已经实现。
+> 使用方式：先阅读[《Co-op GAS 已完成内容：面试速查》](GAS_Interview_Completed_Snapshot.md)，再回答每题的“30 秒版本”，并结合项目调用链和证据展开。未完成内容必须使用“计划/待验证”，不能说成已经实现。
 
 ---
 
@@ -50,7 +52,7 @@ GAS 的核心不是一个组件，而是一套协作模型：ASC 保存和复制
 - 三个能力位于 [multiplayerGameplayAbility.cpp](../Source/multiplayer/AbilitySystem/Abilities/multiplayerGameplayAbility.cpp)。
 - TargetData Task 位于 [multiplayerAbilityTask_TargetActor.cpp](../Source/multiplayer/AbilitySystem/AbilityTasks/multiplayerAbilityTask_TargetActor.cpp)。
 - GE、Tag、AbilitySet、服务器 ExecCalc、自定义 EffectContext 和 Vulnerability 堆叠均已实现；AttributeSet 还包含复制的 AttackPower、Armor、CriticalChance、CriticalMultiplier、Resistance。
-- 7 个 GameplayCue 当前由原生 Handler 和 PointLight 技术占位表现消费；正式 Niagara/音效/Montage 资产仍未完成。
+- 7 个业务 GameplayCue 加 1 个仅用于 M6 的 Prediction Pending 实验 Cue，当前由原生 Handler 和 PointLight 技术占位表现消费；正式 Niagara/音效/Montage 资产仍未完成。
 
 ### 常见追问
 
@@ -390,9 +392,10 @@ UE 常用 Server RPC、Client RPC 和 NetMulticast RPC。Server RPC 从拥有客
 
 ### 当前项目
 
-- Character 的 Server RPC 提交网络测试动作和 M0 训练目标生成请求。
-- 服务器 Client RPC 返回 Owner-only 确认。
-- Multicast 用于所有客户端都应看到的短暂效果。
+- Character 的正式业务 Server RPC 当前用于提交合作游戏重开意图；Damage 技能使用 GAS TargetData 内部 Server RPC，而不是自定义“提交伤害 RPC”。
+- DeveloperHarness/ASC 的测试 RPC 只在显式实验参数和非 Shipping/Test 路径服务于 Reject、DamageIntent 与训练目标证据。
+- Owner-only Client RPC 用于 DamageIntent 业务结果和拒绝实验回执。
+- 当前源码没有自定义 NetMulticast；短暂技能表现主要使用 GAS GameplayCue。
 - GAS 的 TargetData 通过 ASC 内部 Server RPC/Delegate 链传递，而不是自定义一个“提交伤害 RPC”。
 
 ### 易错点
@@ -419,9 +422,9 @@ UE 常用 Server RPC、Client RPC 和 NetMulticast RPC。Server RPC 从拥有客
 
 ### 当前项目
 
-- Health/Energy、ObjectiveState、门/平台状态使用属性复制。
+- Health/Energy、ObjectiveState、门和压力板使用属性/语义状态复制；移动平台由服务器移动并通过 `ReplicateMovement` 同步 Transform，同时复制玩家计数等语义状态。
 - OnRep/Delegate 将状态变化转给本地 UI/表现。
-- 玩家请求、Session 操作和部分短暂效果使用 RPC。
+- 玩家 Gameplay 请求使用 RPC/GAS TargetData；Session 使用 OnlineSubsystem 异步 Delegate 与 Travel，不是项目自定义 Session RPC。
 - 胜利由 GameState 复制 `bGameWon`，不是依赖一次 Multicast。
 
 ---
@@ -571,7 +574,8 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 |---|---|---|
 | Session | GameInstance/OnlineSubsystem 异步流程 | Session Delegate + Travel |
 | 压力板 | Server 统计唯一 Character 占用 | 复制激活状态 + Delegate |
-| 门/平台 | Server 根据所需压力板计算目标 | 复制状态，本地表现移动 |
+| 门 | Server 根据所需压力板计算目标 | 复制语义状态，各端本地插值 |
+| 移动平台 | Server 根据压力板/人数决定移动 | 服务器移动 + `ReplicateMovement`，另复制玩家计数 |
 | 钥匙 | Server 拾取、安装和插槽激活 | RepNotify/引用复制 |
 | 团队目标 | GameState 的 ActivatedKeys/RequiredKeys/bGameWon | 结构体属性复制 + OnRep |
 | 胜利区 | Server 的玩家弱引用 TSet | 满足条件时调用 GameState 幂等结算 |
@@ -588,7 +592,7 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 
 ### 尚缺证据
 
-阶段 4 新公式完成 M5/M6/M6Intent Headless 回归；追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 为 52/52。胜利 UI 后续改为 `Presenter -> ReceiveCoopGameWon -> Character Blueprint`，当前 C++ Game Target 通过，但 Editor Target、`On Coop Game Won -> Create winandquit`、`重新开始 -> Request Restart Coop Game` 需关闭 Editor 后编译/接线验收。完整机关+GAS 可见双窗口点击、晚加入、Dedicated Server、补充弱网矩阵和 Network Insights 数据仍待完成。
+阶段 4 新公式曾完成 M5/M6/M6Intent Headless 回归；`20260815_004559` 是胜利 UI 接口重构前的阶段 4 二进制证据。当前 `Presenter -> ReceiveCoopGameWon -> Character Blueprint` 的 C++ Game Target 通过，但 Editor Target、`On Coop Game Won -> Create winandquit`、`重新开始 -> Request Restart Coop Game` 仍需编译/接线验收。完整机关+GAS 可见双窗口点击、晚加入、Dedicated Server、补充弱网矩阵和 Network Insights 数据仍待完成。
 
 ---
 
@@ -608,7 +612,7 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 
 ### 当前项目
 
-这是状态同步：服务器维护机关、目标、属性和命中结论；客户端接收当前状态，同时对本地移动和 GAS 技能做有限预测。没有实现确定性帧同步。
+这是状态同步：服务器维护机关、目标、属性和命中结论；客户端接收当前状态，同时对本地移动和 GAS 技能做有限预测。没有实现确定性帧同步。`PredictionKey` 是 GAS 预测事务的关联标识，不是同步帧号。
 
 ---
 
@@ -622,11 +626,11 @@ Listen Server 同时是服务器和一名本地玩家，部署简单但 Host 有
 | Cost/Cooldown | 已实现，Immunity 真 Reject 回滚通过 | 0ms/约 300ms RTT/一组 5% 样本有断言；精确 HUD 人工验收待补 |
 | GameplayCue | 原生 Cue 接受/确认/生命周期及 Pending 拒绝收口通过 | 可解释去重与 Context 消费；瞬时 Cue 不可倒放，正式视听与多轮丢包待补 |
 | ExecCalc/EffectContext | M4 战斗属性扩展完成，自动化与双端消费通过 | 可解释 Snapshot/Live Capture、Armor/Resistance/服务器暴击 Roll、Meta Attribute 与 Context 序列化；装备资产和性能数据待补 |
-| Buff/Debuff Stacking | 三层 Vulnerability 核心与自然到期通过 | 可解释聚合/刷新/清理；溢出、层数 UI、晚加入待补 |
+| Buff/Debuff Stacking | 三层 Vulnerability 核心、溢出配置与自然到期通过 | 可解释聚合/刷新/清理；活目标第 4 次溢出的双进程专项、层数 UI、晚加入待补 |
 | ENetRole/RPC/属性复制 | 项目已有多处实现 | 可以结合日志和源码解释 |
 | CharacterMovement 校正/插值 | 使用引擎默认实现 | 解释原理，不能说自行实现 |
 | 延迟补偿/服务器回溯 | 未完成 | M7 计划，不得声称已有结果 |
-| Co-op 权威同步 | C++ 核心及 Listen Server+Client 接受路径已验证 | Host 反向输入、完整人工矩阵和 Server+2 Clients 自动化待补 |
+| Co-op 权威同步 | C++ 权威核心已实现；部分 GAS Listen Server+1 Client 接受/拒绝路径有证据 | Session+机关+胜利整局可见双窗口、Host 反向输入和 Server+2 Clients 自动化待补 |
 | Dedicated Server/Insights | 未完成 | 只能描述验收设计 |
 
 ---

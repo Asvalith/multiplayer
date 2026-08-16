@@ -62,6 +62,24 @@ bool UmultiplayerGASCuePresenterComponent::HandleGameplayCue(
 	const FGameplayCueParameters& Parameters)
 {
 	const FGameplayTag CueTag = Parameters.OriginalTag;
+	const bool bPredictionLabCue = CueTag.MatchesTagExact(
+		MultiplayerGameplayTags::GameplayCue_Coop_Prediction_Pending);
+	if (PresentationOwner == EmultiplayerCuePresentationOwner::GameplayCueAssets
+		&& !bPredictionLabCue)
+	{
+		// GameplayCueNotify assets are the sole formal presentation owner. Returning
+		// false keeps the native default-handler chain available without touching
+		// either debug light, so a Cue is never rendered by both systems.
+		UE_LOG(
+			LogMultiplayerGAS,
+			Verbose,
+			TEXT("GAS_CUE_PRESENTATION Owner=GameplayCueAssets Actor=%s Cue=%s Event=%s NativeConsumed=false"),
+			*GetNameSafe(GetOwner()),
+			*CueTag.ToString(),
+			*UEnum::GetValueAsString(EventType));
+		return false;
+	}
+
 	bool bHandled = true;
 	bool bCritical = false;
 	EmultiplayerHitType HitType = EmultiplayerHitType::Direct;
@@ -295,6 +313,21 @@ void UmultiplayerGASCuePresenterComponent::HandlePersistentCueEvent(
 
 void UmultiplayerGASCuePresenterComponent::RefreshGameplayCueState()
 {
+	if (PresentationOwner == EmultiplayerCuePresentationOwner::GameplayCueAssets)
+	{
+		// Formal state visuals belong to persistent GameplayCue assets. Keep only
+		// the development-only prediction marker in the native fallback light.
+		if (bGameplayCuePredictionPendingActive)
+		{
+			SetGameplayCueState(FLinearColor(1.0f, 0.0f, 1.0f), 2500.0f);
+		}
+		else
+		{
+			ClearGameplayCueState();
+		}
+		return;
+	}
+
 	if (bGameplayCueDeathActive)
 	{
 		SetGameplayCueState(FLinearColor(1.0f, 0.0f, 0.0f), 6500.0f);

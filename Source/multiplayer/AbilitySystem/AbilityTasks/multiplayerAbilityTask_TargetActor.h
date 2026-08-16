@@ -13,8 +13,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	TargetData);
 
 /**
- * Collects a locally selected hostile GAS target and sends it to the server under the
- * activation prediction key. The consuming ability must still validate it.
+ * Collects local aim intent and sends it under the activation prediction key. Authority
+ * resolves that intent with one server trace; the ability only rechecks lightweight
+ * commit-time target invariants before applying the authoritative GameplayEffect.
  */
 UCLASS()
 class MULTIPLAYER_API UmultiplayerAbilityTask_TargetActor : public UAbilityTask

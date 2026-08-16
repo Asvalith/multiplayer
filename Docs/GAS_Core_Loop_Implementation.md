@@ -1,5 +1,7 @@
 # Co-op GAS 核心闭环实施说明
 
+> **归档参考（不再维护当前状态或任务）**：旧实施步骤保留用于追溯。当前只维护三份主文档：[README](../README.md)、[面试复习资料](GAS_Interview_Completed_Snapshot.md)、[TODO](GAS_Portfolio_Technical_Route.md)。
+
 > 分支：`coop-GAS`
 >
 > UE 版本：5.5
@@ -141,7 +143,7 @@ Net PktLoss=5
 完整未完成项、优先级和完成口径见
 [《Co-op GAS 架构与面试讲解手册》第 12.2 节](GAS_Architecture_Interview_Guide.md#122-完整未完成项矩阵)。
 
-M5/M6/M6Intent 在扩展公式后完成回归：M5 `20260815_002532` 日志清点正常，M6 `20260815_002809` 为 95/95 PASS；此前 M6Intent 0ms `20260815_002959` 与双方各 `PktLag=150ms`（配置约 300ms RTT）`20260815_003155` 均为 52/52 PASS，追加 finite clamp/restart gate 后的最终二进制 0ms `20260815_004559` 再次为 52/52 PASS。服务器 TargetData 等待现有 5 秒超时收口，AbilityTask 会在数据到达、超时和 Task 结束路径清理委托/Timer，Damage Ability 也会在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 仍缺专项双进程端到端分支；当前 Headless 证据也不等于正式视觉、loss 矩阵、服务器历史回溯或服务器+2 Clients 自动化已通过。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)与[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
+M5/M6/M6Intent 在扩展公式后完成回归：M5 `20260815_002532` 日志清点正常，M6 `20260815_002809` 为 95/95 PASS；M6Intent 0ms `20260815_002959` 与双方各 `PktLag=150ms`（配置约 300ms RTT）`20260815_003155` 均为 52/52 PASS，追加 finite clamp/restart gate 后的阶段 4 二进制 0ms `20260815_004559` 再次为 52/52 PASS。该组证据早于胜利 UI 接口重构，不能当作当前 HEAD 的 Editor/蓝图验收。服务器 TargetData 等待现有 5 秒超时收口，AbilityTask 会在数据到达、超时和 Task 结束路径清理委托/Timer，Damage Ability 也会在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 仍缺专项双进程端到端分支；当前 Headless 证据也不等于正式视觉、loss 矩阵、服务器历史回溯或服务器+2 Clients 自动化已通过。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)与[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
 
 ## 6. 参考边界
 

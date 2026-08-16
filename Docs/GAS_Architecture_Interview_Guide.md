@@ -1,10 +1,14 @@
 # Co-op GAS 架构与面试讲解手册
 
+> **归档参考（不再维护当前状态或任务）**：架构内容保留用于追溯。当前只维护三份主文档：[README](../README.md)、[面试复习资料](GAS_Interview_Completed_Snapshot.md)、[TODO](GAS_Portfolio_Technical_Route.md)。若本文与三份主文档冲突，以三份主文档和实际 Evidence 为准。
+
 > 适用分支：`coop-GAS`
 >
 > 引擎版本：Unreal Engine 5.5
-> 更新日期：2026-08-15
+> 更新日期：2026-08-16
 > 文档目标：准确讲清已经实现的内容、尚未验证的内容，以及面对条件变化时如何演进架构。
+
+面试前先阅读[《Co-op GAS 已完成内容：面试速查》](GAS_Interview_Completed_Snapshot.md)，再按本手册展开架构、问题复盘和场景题。
 
 当前执行目标和阶段门禁以
 [《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)为准：完成合格、完整的 GAS，并通过预测回滚、有限服务器回溯和服务器验证实验达到接近进阶的网络同步深度。
@@ -117,7 +121,7 @@ flowchart TB
 
 旧 `1/2/3`、`NetworkActionCount` 和 `ReplicatedCube` 只验证通用 RPC/复制概念，与当前机关/GAS 主链重复，已从 `coop-GAS` 删除。正式技能输入仍由 Enhanced Input/DataAsset 转成 InputTag，不依赖数字键夹具。
 
-**验证与遗留：** 已完成 UE Development Editor/Game 编译、`multiplayer.GAS` 2/2 自动化，以及重构后的双进程回归：M5 `20260814_015249` 完成日志清点，M6 `20260814_015507` 为 95/95 PASS，M6Intent `20260814_015404` 为 52/52 PASS。DeveloperHarness 暂时集中承载三组相关状态机；只有继续增加互不相关的实验时，才按实验场景再拆组件，避免为拆分而拆分。M5 工具仍是日志清点器，不把它表述成严格行为断言。
+**验证与遗留：** Runtime 重构后的 Editor/Game、自动化与 M5/M6/M6Intent 回归均曾通过，详细 RunId 和证据边界统一见各阶段 Evidence 报告；不再在架构正文维护另一套“最新 RunId”。DeveloperHarness 暂时集中承载三组相关状态机；只有继续增加互不相关的实验时，才按实验场景再拆组件，避免为拆分而拆分。M5 工具仍是日志清点器，不把它表述成严格行为断言。
 
 参考边界：沿用 [GASDocumentation](https://github.com/tranek/GASDocumentation) 的 PlayerState ASC/Avatar 生命周期原则，以及 [GameplayAbilitySystem_Aura](https://github.com/DruidMech/GameplayAbilitySystem_Aura) 和 [GASAura](https://github.com/CNGoSeI/GASAura) 的 Character、PlayerState、AbilitySet 职责分离思路；不复制教程源码、命名或 Content，也不引入当前 Co-op 不需要的 RPG/MVC 层。
 
@@ -1212,7 +1216,7 @@ GE constructor
 | C++ 实现 | M0～M6 核心；VictoryPresenter 本地监听/一次性 `ReceiveCoopGameWon` 转发；服务器重开校验；五项复制战斗属性；Source Snapshot/Target Live ExecCalc；DamageIntent 权威验证与行为核验器 | token bucket/异常 strike、服务器历史回溯、正式美术表现 |
 | 蓝图/资产接线 | InputAction/Mapping、AbilitySet/GE、基础 HUD；现有 `winandquit` 资产和中文按钮 | `BP_ThirdPersonCharacter.On Coop Game Won -> Create Widget`、鼠标/输入模式、`重新开始 -> Request Restart Coop Game` 需在关闭 Editor 后接线并 Compile/Save；另待 Niagara、音效、Montage 和正式图标 |
 | 编译/自动化证据 | 新胜利事件接口的 UE5.5 Game Development 通过；之前阶段的 `multiplayer.GAS` 2/2、9 项 InitStats、7 项 Capture 策略、公式矩阵与 M6/M6Intent 行为核验通过 | 当前胜利接口的 Editor Target/蓝图编译回归；Dedicated Server 构建；带断言的服务器+双客户端功能自动化 |
-| 运行验收 | M5 `20260815_002532` 清点正常；M6 `20260815_002809` 95/95；此前 M6Intent 0ms/约 300ms RTT 两轮各 52/52，最终二进制 0ms `20260815_004559` 再次 52/52 | 可见双窗口胜利 UI 点击、Host 反向输入、DamageIntent loss/快速移动/友军/遮挡、晚加入、持续 Cue 死亡、人工 HUD 验收 |
+| 运行验收 | 阶段 4 版本的 M5/M6/M6Intent Headless 回归通过；`20260815_004559` 是胜利 UI 接口重构前的阶段 4 二进制证据 | 当前胜利接口的 Editor/蓝图回归、可见双窗口胜利 UI 点击、Host 反向输入、DamageIntent loss/快速移动/友军/遮挡、晚加入、持续 Cue 死亡、人工 HUD 验收 |
 | 性能证据 | 约 300ms RTT 的 PredictionKey 时序与次数清点 | Network Insights、RPC/字节数、Full/Mixed 对照、P95/P99 和同条件优化前后数据 |
 
 面试中应使用下面的准确措辞：
@@ -1235,7 +1239,7 @@ GE constructor
 
 ### 12.1 已知不足
 
-1. DamageIntent 当前只做 50ms 最小间隔，尚未实现 token bucket、异常 strike/封禁、专用 Trace Channel 和历史回溯；弱网也只有 0ms/约 300ms RTT，无 loss 样本。
+1. DamageIntent 当前只做 50ms 最小间隔，尚未实现 token bucket、异常 strike/封禁、专用 Trace Channel 和历史回溯；它的弱网证据只有 0ms/约 300ms RTT且无 loss。Immunity 真 Reject 另有一组 5% loss 样本，但不能外推为 DamageIntent 或完整丢包矩阵。
 2. GameplayCue 目前是 PointLight 技术占位；没有 Niagara、音效、Montage 和可视录屏证据；瞬时 Cue 也不能倒放回滚。
 3. 治疗只能治疗自己，合作性还不够强。
 4. M5 日志工具只做清点；M6 Reject 和 DamageIntent 已有失败退出的行为断言，但仍只是 Listen Server + 1 Client，不是服务器+2 Clients 统一自动化。
@@ -1261,9 +1265,9 @@ GE constructor
 | P0-01 | 双窗口人工验收 | 部分通过 | Client 接受、Immunity Reject 和 DamageIntent 语义拒绝日志链已通过；仍需 Host 反向输入和可视录屏 |
 | P0-02 | 正式 Enhanced Input 接线 | 已实现，待人工输入验收 | InputAction/InputMappingContext 已驱动 InputTag；测试目标键仅在显式 Developer Harness 参数下启用 |
 | P0-03 | AbilitySet/GE 数据化资产 | 部分实现 | 正式 Character 以 AbilitySet 为唯一授予源；技能等级及部分 GE 数值仍需进一步资产化 |
-| P0-04 | 正式 GAS HUD | 已实现，待完整人工验收 | 本地 UI 已显示属性、Cooldown 和状态并支持重绑；Reject 的技术状态日志通过，正式提示与可视回归仍待补 |
+| P0-04 | 正式 GAS HUD | C++ fallback 已实现，待正式视觉验收 | Presenter/Widget 代码可显示属性、Cooldown 和状态并支持重绑；Reject 技术日志通过，但 M1 双窗口 HUD 可视矩阵与正式美术 Widget 仍待补 |
 | P0-05 | 技能表现 | 部分通过 | 原生 Cue 的预测/确认/生命周期与 Pending Reject 收口日志通过；Montage、Niagara、音效和人工视觉待补 |
-| P0-06 | 合作型目标选择 | 部分实现 | 治疗/免疫可选择队友；伤害、治疗和免疫根据队伍规则验证目标 |
+| P0-06 | 合作型目标选择 | 部分实现 | Damage 已做敌我验证；Heal 与 Immunity 当前均为自用，队友治疗/免疫选择尚未实现 |
 | P0-07 | 最终瞄准/选择方案 | 核心实现 | 准星 Sweep 只生成本地预览；服务器校验 DamageIntent 后在当前世界重建 SingleTargetHit；快速移动/遮挡专项仍待验 |
 | P0-08 | 死亡、复活与输入收口 | 核心通过 | M3 的死亡幂等、清理、3 秒复活和 ASC 重绑已通过 0ms/弱网接受路径；断线/持续 Cue 死亡待验 |
 | P0-09 | 机关和胜利流程回归 | C++ 接口完成，蓝图待接线 | Presenter 的本地一次性胜利事件和服务器重开意图已接入；仍需在正式 Character/`winandquit` 中完成蓝图图表，并两窗口完成钥匙、机关、WinArea、重开/退出及录像 |
@@ -1368,4 +1372,4 @@ M0～M5 的核心实现与客户端接受路径、M6 的真实激活拒绝回滚
 
 > 已完成复杂战斗数值、完整预测回滚、Dedicated Server、弱网优化和性能提升。
 
-其中“复杂战斗数值”仍需要更完整的属性捕获/装备体系；“所有技能完整预测回滚、Dedicated、弱网优化和性能提升”仍需要 M6～M9 的请求防护、结果拒绝、完整丢包、专服与 Insights 证据。已有 Immunity 真 Reject、ExecCalc/Context/Cue 接受路径不能被抹掉，也不能被外推成完整网络优化。
+其中 AttackPower/Armor/Critical/Resistance 的 Snapshot/Live Capture 与公式核心已完成；仍缺装备/技能等级数据化、平衡和非默认数值双端集成。“所有技能完整预测回滚、Dedicated、弱网优化和性能提升”仍需要完整丢包、专服、晚加入与 Insights 证据。已有 Immunity 真 Reject、ExecCalc/Context/Cue 接受路径不能被抹掉，也不能被外推成完整网络优化。

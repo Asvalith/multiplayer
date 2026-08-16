@@ -15,6 +15,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "multiplayer.h"
+#include "Team/multiplayerCoopTeamAgentInterface.h"
 #include "Team/multiplayerTeamLibrary.h"
 
 UmultiplayerGameplayAbility::UmultiplayerGameplayAbility()
@@ -22,6 +23,183 @@ UmultiplayerGameplayAbility::UmultiplayerGameplayAbility()
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
 	ActivationBlockedTags.AddTag(MultiplayerGameplayTags::State_Dead);
+}
+
+void UmultiplayerGameplayAbility::EndAbility(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo,
+	bool bReplicateEndAbility,
+	bool bWasCancelled)
+{
+	if (bWasCancelled
+		&& bPresentationStarted
+		&& !bPresentationCompleted
+		&& !bPresentationRejected)
+	{
+		if (PresentationMontage.bStopOnCancelled)
+		{
+			StopPresentationMontage(PresentationMontage.RejectBlendOutSeconds);
+		}
+		DispatchAbilityPresentation(
+			EmultiplayerAbilityPresentationPhase::Cancelled,
+			ActivePresentationTag,
+			ActivePresentationPredictionKey);
+	}
+
+	Super::EndAbility(
+		Handle,
+		ActorInfo,
+		ActivationInfo,
+		bReplicateEndAbility,
+		bWasCancelled);
+}
+
+void UmultiplayerGameplayAbility::BeginAbilityPresentation(
+	const FGameplayTag& AbilityTag)
+{
+	ActivePresentationTag = AbilityTag;
+	bPresentationStarted = true;
+	bPresentationCompleted = false;
+	bPresentationRejected = false;
+
+	UAbilitySystemComponent* SourceASC = GetAbilitySystemComponentFromActorInfo();
+	const FPredictionKey PredictionKey = SourceASC != nullptr
+		? SourceASC->GetPredictionKeyForNewAction()
+		: FPredictionKey();
+	ActivePresentationPredictionKey = PredictionKey.Current;
+
+	const bool bAuthority = SourceASC != nullptr
+		&& SourceASC->IsOwnerActorAuthoritative();
+	DispatchAbilityPresentation(
+		bAuthority
+			? EmultiplayerAbilityPresentationPhase::AuthorityStarted
+			: EmultiplayerAbilityPresentationPhase::PredictedStarted,
+		AbilityTag,
+		ActivePresentationPredictionKey);
+
+	if (SourceASC != nullptr && PresentationMontage.Montage != nullptr)
+	{
+		SourceASC->PlayMontage(
+			this,
+			CurrentActivationInfo,
+			PresentationMontage.Montage,
+			FMath::Max(PresentationMontage.PlayRate, 0.01f),
+			PresentationMontage.StartSection);
+	}
+
+	UE_LOG(
+		LogMultiplayerGAS,
+		Display,
+		TEXT("GAS_PRESENTATION Phase=%s Ability=%s PredictionKey=%d Montage=%s Avatar=%s"),
+		bAuthority ? TEXT("AuthorityStarted") : TEXT("PredictedStarted"),
+		*AbilityTag.ToString(),
+		static_cast<int32>(ActivePresentationPredictionKey),
+		*GetNameSafe(PresentationMontage.Montage),
+		*GetNameSafe(GetAvatarActorFromActorInfo()));
+}
+
+void UmultiplayerGameplayAbility::CompleteAbilityPresentation()
+{
+	if (!bPresentationStarted || bPresentationCompleted || bPresentationRejected)
+	{
+		return;
+	}
+
+	bPresentationCompleted = true;
+	DispatchAbilityPresentation(
+		EmultiplayerAbilityPresentationPhase::Completed,
+		ActivePresentationTag,
+		ActivePresentationPredictionKey);
+}
+
+void UmultiplayerGameplayAbility::RejectAbilityPresentation(
+	const FGameplayTag& AbilityTag,
+	int16 PredictionKey)
+{
+	if (PredictionKey != 0 && RejectedPresentationKeys.Contains(PredictionKey))
+	{
+		return;
+	}
+	if (PredictionKey != 0)
+	{
+		RejectedPresentationKeys.Add(PredictionKey);
+	}
+
+	const bool bMatchesCurrentPresentation = bPresentationStarted
+		&& AbilityTag.MatchesTagExact(ActivePresentationTag)
+		&& (PredictionKey == 0
+			|| ActivePresentationPredictionKey == 0
+			|| PredictionKey == ActivePresentationPredictionKey);
+	if (bMatchesCurrentPresentation)
+	{
+		bPresentationRejected = true;
+		if (PresentationMontage.bStopOnRejected)
+		{
+			StopPresentationMontage(PresentationMontage.RejectBlendOutSeconds);
+		}
+	}
+
+	DispatchAbilityPresentation(
+		EmultiplayerAbilityPresentationPhase::Rejected,
+		AbilityTag,
+		PredictionKey);
+}
+
+void UmultiplayerGameplayAbility::DispatchAbilityPresentation(
+	EmultiplayerAbilityPresentationPhase Phase,
+	const FGameplayTag& AbilityTag,
+	int16 PredictionKey) const
+{
+	AActor* AvatarActor = GetAvatarActorFromActorInfo();
+	if (!IsValid(AvatarActor)
+		|| CurrentActorInfo == nullptr
+		|| !CurrentActorInfo->IsLocallyControlled()
+		|| (AvatarActor->GetWorld() != nullptr
+			&& AvatarActor->GetWorld()->GetNetMode() == NM_DedicatedServer)
+		|| !AvatarActor->GetClass()->ImplementsInterface(
+			UmultiplayerAbilityPresentationInterface::StaticClass()))
+	{
+		return;
+	}
+
+	FmultiplayerAbilityPresentationEvent Event;
+	Event.AbilityTag = AbilityTag;
+	Event.Phase = Phase;
+	Event.PredictionKey = static_cast<int32>(PredictionKey);
+	Event.bLocallyControlled = true;
+	ImultiplayerAbilityPresentationInterface::Execute_HandleAbilityPresentation(
+		AvatarActor,
+		Event);
+}
+
+void UmultiplayerGameplayAbility::StopPresentationMontage(float BlendOutSeconds)
+{
+	UAbilitySystemComponent* SourceASC = GetAbilitySystemComponentFromActorInfo();
+	if (SourceASC != nullptr
+		&& PresentationMontage.Montage != nullptr
+		&& SourceASC->GetCurrentMontage() == PresentationMontage.Montage)
+	{
+		SourceASC->CurrentMontageStop(FMath::Max(BlendOutSeconds, 0.0f));
+	}
+}
+
+FGameplayTag UmultiplayerGameplayAbility::ResolveAbilityPresentationTag(
+	FName AbilityName)
+{
+	if (AbilityName == TEXT("Damage"))
+	{
+		return MultiplayerGameplayTags::Ability_Damage;
+	}
+	if (AbilityName == TEXT("Heal"))
+	{
+		return MultiplayerGameplayTags::Ability_Heal;
+	}
+	if (AbilityName == TEXT("Immunity"))
+	{
+		return MultiplayerGameplayTags::Ability_Immunity;
+	}
+	return FGameplayTag();
 }
 
 void UmultiplayerGameplayAbility::ExecutePredictedCue(
@@ -220,6 +398,9 @@ void UmultiplayerGameplayAbility::HandlePredictionRejected(
 		static_cast<int32>(ActionPredictionKey.Current),
 		static_cast<int32>(ActionPredictionKey.Base),
 		*GetNameSafe(GetAvatarActorFromActorInfo()));
+	RejectAbilityPresentation(
+		ResolveAbilityPresentationTag(AbilityName),
+		ActionPredictionKey.Current);
 	LogPredictionState(
 		TEXT("RejectedReconciled"),
 		AbilityName,
@@ -249,367 +430,18 @@ void UmultiplayerGameplayAbility::HandlePredictionCaughtUp(
 		*SpecHandle.ToString(),
 		static_cast<int32>(PredictionKey),
 		*GetNameSafe(GetAvatarActorFromActorInfo()));
+	const bool bWasRejected = RejectedPresentationKeys.Remove(PredictionKey) > 0;
+	if (bReconciledCatchUp && !bWasRejected)
+	{
+		DispatchAbilityPresentation(
+			EmultiplayerAbilityPresentationPhase::Reconciled,
+			ResolveAbilityPresentationTag(AbilityName),
+			PredictionKey);
+	}
 	LogPredictionState(
 		bReconciledCatchUp
 			? TEXT("ReconciledCaughtUp")
 			: TEXT("PostRejectCatchUpIgnored"),
 		AbilityName,
 		PredictionKey);
-}
-
-UmultiplayerDamageAbility::UmultiplayerDamageAbility()
-{
-	FGameplayTagContainer AssetTags;
-	AssetTags.AddTag(MultiplayerGameplayTags::Ability_Damage);
-	SetAssetTags(AssetTags);
-
-	CostGameplayEffectClass = UmultiplayerDamageCostEffect::StaticClass();
-	CooldownGameplayEffectClass = UmultiplayerDamageCooldownEffect::StaticClass();
-}
-
-void UmultiplayerDamageAbility::ActivateAbility(
-	const FGameplayAbilitySpecHandle Handle,
-	const FGameplayAbilityActorInfo* ActorInfo,
-	const FGameplayAbilityActivationInfo ActivationInfo,
-	const FGameplayEventData* TriggerEventData)
-{
-	ActiveTargetTask = nullptr;
-	UmultiplayerAbilityTask_TargetActor* TargetTask =
-		UmultiplayerAbilityTask_TargetActor::CreateTargetActorTask(this, TargetRange);
-	if (TargetTask == nullptr)
-	{
-		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
-		return;
-	}
-
-	TargetTask->ValidData.AddDynamic(this, &UmultiplayerDamageAbility::HandleTargetData);
-	ActiveTargetTask = TargetTask;
-	TargetTask->ReadyForActivation();
-}
-
-void UmultiplayerDamageAbility::HandleTargetData(
-	const FGameplayAbilityTargetDataHandle& TargetData)
-{
-	AActor* TargetActor = nullptr;
-	if (TargetData.Num() == 1 && TargetData.Get(0) != nullptr)
-	{
-		const TArray<TWeakObjectPtr<AActor>> Actors = TargetData.Get(0)->GetActors();
-		TargetActor = Actors.Num() > 0 ? Actors[0].Get() : nullptr;
-	}
-	const uint32 ShotId = ActiveTargetTask != nullptr
-		? ActiveTargetTask->GetResolvedShotId()
-		: 0;
-	// The task is single-shot. Clear our transient reference before any branch
-	// can end the ability, including semantic rejection and Commit failure.
-	ActiveTargetTask = nullptr;
-
-	const bool bIsAuthority = CurrentActorInfo != nullptr && CurrentActorInfo->IsNetAuthority();
-	const bool bTargetIsValid = bIsAuthority
-		? IsServerTargetValid(TargetActor)
-		: ShotId != 0;
-	UmultiplayerAbilitySystemComponent* SourceASC =
-		Cast<UmultiplayerAbilitySystemComponent>(
-			GetAbilitySystemComponentFromActorInfo());
-	if ((bIsAuthority && (TargetData.Num() != 1 || TargetData.Get(0) == nullptr))
-		|| ShotId == 0)
-	{
-		// An empty resolved handle means the server task already rejected the
-		// request and sent the precise result. Do not emit a second generic verdict.
-		EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
-		return;
-	}
-	if (!bTargetIsValid)
-	{
-		if (bIsAuthority && SourceASC != nullptr)
-		{
-			SourceASC->ClientDamageIntentResult(
-				ShotId,
-				EmultiplayerDamageIntentResult::InvalidTarget);
-		}
-		EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
-		return;
-	}
-
-	UAbilitySystemComponent* TargetASC = nullptr;
-	FGameplayEffectSpecHandle DamageSpec;
-	if (bIsAuthority)
-	{
-		TargetASC = UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent(TargetActor);
-		if (TargetASC == nullptr)
-		{
-			if (SourceASC != nullptr)
-			{
-				SourceASC->ClientDamageIntentResult(
-					ShotId,
-					EmultiplayerDamageIntentResult::InvalidTarget);
-			}
-			EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
-			return;
-		}
-
-		DamageSpec = MakeOutgoingGameplayEffectSpec(
-			UmultiplayerDamageEffect::StaticClass(),
-			GetAbilityLevel());
-		if (!DamageSpec.IsValid())
-		{
-			if (SourceASC != nullptr)
-			{
-				SourceASC->ClientDamageIntentResult(
-					ShotId,
-					EmultiplayerDamageIntentResult::CommitFailed);
-			}
-			EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
-			return;
-		}
-	}
-	if (!CommitAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo))
-	{
-		if (bIsAuthority && SourceASC != nullptr)
-		{
-			SourceASC->ClientDamageIntentResult(
-				ShotId,
-				EmultiplayerDamageIntentResult::CommitFailed);
-		}
-		EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
-		return;
-	}
-
-	ExecutePredictedCue(
-		MultiplayerGameplayTags::GameplayCue_Coop_Damage_Cast,
-		TEXT("Damage"));
-
-	if (bIsAuthority)
-	{
-		if (const FHitResult* TargetHit = TargetData.Get(0)->GetHitResult())
-		{
-			// On authority this SingleTargetHit was created after the server trace;
-			// the replicated DamageIntent itself contains no HitResult or Actor.
-			DamageSpec.Data->GetContext().AddHitResult(*TargetHit, true);
-		}
-		DamageSpec.Data->SetSetByCallerMagnitude(
-			MultiplayerGameplayTags::Data_Damage,
-			DamageAmount);
-		GetAbilitySystemComponentFromActorInfo()->ApplyGameplayEffectSpecToTarget(
-			*DamageSpec.Data.Get(),
-			TargetASC);
-
-		const float RemainingHealth = TargetASC->GetNumericAttribute(
-			UmultiplayerAttributeSet::GetHealthAttribute());
-		FGameplayEffectSpecHandle VulnerabilitySpec = RemainingHealth > 0.0f
-			? MakeOutgoingGameplayEffectSpec(
-				UmultiplayerVulnerabilityEffect::StaticClass(),
-				GetAbilityLevel())
-			: FGameplayEffectSpecHandle();
-		if (VulnerabilitySpec.IsValid())
-		{
-			const FActiveGameplayEffectHandle VulnerabilityHandle =
-				GetAbilitySystemComponentFromActorInfo()->ApplyGameplayEffectSpecToTarget(
-					*VulnerabilitySpec.Data.Get(),
-					TargetASC);
-			FGameplayTagContainer VulnerabilityTags;
-			VulnerabilityTags.AddTag(MultiplayerGameplayTags::State_Vulnerable);
-			const int32 ActiveStacks = TargetASC->GetAggregatedStackCount(
-				FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(VulnerabilityTags));
-			UE_LOG(
-				LogMultiplayerGAS,
-				Display,
-				TEXT("GAS_VULNERABILITY Target=%s Stacks=%d Effect=%s"),
-				*GetNameSafe(TargetActor),
-				ActiveStacks,
-				*TargetASC->GetActiveGEDebugString(VulnerabilityHandle));
-		}
-		else
-		{
-			UE_LOG(
-				LogMultiplayerGAS,
-				Display,
-				TEXT("GAS_VULNERABILITY Target=%s Skipped=TargetDead"),
-				*GetNameSafe(TargetActor));
-		}
-
-		UE_LOG(
-			LogMultiplayerGAS,
-			Log,
-			TEXT("Server applied %.1f damage: %s -> %s"),
-			DamageAmount,
-			*GetNameSafe(GetAvatarActorFromActorInfo()),
-			*GetNameSafe(TargetActor));
-		UE_LOG(
-			LogMultiplayerGAS,
-			Display,
-			TEXT("GAS_M6_INTENT Phase=Committed ShotId=%u Spec=%s PredictionKey=%s Target=%s RemainingHealth=%.1f"),
-			ShotId,
-			*CurrentSpecHandle.ToString(),
-			*CurrentActivationInfo.GetActivationPredictionKey().ToString(),
-			*GetNameSafe(TargetActor),
-			RemainingHealth);
-		if (SourceASC != nullptr)
-		{
-			SourceASC->ClientDamageIntentResult(
-				ShotId,
-				EmultiplayerDamageIntentResult::Accepted);
-		}
-	}
-
-	EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
-}
-
-bool UmultiplayerDamageAbility::IsServerTargetValid(AActor* TargetActor) const
-{
-	AActor* AvatarActor = GetAvatarActorFromActorInfo();
-	UWorld* World = AvatarActor != nullptr ? AvatarActor->GetWorld() : nullptr;
-	if (World == nullptr
-		|| TargetActor == nullptr
-		|| TargetActor == AvatarActor
-		|| TargetActor->IsActorBeingDestroyed())
-	{
-		return false;
-	}
-
-	if (FVector::DistSquared(AvatarActor->GetActorLocation(), TargetActor->GetActorLocation())
-		> FMath::Square(TargetRange + 50.0f))
-	{
-		return false;
-	}
-
-	if (!UmultiplayerTeamLibrary::AreHostile(AvatarActor, TargetActor))
-	{
-		UE_LOG(
-			LogMultiplayerGAS,
-			Warning,
-			TEXT("Damage target rejected: source=%s target=%s reason=NotHostile"),
-			*GetNameSafe(AvatarActor),
-			*GetNameSafe(TargetActor));
-		return false;
-	}
-
-	UAbilitySystemComponent* TargetASC =
-		UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent(TargetActor);
-	if (TargetASC == nullptr
-		|| !TargetASC->HasMatchingGameplayTag(MultiplayerGameplayTags::Team_Enemy)
-		|| TargetASC->HasMatchingGameplayTag(MultiplayerGameplayTags::Team_Player)
-		|| TargetASC->GetNumericAttribute(UmultiplayerAttributeSet::GetHealthAttribute()) <= 0.0f)
-	{
-		return false;
-	}
-
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(GASDamageTargetValidation), false, AvatarActor);
-	FHitResult HitResult;
-	const bool bBlocked = World->LineTraceSingleByChannel(
-		HitResult,
-		AvatarActor->GetActorLocation(),
-		TargetActor->GetActorLocation(),
-		ECC_Visibility,
-		QueryParams);
-
-	return !bBlocked || HitResult.GetActor() == TargetActor;
-}
-
-UmultiplayerHealAbility::UmultiplayerHealAbility()
-{
-	FGameplayTagContainer AssetTags;
-	AssetTags.AddTag(MultiplayerGameplayTags::Ability_Heal);
-	SetAssetTags(AssetTags);
-
-	CostGameplayEffectClass = UmultiplayerHealCostEffect::StaticClass();
-	CooldownGameplayEffectClass = UmultiplayerHealCooldownEffect::StaticClass();
-}
-
-void UmultiplayerHealAbility::ActivateAbility(
-	const FGameplayAbilitySpecHandle Handle,
-	const FGameplayAbilityActorInfo* ActorInfo,
-	const FGameplayAbilityActivationInfo ActivationInfo,
-	const FGameplayEventData* TriggerEventData)
-{
-	if (!CommitAbility(Handle, ActorInfo, ActivationInfo))
-	{
-		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
-		return;
-	}
-
-	ExecutePredictedCue(
-		MultiplayerGameplayTags::GameplayCue_Coop_Heal_Cast,
-		TEXT("Heal"));
-
-	if (ActorInfo != nullptr && ActorInfo->IsNetAuthority())
-	{
-		FGameplayEffectSpecHandle HealSpec = MakeOutgoingGameplayEffectSpec(
-			UmultiplayerHealingEffect::StaticClass(),
-			GetAbilityLevel());
-		if (HealSpec.IsValid())
-		{
-			HealSpec.Data->SetSetByCallerMagnitude(
-				MultiplayerGameplayTags::Data_Heal,
-				HealingAmount);
-			GetAbilitySystemComponentFromActorInfo()->ApplyGameplayEffectSpecToSelf(
-				*HealSpec.Data.Get());
-			UE_LOG(
-				LogMultiplayerGAS,
-				Log,
-				TEXT("Server applied %.1f healing to %s"),
-				HealingAmount,
-				*GetNameSafe(GetAvatarActorFromActorInfo()));
-		}
-	}
-
-	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
-}
-
-UmultiplayerImmunityAbility::UmultiplayerImmunityAbility()
-{
-	FGameplayTagContainer AssetTags;
-	AssetTags.AddTag(MultiplayerGameplayTags::Ability_Immunity);
-	SetAssetTags(AssetTags);
-
-	CostGameplayEffectClass = UmultiplayerImmunityCostEffect::StaticClass();
-	CooldownGameplayEffectClass = UmultiplayerImmunityCooldownEffect::StaticClass();
-}
-
-void UmultiplayerImmunityAbility::ActivateAbility(
-	const FGameplayAbilitySpecHandle Handle,
-	const FGameplayAbilityActorInfo* ActorInfo,
-	const FGameplayAbilityActivationInfo ActivationInfo,
-	const FGameplayEventData* TriggerEventData)
-{
-	if (!CommitAbility(Handle, ActorInfo, ActivationInfo))
-	{
-		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
-		return;
-	}
-
-	ApplyPredictionLabPendingEffect();
-	ApplyGameplayEffectToOwner(
-		Handle,
-		ActorInfo,
-		ActivationInfo,
-		UmultiplayerImmunityEffect::StaticClass()->GetDefaultObject<UGameplayEffect>(),
-		GetAbilityLevel());
-	TrackPrediction(TEXT("Immunity"));
-
-	const UAbilitySystemComponent* SourceASC = GetAbilitySystemComponentFromActorInfo();
-	const FPredictionKey PredictionKey = SourceASC != nullptr
-		? SourceASC->GetPredictionKeyForNewAction()
-		: FPredictionKey();
-	const bool bIsAuthority = ActorInfo != nullptr && ActorInfo->IsNetAuthority();
-	LogPredictionState(
-		bIsAuthority ? TEXT("AuthorityCommitted") : TEXT("PredictedCommitted"),
-		TEXT("Immunity"),
-		PredictionKey.Current);
-	UE_LOG(
-		LogMultiplayerGAS,
-		Display,
-		TEXT("GAS_M6_IMMUNITY Phase=%s Ability=Immunity Spec=%s PredictionKey=%s Avatar=%s"),
-		bIsAuthority ? TEXT("AuthorityCommitted") : TEXT("PredictedCommitted"),
-		*Handle.ToString(),
-		*PredictionKey.ToString(),
-		*GetNameSafe(GetAvatarActorFromActorInfo()));
-
-	UE_LOG(
-		LogMultiplayerGAS,
-		Log,
-		TEXT("%s applied predicted immunity to %s"),
-		ActorInfo != nullptr && ActorInfo->IsNetAuthority() ? TEXT("Server") : TEXT("Client"),
-		*GetNameSafe(GetAvatarActorFromActorInfo()));
-
-	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }

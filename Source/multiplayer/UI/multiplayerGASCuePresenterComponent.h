@@ -10,6 +10,14 @@
 class UPointLightComponent;
 class UmultiplayerAbilitySystemComponent;
 
+/** Selects one visual owner so native debug lights and formal Cue assets never double-play. */
+UENUM(BlueprintType)
+enum class EmultiplayerCuePresentationOwner : uint8
+{
+	NativeDebugFallback,
+	GameplayCueAssets
+};
+
 /**
  * Local presentation adapter for the project's asset-free GameplayCue lights.
  *
@@ -53,6 +61,11 @@ public:
 		return bGameplayCuePredictionPendingActive;
 	}
 
+	EmultiplayerCuePresentationOwner GetPresentationOwner() const
+	{
+		return PresentationOwner;
+	}
+
 protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
@@ -80,6 +93,15 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UmultiplayerAbilitySystemComponent> AbilitySystemComponent;
+
+	/**
+	 * Native lights are an asset-free debug fallback. Switch the formal Character
+	 * Blueprint to GameplayCueAssets after Niagara/audio Cue assets are connected.
+	 * Prediction.Pending remains native because it is a development-only probe.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "GAS|Cue", meta = (AllowPrivateAccess = "true"))
+	EmultiplayerCuePresentationOwner PresentationOwner =
+		EmultiplayerCuePresentationOwner::NativeDebugFallback;
 
 	FTimerHandle GameplayCueFlashTimer;
 	FDelegateHandle PredictionLabReconciledHandle;

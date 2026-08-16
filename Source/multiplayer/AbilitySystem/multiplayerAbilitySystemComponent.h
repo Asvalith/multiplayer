@@ -12,6 +12,11 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(
 	bool /* bRejected */,
 	int16 /* PredictionKey */);
 
+DECLARE_MULTICAST_DELEGATE_TwoParams(
+	FOnDamageIntentResultReceived,
+	uint32 /* ShotId */,
+	EmultiplayerDamageIntentResult /* Result */);
+
 UCLASS()
 class MULTIPLAYER_API UmultiplayerAbilitySystemComponent : public UAbilitySystemComponent
 {
@@ -38,6 +43,10 @@ public:
 	EmultiplayerDamageIntentResult GetLastDamageIntentResult() const
 	{
 		return LastDamageIntentResult;
+	}
+	FOnDamageIntentResultReceived& OnDamageIntentResultReceived()
+	{
+		return DamageIntentResultReceivedEvent;
 	}
 
 	/** Arms exactly one server-side Immunity activation failure for the M6 lab. */
@@ -102,5 +111,6 @@ private:
 	uint32 LastDamageIntentResultShotId = 0;
 	EmultiplayerDamageIntentResult LastDamageIntentResult =
 		EmultiplayerDamageIntentResult::InvalidSchema;
+	FOnDamageIntentResultReceived DamageIntentResultReceivedEvent;
 	FOnPredictionLabReconciled PredictionLabReconciledEvent;
 };

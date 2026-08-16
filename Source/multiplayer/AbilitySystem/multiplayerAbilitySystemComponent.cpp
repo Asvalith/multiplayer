@@ -123,6 +123,10 @@ void UmultiplayerAbilitySystemComponent::ClientDamageIntentResult_Implementation
 			GetMultiplayerDamageIntentResultName(Result),
 			*GetNameSafe(GetOwnerActor()));
 	}
+
+	// Presentation and ability lifetime may observe the semantic verdict, but
+	// this client notification never mutates authoritative damage state.
+	DamageIntentResultReceivedEvent.Broadcast(ShotId, Result);
 }
 
 void UmultiplayerAbilitySystemComponent::SetDamageIntentLabMutation(

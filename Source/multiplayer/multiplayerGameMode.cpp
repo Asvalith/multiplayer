@@ -7,7 +7,6 @@
 #include "Player/multiplayerGASPlayerState.h"
 #include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
-#include "UObject/SoftObjectPath.h"
 
 AmultiplayerGameMode::AmultiplayerGameMode()
 {
@@ -20,20 +19,6 @@ AmultiplayerGameMode::AmultiplayerGameMode()
 	{
 		DefaultPawnClass = PlayerPawnBPClass.Class;
 	}
-}
-
-void AmultiplayerGameMode::HostLANGame()
-{
-	UWorld* World = GetWorld();
-	if (World == nullptr || !HasAuthority())
-	{
-		return;
-	}
-
-	const FString TravelMapPath = FSoftObjectPath(LANMapPath).GetLongPackageName();
-	const FString TravelUrl = (TravelMapPath.IsEmpty() ? LANMapPath : TravelMapPath) + TEXT("?listen");
-
-	World->ServerTravel(TravelUrl);
 }
 
 void AmultiplayerGameMode::BeginPlay()
@@ -49,21 +34,6 @@ void AmultiplayerGameMode::BeginPlay()
 			Log,
 			TEXT("Coop objective configured: RequiredKeys=%d RequiredPlayersInWinArea=2"),
 			RequiredKeys);
-	}
-}
-
-void AmultiplayerGameMode::JoinLANGame()
-{
-	UWorld* World = GetWorld();
-	if (World == nullptr)
-	{
-		return;
-	}
-
-	APlayerController* PlayerController = World->GetFirstPlayerController();
-	if (PlayerController != nullptr)
-	{
-		PlayerController->ClientTravel(LANServerAddress, TRAVEL_Absolute);
 	}
 }
 

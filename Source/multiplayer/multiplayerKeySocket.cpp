@@ -44,19 +44,11 @@ bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 		return false;
 	}
 
-	bActivated = true;
-	ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	ForceNetUpdate();
-	OnRep_Activated();
-
-	if (AmultiplayerCoopGameState* CoopState =
-		GetWorld()->GetGameState<AmultiplayerCoopGameState>())
-	{
-		CoopState->RegisterActivatedKey();
-	}
+	CommitServerActivation();
 
 	return true;
 }
+
 void AmultiplayerKeySocket::GetLifetimeReplicatedProps(
 	TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -85,6 +77,16 @@ void AmultiplayerKeySocket::HandleSocketOverlap(
 
 	AmultiplayerCoopKey* Key = FindCarriedKey(Character);
 	if (Key == nullptr || !Key->ConsumeAtSocket())
+	{
+		return;
+	}
+
+	CommitServerActivation();
+}
+
+void AmultiplayerKeySocket::CommitServerActivation()
+{
+	if (!HasAuthority() || bActivated)
 	{
 		return;
 	}

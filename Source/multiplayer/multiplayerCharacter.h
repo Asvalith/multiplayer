@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AbilitySystemInterface.h"
+#include "AbilitySystem/Abilities/multiplayerAbilityPresentationInterface.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "GameplayCueInterface.h"
@@ -29,7 +30,10 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnMultiplayerAbilitySystemInitialized);
 
 UCLASS(config=Game)
-class AmultiplayerCharacter : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface
+class AmultiplayerCharacter : public ACharacter,
+	public IAbilitySystemInterface,
+	public IGameplayCueInterface,
+	public ImultiplayerAbilityPresentationInterface
 {
 	GENERATED_BODY()
 
@@ -94,6 +98,8 @@ public:
 	virtual void GameplayCueDefaultHandler(
 		EGameplayCueEvent::Type EventType,
 		const FGameplayCueParameters& Parameters) override;
+	virtual void HandleAbilityPresentation_Implementation(
+		const FmultiplayerAbilityPresentationEvent& Event) override;
 
 	UFUNCTION(BlueprintPure, Category = "GAS")
 	UmultiplayerAbilitySystemComponent* GetMultiplayerAbilitySystemComponent() const;

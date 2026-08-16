@@ -354,8 +354,6 @@ UmultiplayerAbilityTask_TargetActor::ResolveAuthorityIntent(
 	if (Candidate == AvatarActor
 		|| Candidate->IsActorBeingDestroyed()
 		|| !UmultiplayerTeamLibrary::AreHostile(AvatarActor, Candidate)
-		|| !CandidateASC->HasMatchingGameplayTag(MultiplayerGameplayTags::Team_Enemy)
-		|| CandidateASC->HasMatchingGameplayTag(MultiplayerGameplayTags::Team_Player)
 		|| CandidateASC->GetNumericAttribute(
 			UmultiplayerAttributeSet::GetHealthAttribute()) <= 0.0f)
 	{
@@ -475,8 +473,6 @@ bool UmultiplayerAbilityTask_TargetActor::FindCrosshairHostileHit(
 		UAbilitySystemComponent* CandidateASC =
 			UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent(Candidate);
 		if (CandidateASC == nullptr
-			|| !CandidateASC->HasMatchingGameplayTag(MultiplayerGameplayTags::Team_Enemy)
-			|| CandidateASC->HasMatchingGameplayTag(MultiplayerGameplayTags::Team_Player)
 			|| CandidateASC->GetNumericAttribute(
 				UmultiplayerAttributeSet::GetHealthAttribute()) <= 0.0f)
 		{

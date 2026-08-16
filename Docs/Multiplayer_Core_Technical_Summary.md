@@ -1,5 +1,7 @@
 # UE5 Co-op 网络项目统一技术复习文档
 
+> **历史工程记录**：本文保留 `demov1 -> coop-GAS` 的演进信息，不再维护当前完成度、TODO 或面试口述。当前入口为 [README](../README.md)、[面试复习资料](GAS_Interview_Completed_Snapshot.md)和[TODO](GAS_Portfolio_Technical_Route.md)。
+
 > 更新日期：2026-08-15
 > 项目路径：`E:\ueprojrct\multiplayer`
 > 原则：只把代码和运行证据能够证明的内容写成成果；待蓝图接入或待双端验证的内容明确标注。
@@ -19,7 +21,7 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 
 - Co-op 规则与 GAS C++ 核心：已形成可编译闭环；完成度不再用主观百分比代替门禁。
 - 完整编译：阶段 4 与旧胜利 UI 版本曾通过 UE5.5 Development Editor/Game；当前 `ReceiveCoopGameWon` 蓝图事件接口已通过 Development Game，Editor Target 需在安全关闭运行中 Editor 后重编。
-- 自动化：`multiplayer.GAS` 2/2；M6 95/95；此前 M6Intent 0ms/约 300ms RTT 两轮各 52/52，追加安全门禁后的最终二进制 0ms `20260815_004559` 再次 52/52。
+- 阶段 4 自动化：`multiplayer.GAS` 2/2；M6 95/95；M6Intent 0ms/约 300ms RTT 两轮各 52/52，追加安全门禁后的阶段 4 二进制 0ms `20260815_004559` 再次 52/52；该证据早于胜利 UI 接口重构。
 - 胜利 UI：Presenter 已完成 `GameState.OnGameWon -> Character.ReceiveCoopGameWon`的本地一次性转发；`BP_ThirdPersonCharacter` 创建 `winandquit`、输入/鼠标以及中文重开按钮节点待 Editor 关闭后接线、编译和双窗口验收。
 - Dedicated、晚加入、完整丢包矩阵与 Network Insights：未完成，不能作为已有成果。
 
@@ -1721,7 +1723,7 @@ AttributeSet 现在除 Health/Energy 外，还复制 AttackPower、Armor、Criti
 -> IncomingDamage
 ```
 
-Editor/Game 编译、`multiplayer.GAS` 2/2 和扩展后的 M5/M6/M6Intent 回归均通过；最终二进制 0ms 回归为 `20260815_004559`，52/52。旧 `GAS_DAMAGE_EXEC` 前六字段保持不变，新中间值只追加在后面，避免破坏既有 M6Intent 正则证据链。装备数值资产化、正式 UI、Dedicated、晚加入和 Network Insights 仍待完成。
+阶段 4 的 Editor/Game 编译、`multiplayer.GAS` 2/2 和扩展后的 M5/M6/M6Intent 回归均通过；阶段 4 二进制 0ms 回归 `20260815_004559` 为 52/52。该运行早于后续胜利 UI 接口重构，因此只证明当时的 GAS/数值链，不证明当前蓝图已接线。旧 `GAS_DAMAGE_EXEC` 前六字段保持不变，新中间值只追加在后面，避免破坏既有 M6Intent 正则证据链。装备数值资产化、正式 UI、Dedicated、晚加入和 Network Insights 仍待完成。
 
 ---
 

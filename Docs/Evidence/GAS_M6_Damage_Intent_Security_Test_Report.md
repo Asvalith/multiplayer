@@ -5,6 +5,7 @@
 > 日期：2026-08-13
 > 正式运行：`20260813_163052`（双向 `PktLag=0`）与 `20260813_163248`（Host、Client 出站各 `PktLag=150ms`，配置上约 300ms RTT）
 > 当前结论：**本报告范围内的 M6 Damage Intent 最小协议、服务器当前世界重建命中、语义拒绝矩阵和拒绝后资源收敛已经通过；这不是完整反作弊、回溯、弱网或性能验收。**
+> 2026-08-16 去重更新：服务器场景查询现由 TargetTask 唯一拥有；Ability 已删除第二次距离/LOS Trace，只在 Commit 前复验目标、ASC、敌我和存活不变量。Run `20260816_110557` 对修改后的链路完成 0ms Listen Server + 1 Client 回归，`52/52 PASS`。原 2026-08-13 运行数据保留为历史证据。
 
 ## 1. 一句话安全模型
 
@@ -27,7 +28,7 @@
 
 - 自定义 `FGameplayAbilityTargetData` 可多态 NetSerialize，落地后仍保持精确 ScriptStruct 类型。
 - payload 中仅有非零 `ShotId`、量化 Origin、量化单位 Direction 和客户端估算的服务器时间；没有 Actor、`HitResult`、伤害数值、暴击或 GE。
-- 当前服务器顺序是：精确 Schema → 消费业务 ShotId → Source 状态 → 字段约束 → 当前世界 Sweep → 敌我/存活/ASC 校验 → 二次目标校验 → 解析 Target ASC 并创建有效 Damage Spec → Commit → 服务器 HitResult 写入 Context → Damage Exec。
+- 当前服务器顺序是：精确 Schema → 消费业务 ShotId → Source 状态 → 字段约束 → 当前世界 Sweep → 敌我/存活/ASC 校验 → Ability 提交前轻量不变量复验 → 创建有效 Damage Spec → Commit → 服务器 HitResult 写入 Context → Damage Exec。
 - 两次正式双进程运行都只提交了 Shot 1 和 Shot 7；Shot 1 重放以及 Shot 2～6 的错误语义均没有服务器 Commit 或伤害。
 - 两次正式运行的专用核验器均为 `52/52 PASS`，并且 Host/Client 均无 Fatal、Critical、Ensure 或 Assertion。
 - 0ms 样本的两个合法服务器 Trace 年龄为约 `0.048s / 0.048s`；150ms/方向样本为约 `0.358s / 0.401s`。这些是日志中的单次样本，不是延迟分布。
@@ -70,7 +71,7 @@
 | 最大 ShotId 前跳 | 64 | 过大前跳或旧序列为 `StaleSequence` |
 | 最小意图间隔 | 0.05 s | 新编号过快为 `RateLimited`，且该编号仍被消费 |
 | 服务器 Trace | 600 cm、半径 35 cm、`ECC_Visibility` Sweep | 在服务器当前世界中查询 |
-| 二次距离保护 | `TargetRange + 50cm` | Ability 层再次校验目标距离和 Visibility LOS |
+| Commit 前不变量 | Target、TargetASC、敌我和 Health | Ability 不再发起第二次场景查询，只防止 Trace 与 Commit 间对象状态变化 |
 
 这些参数是当前实验基线，不是经过玩家命中率、误拒绝率或生产安全数据调优后的最终值。
 
@@ -110,14 +111,14 @@
 6. 服务器检查 Source 未死亡、Health 大于 0。
 7. 服务器比较 Origin、Direction、客户端时间与自己的眼点、朝向、当前时间。
 8. 服务器从自己的眼点出发，沿校验后的方向做 600cm、35cm 半径、Visibility Sweep。客户端 Origin 不作为最终起点。
-9. 命中后检查 Candidate 非自身、未销毁、有 ASC、敌对、带 Enemy Tag、不带 Player Tag且 Health 大于 0。
+9. 命中后检查 Candidate 非自身、未销毁、有 ASC、敌对且 Health 大于 0。TeamId/Team 接口是目标裁决来源，Team Tag 仅保留为 GAS 镜像。
 10. 服务器把自己的 `FHitResult` 包装成新的 `FGameplayAbilityTargetData_SingleTargetHit`；绝不把客户端本地 `SingleTargetHit` 转发到权威链。无论接受还是语义拒绝，广播 resolved/空 handle 后都 `EndTask`。
 
 ### 4.3 Ability 结算与结果回传
 
 1. `UmultiplayerDamageAbility::HandleTargetData` 只在服务器 resolved handle 非空时继续。
-2. `IsServerTargetValid` 再检查 Actor、距离、队伍、存活、ASC 和从 Avatar 到 Target 的 Visibility LOS。
-3. 目标有效后，服务器在 Commit 前重新解析 `TargetASC` 并创建有效的 Damage Spec；TargetASC 缺失返回 `InvalidTarget`，Spec 无效返回 `CommitFailed`，两者都立即结束，避免先消费 Cost/Cooldown 后才发现无法落伤害。
+2. `IsResolvedTargetStillValid` 只复验 Actor、队伍、存活和 ASC；距离、方向、遮挡和服务器 HitResult 均由 TargetTask 的唯一权威 Sweep 决定，不再做第二次 Scene Query。
+3. 目标有效后，服务器复用上述 `TargetASC` 并在 Commit 前创建有效的 Damage Spec；TargetASC 缺失返回 `InvalidTarget`，Spec 无效返回 `CommitFailed`，两者都立即结束，避免先消费 Cost/Cooldown 后才发现无法落伤害。
 4. 只有上述对象齐备才 `CommitAbility`；Commit 本身失败返回 `CommitFailed`。服务器不会为前面的语义拒绝或不可结算终点消耗权威 Cost/Cooldown。
 5. 服务器把**服务器 HitResult** 写入已验证的 EffectContext，设置 SetByCaller Damage，再 Apply 到服务器选中的 Target ASC。
 6. Damage Execution、AttributeSet 和 GameplayCue 读取服务器 Context；服务器记录 `Committed` 并通过 Reliable Client RPC 返回 `Accepted`。
@@ -215,7 +216,7 @@ Server Damage Ability
 | 速率 | 50ms 硬间隔 | 简洁且 fail-closed | 不支持 burst；不是生产级 DoS 防护 |
 | 结果 | Reliable `ClientDamageIntentResult` | 明确、可观测、便于自动断言 | 高频拒绝可能增加 Reliable backlog，需 M8 测量 |
 | Commit 时机 | 目标、TargetASC、Damage Spec 预检后才 Commit | 拒绝和不可结算终点不消费权威资源；每个服务端业务终点有明确 Result | 客户端预测资源仍需等待网络收敛 |
-| 目标校验 | TargetTask 校验 + Ability 二次距离/LOS 校验 | 防御纵深 | 有重复 scene query 成本，M8 决定是否合并 |
+| 目标校验 | TargetTask 独占 Schema、字段与权威场景查询；Ability 只复验易变对象不变量 | 每个请求只有一套几何策略，避免不同起点/形状导致规则漂移 | Commit 前不再重新判断几何；依赖一次性 Task 立即交付 resolved target |
 | Task 生命周期 | 5 秒远端数据上限 + 所有终点 EndTask + OnDestroy 清理 | 防止永远等待、残留 delegate/timer 和活跃 Ability 泄漏 | 超时阈值需按网络分布调优；超时专项分支尚待运行验证 |
 
 ## 8. 验证分层与正式结果
@@ -231,7 +232,7 @@ Server Damage Ability
 | L4 双进程模拟延迟 | 两端各 `PktLag=150` | 相同链在配置约 300ms RTT 下能否贯通 | `20260813_163248`，52/52 PASS |
 | L5 人工视觉/Collision | 非 Headless Editor | Trace 体积、遮挡和表现是否符合设计直觉 | 未作为正式证据执行 |
 | L6 Dedicated/多客户端/丢包 | Dedicated + 2 Clients、loss/jitter matrix | 更广网络拓扑与可靠性 | 未执行 |
-| L7 性能 | Unreal Insights | CPU、网络字节、p95/p99、重复校验成本 | M8，未执行 |
+| L7 性能 | Unreal Insights | CPU、网络字节、p95/p99、单次 Sweep 与结果 RPC 成本 | M8，未执行 |
 
 ### 8.2 Build
 
@@ -411,7 +412,7 @@ RecoveryAccepted   Shot7 Accepted        Energy=80 Cooldown=1
 2. 在客户端按 `7` 让服务器生成/重置 Dummy，按 `Alt+C`（或控制台 `show Collision`）显示碰撞。
 3. 选中 `multiplayerGASTargetDummy`，核对 C++ 设置的 `BlockAllDynamic` 对 `Visibility` 为 Block。
 4. 打开 `Tools/Window > Developer Tools > Collision Analyzer`，Start Recording，触发一次合法射击和一次遮挡射击，Stop。
-5. 过滤 `GASDamageAuthorityTrace` 与 `GASDamageTargetValidation`，检查 600cm/35cm Sweep、二次 LOS、Ignored Actor 和实际阻挡体；同时对照 `AuthorityTrace Impact`。
+5. 过滤 `GASDamageAuthorityTrace`，检查 600cm/35cm Sweep、Ignored Actor、实际阻挡体和 `AuthorityTrace Impact`。Ability 不应再出现 `GASDamageTargetValidation` 查询。
 
 该工具回答：“服务器查询到底被哪个碰撞体、Profile、Channel 和形状阻挡？”它不回答网络包是否安全，也不能替代服务器日志与自动断言。
 
@@ -438,9 +439,9 @@ RecoveryAccepted   Shot7 Accepted        Energy=80 Cooldown=1
 
 打开两份 `.utrace`：
 
-- Timing Insights：过滤 `GASDamageAuthorityTrace`、`GASDamageTargetValidation` 和相关 AbilityTask，比较 Accepted、字段拒绝、Duplicate、Miss 的 CPU 路径。
+- Timing Insights：过滤 `GASDamageAuthorityTrace` 和相关 AbilityTask，比较 Accepted、字段拒绝、Duplicate、Miss 的 CPU 路径，并确认每个合法请求只有一次权威场景查询。
 - Network Insights：检查 TargetData RPC 和 `ClientDamageIntentResult` 的次数、大小、Reliable backlog；确认最小 payload 的实际带宽收益。
-- Frames/Stats：统计每帧意图数量、Trace 时间 P50/P95/P99、重复目标验证成本和峰值。
+- Frames/Stats：统计每帧意图数量、Trace 时间 P50/P95/P99、候选过滤成本和峰值。
 - Bookmarks：M8 应在 `LocalIntent / GuardResult / AuthorityTrace / Committed / ClientResult` 写同一个 ShotId bookmark，避免只靠日志文本对齐。
 
 Insights 回答“这条安全链花了多少 CPU/带宽、尾延迟在哪里”，不回答命中是否公平；公平性属于 M7 rewind 设计和命中验证。
@@ -460,7 +461,7 @@ Insights 回答“这条安全链花了多少 CPU/带宽、尾延迟在哪里”
 | M6-DI-007 | 证据缺口 | 开放 | 正式 run 是 Listen + 1 Client、Headless、0% loss；没有 Dedicated、2 Clients、loss/jitter/reorder | M6 剩余补拓扑和弱网矩阵，不能借用 Immunity Reject Lab 的丢包结论 |
 | M6-DI-008 | 证据缺口 | 开放 | Checkpoint 只证明结果后的资源收敛，不证明拒绝过程无一帧闪烁 | 可见窗口录像 + 帧级状态日志；必要时给 ShotId 驱动的 pending presentation 明确清理 |
 | M6-DI-009 | 可观测性风险 | 开放 | DamageExec/Context 没有 ShotId，Verifier 只能用精确计数和窗口顺序归因 | 把 ShotId 写入自定义 EffectContext并贯穿 Exec/Attribute/Cue/Insights |
-| M6-DI-010 | 性能风险 | 未测 | TargetTask 敌我校验后 Ability 又做距离和 LOS；Reliable Result 在拒绝洪峰下也可能排队 | M8 用 Insights 定量，再决定合并校验、缓存结果或批量遥测 |
+| M6-DI-010 | 代码审查风险（已修正） | 已修正、已编译并完成网络回归 | 旧实现中 TargetTask Sweep 后 Ability 又做另一套距离/LOS Trace，存在重复查询成本与不同几何规则漂移 | 当前由 TargetTask 唯一拥有几何查询，Ability 只复验对象不变量；Run `20260816_110557` 为 52/52 PASS。Reliable Result 在拒绝洪峰下的 backlog 仍需 Insights 测量 |
 | M6-DI-011 | 证据管理风险 | 开放 | 当前工作树未提交，`dc3969f` 不能唯一定位所测内容 | 使用文末 SHA256；合并前提交源码、脚本和证据索引，并在 CI 绑定 commit/build artifact/run |
 | M6-DI-012 | 代码审查风险（已修正） | 已修正、已重编译并重跑正常/语义路径 | 审查发现一次性 TargetTask 需要显式收口：服务端远端数据等待不能无上限，Task 销毁必须清 delegate/timer，客户端初始化失败必须通知 Ability，正常处理也必须结束 Task。该风险没有作为玩家 Bug 在正式运行中复现 | 已实现 5 秒 `TargetDataTimeout`、`OnDestroy` 清理、客户端失败广播空 handle、所有终点 `EndTask`。最终 Editor Build/Automation/两组 run 晚于修改；但 timeout 和客户端初始化失败专项分支尚未运行验证 |
 | M6-DI-013 | 代码审查风险（已修正） | 已修正、已重编译并重跑成功路径 | 审查发现 Damage 若在确认 TargetASC/有效 Spec 前 Commit，存在先消费权威资源、随后无法落伤害或缺少明确 Result 的风险。该风险没有作为玩家 Bug 在正式运行中复现 | 已把 TargetASC/Spec 验证移到 Commit 前，并让 InvalidTarget、Spec/CommitFailed、Accepted 等服务器业务终点有明确 Result。最终两组 run 覆盖 Accepted 和 Task 语义拒绝；TargetASC/Spec/Commit 失败专项分支仍属 M6-DI-003 证据缺口 |
@@ -501,7 +502,7 @@ Insights 回答“这条安全链花了多少 CPU/带宽、尾延迟在哪里”
 ### 14.3 M8：Insights 驱动优化
 
 1. 在 Insights 中测每类意图的 CPU、Trace/LOS 次数、RPC bytes、Reliable backlog、P50/P95/P99，而不是先做无数据优化。
-2. 评估 TargetTask 与 Ability 二次校验是否值得合并，sphere sweep 是否需要 broadphase/批处理，历史缓存成本是否可控。
+2. 测量唯一 authority sphere sweep 是否需要 broadphase/批处理，以及未来历史缓存成本是否可控；不得在无数据时重新增加第二套几何策略。
 3. 暴露 Accepted、Duplicate、Stale、RateLimited、Invalid*、Miss counters；按玩家/Ability/时间窗聚合，避免日志洪泛。
 4. 建立性能预算与回归门禁后，再讨论 Iris/Replication Graph 或更大的网络架构改造。
 

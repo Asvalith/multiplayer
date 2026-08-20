@@ -1,17 +1,11 @@
 # UE5 Co-op 网络项目统一技术复习文档
 
-> **历史工程记录**：本文保留 `demov1 -> coop-GAS` 的演进信息，不再维护当前完成度、TODO 或面试口述。当前入口为 [README](../README.md)、[面试复习资料](GAS_Interview_Completed_Snapshot.md)和[TODO](GAS_Portfolio_Technical_Route.md)。
-
-> 更新日期：2026-08-15
+> 更新日期：2026-08-10
 > 项目路径：`E:\ueprojrct\multiplayer`
 > 原则：只把代码和运行证据能够证明的内容写成成果；待蓝图接入或待双端验证的内容明确标注。
 
 GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
-[《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)。更长的源码阅读和扩展研究见
 [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)。
-
-分支边界：本文前半部分保留 `demov1` 的基础 Co-op 演进记录；当前 `coop-GAS` 已完成 GAS M0～M6 核心，并在阶段 4 扩展战斗属性 ExecCalc。`coop-GAS` 的已实现事实、调用链和验证证据见
-[《Co-op GAS 架构与面试讲解手册》](GAS_Architecture_Interview_Guide.md)。
 
 ---
 
@@ -19,38 +13,37 @@ GAS、PredictionKey、弱网测试和网络优化的独立实施路线见：
 
 ### 1.1 完成度
 
-- Co-op 规则与 GAS C++ 核心：已形成可编译闭环；完成度不再用主观百分比代替门禁。
-- 完整编译：阶段 4 与旧胜利 UI 版本曾通过 UE5.5 Development Editor/Game；当前 `ReceiveCoopGameWon` 蓝图事件接口已通过 Development Game，Editor Target 需在安全关闭运行中 Editor 后重编。
-- 阶段 4 自动化：`multiplayer.GAS` 2/2；M6 95/95；M6Intent 0ms/约 300ms RTT 两轮各 52/52，追加安全门禁后的阶段 4 二进制 0ms `20260815_004559` 再次 52/52；该证据早于胜利 UI 接口重构。
-- 胜利 UI：Presenter 已完成 `GameState.OnGameWon -> Character.ReceiveCoopGameWon`的本地一次性转发；`BP_ThirdPersonCharacter` 创建 `winandquit`、输入/鼠标以及中文重开按钮节点待 Editor 关闭后接线、编译和双窗口验收。
-- Dedicated、晚加入、完整丢包矩阵与 Network Insights：未完成，不能作为已有成果。
+- C++ 核心系统：约 **80%～85%**。
+- 完整可演示双人 Co-op：约 **60%**。
+- 完整编译：已通过 UE5.5 UHT、C++ 编译和链接。
+- 无界面运行：已进入项目 GameMode 并加载 OnlineSubsystemNull。
+- 双客户端 Host / Find / Join 与机关联调：尚未完成，不能当成已验证成果。
 
 ### 1.2 已完成的 C++ 模块
 
 | 模块 | 已完成内容 | 主要网络知识 |
 |---|---|---|
-| Character 网络教学样例（历史） | 曾用于 NetMode、Role、RPC 和 RepNotify 入门；`coop-GAS` 已移除，避免与真实业务链重复 | 概念保留，样例不进入当前运行时 |
+| Character 网络实验 | NetMode、Role、Authority、Ownership 日志；Server/Client/Multicast RPC；RepNotify；服务端生成 Actor | RPC 方向、所有权、持久状态和瞬时事件 |
 | GameInstance Session | Create、Find、Join、Destroy；异步 Delegate Handle；重复建房先销毁；操作防重入 | OSS、Session 生命周期、异步回调 |
-| ReplicatedCube（历史） | 早期服务端生成/移动复制样例；`coop-GAS` 已删除 | 当前用机关、属性和目标状态验证复制 |
+| ReplicatedCube | 服务端生成、Actor 复制、移动复制和服务端物理 | 服务端权威生成 |
 | PressurePlate | 独立压力板、服务端 Overlap、占用者去重、状态复制和按需动画 Tick | 单一职责、弱引用、事件驱动 |
 | CoopGate | 订阅多个独立压力板、不同玩家约束、门状态复制和本地表现 | Delegate 解耦、RepNotify、晚加入 |
 | MovingPlatform | 多玩家占用、服务端移动、Transform 复制、按需 Tick | 服务端模拟、移动复制、更新治理 |
 | Key / KeySocket | 服务端拾取、Holder 复制、附着、插槽消费和目标进度 | Actor 所有权、对象生命周期 |
 | CoopGameState | 目标进度和胜利状态的原子复制 | 全局共享状态、晚加入一致性 |
 | WinArea | 双人进入且目标完成后由服务端结算 | 服务端胜负判定、弱引用 |
-| VictoryPresenter | 仅在本地 Character 消费复制胜利状态，一次性转发 `ReceiveCoopGameWon` 蓝图事件 | 复制结果与本地 UI 表现分层、委托生命周期 |
-| PlayerState ASC / AttributeSet | Mixed 复制、能力/GE/Tag、9 项初始化属性 | GAS 所有权、属性复制、跨 Pawn 生命周期 |
-| Damage ExecCalc | Source Snapshot 进攻属性、Target Live 防御属性、服务器暴击与 Meta Attribute | 权威结算、捕获策略、可测试公式 |
 
 ### 1.3 尚未完成
 
-1. 可见双窗口完成完整 Session、机关、四钥匙、WinArea、胜利 UI、重开和退出回归。
-2. 正式技能 Niagara、音效、Montage、图标和美术 HUD。
-3. Dedicated Server、晚加入、Travel/断线生命周期和服务器+2 Clients 自动化。
-4. 0/150/300ms 每方向与 5% loss 多轮矩阵；当前本轮只回归 0ms 与双方各 150ms 的 M6Intent。
-5. Network Insights 优化前后数据、打包版本、README 和演示视频。
+1. 创建蓝图子类、配置 Mesh、碰撞体和关卡参数。
+2. 菜单按钮连接 `HostGame / FindGames / JoinGame / DestroyGameSession`。
+3. 两窗口实际验证房间创建、搜索、加入、销毁和地图切换。
+4. 两端实际验证压力板、平台、钥匙、插槽和胜利区。
+5. 100/200 ms 延迟、丢包、晚加入和断线边界测试。
+6. 共享胜利 UI、演示视频、README 和可执行版本。
+7. GAS 进阶版本尚未开始；它不阻塞基础 Co-op 版本验收。
 
-明确不声称已完成：Steam 实测、Dedicated Server 部署、服务器回溯延迟补偿、断线重连、Network Insights 优化或正式 UI 视觉验收。GAS 客户端预测、真实激活拒绝和语义拒绝已有专项证据，但不能外推为所有技能和所有网络条件均已完成。
+明确不声称已完成：Steam 实测、Dedicated Server 部署、客户端预测回滚、延迟补偿、断线重连、GAS。
 
 ---
 
@@ -75,10 +68,10 @@ AmultiplayerCoopGameState（服务器和客户端均存在）
 └─ RepNotify 向 UI 和机关广播共享进度
 
 AmultiplayerCharacter
-├─ 初始化 PlayerState 持有的 ASC/Avatar
-├─ 将正式 InputAction 转发为 InputTag
-├─ 编排 HUD、GameplayCue 和胜利表现组件
-└─ 开发实验委托给显式启用的 DeveloperHarness
+├─ Server RPC：客户端请求服务端执行
+├─ Client RPC：服务端只回执拥有者
+├─ Multicast RPC：所有端播放一次瞬时表现
+└─ RepNotify：复制可持续的计数状态
 
 关卡机关
 ├─ AmultiplayerPressurePlate：可独立复用的权威压力板
@@ -95,18 +88,68 @@ AmultiplayerCharacter
 
 ---
 
-## 3. 网络手段与当前业务落点
+## 3. 四种网络手段的完整对比
 
-早期 `1/2/3 -> Server/Client/Multicast/NetworkActionCount/ReplicatedCube` 只用于教学，已从 `coop-GAS` 删除。概念现在由真实业务链验证：
+### 3.1 Server RPC
 
-| 手段 | 当前落点 |
-|---|---|
-| Server RPC | 联机重开请求、GAS 服务器校验和仅开发环境启用的测试注入 |
-| Client RPC | ASC 的预测拒绝确认和 DamageIntent 结果回执 |
-| Replication / RepNotify | 机关状态、目标进度、属性、队伍和死亡状态；支持晚加入取得当前值 |
-| GameplayCue | 技能瞬时/持续表现；不代替权威状态复制 |
+```text
+客户端按键 2
+→ RequestServerAction
+→ ServerRequestAction_Validate
+→ ServerRequestAction_Implementation
+→ 服务端增加 NetworkActionCount
+```
 
-持久结果用复制，拥有者私有回执用 Client RPC，客户端只提交意图，服务器决定最终状态。当前业务不依赖通用 Character Multicast 样例。
+- 客户端只能提出请求，权威数据由服务器修改。
+- RPC 放在玩家拥有的 Character 上，满足 Client-to-Server Ownership 条件。
+- Validation 检查对象是否正在销毁；真实项目还要校验冷却、距离、资源和状态。
+- 低频关键请求使用 Reliable，高频输入不能无脑使用 Reliable。
+
+### 3.2 Client RPC
+
+```text
+服务器完成请求
+→ ClientConfirmServerAction(ConfirmedCount)
+→ 只在该 Character 的拥有者客户端执行
+→ OnServerActionConfirmed 广播给蓝图
+```
+
+用途是给请求者回执、显示私有提示或打开只属于该玩家的 UI。它不负责共享状态。
+
+### 3.3 NetMulticast RPC
+
+```text
+服务器确认动作
+→ MulticastPlayNetworkActionEffect(Location)
+→ 服务器和相关客户端收到
+→ OnNetworkActionEffect 播放瞬时表现
+```
+
+- 使用 Unreliable，因为表现允许偶发丢失，不能阻塞后续关键网络消息。
+- 适合粒子、声音和一次性表现。
+- 不适合门是否打开、目标是否完成等持久状态，晚加入者会错过历史 Multicast。
+
+### 3.4 属性复制与 RepNotify
+
+```text
+服务端修改 NetworkActionCount
+→ UE 属性复制
+→ 客户端 OnRep_NetworkActionCount
+→ OnNetworkActionCountChanged
+```
+
+- 适合血量、门状态、任务进度等可持续状态。
+- 新客户端加入后能获得当前值。
+- Listen Server 修改属性时不会依赖自己的 OnRep，服务端显式调用共用应用函数。
+
+核心结论：
+
+```text
+请求权威操作：Server RPC
+只通知拥有者：Client RPC
+播放一次表现：Unreliable Multicast
+保存最终状态：Replication + RepNotify
+```
 
 ---
 
@@ -528,7 +571,11 @@ None
 
 ### 8.2 网络实验表现
 
-旧 Character 数字键、计数 Delegate 和 ReplicatedCube 表现已删除。当前调试展示分别由 GAS HUD/Cue Presenter、机关 RepNotify Delegate 和命令行 Developer Harness 提供，不在 Character 蓝图维护第二套教学表现链。
+在 Character 蓝图中可选绑定：
+
+- `OnNetworkActionCountChanged`：显示复制后的最终计数。
+- `OnServerActionConfirmed`：只给请求玩家显示“服务器确认”。
+- `OnNetworkActionEffect`：在所有端播放同一位置的声音或粒子。
 
 ### 8.3 机关关卡
 
@@ -704,13 +751,13 @@ AI 用于检索 API 迁移线索、审查异步回调和边界条件、生成测
 
 ### 12.3 GAS 进阶版边界
 
-`demov1` 的初始规划曾把 GAS 作为后续阶段；当前 `coop-GAS` 已完成 M0～M5 核心闭环，以及 M6 Immunity 真 `ClientActivateAbilityFailed` 回滚和 DamageIntent 当前世界服务器权威验证。DamageIntent 只携带 ShotId、量化 Origin/方向和估算 ServerTime；PlayerState ASC 跨 Pawn 分配/验证 ShotId，服务器执行 50ms 最小间隔、字段校验和当前世界 Sweep，再用权威 HitResult 写入 Context。服务器 TargetData 等待已有 5 秒超时，Task 在数据到达、超时/结束时清理委托和 Timer，Damage Ability 在 `CommitAbility` 前验证权威目标、目标 ASC 和 DamageSpec。Editor/Game Development 和 `DamageIntent.Unit` 通过；0ms/约 300ms RTT 两轮专用核验各52/52 PASS。`TargetDataTimeout`、`SourceDead`、`InvalidTarget`、`CommitFailed` 的专项双进程端到端分支，以及完整丢包矩阵、token bucket、服务器+2 Clients 自动化、Dedicated、历史回溯和 Network Insights 优化仍未完成。详见 [M6 DamageIntent 安全验证报告](Evidence/GAS_M6_Damage_Intent_Security_Test_Report.md)。
+GAS 是基础版通过双客户端验收后的独立进阶版本，目前只完成路线设计，不能表述为已实现。
+基础版先建立可回退的 Git 标签，再从独立分支开发，避免影响已验证的 Session 和机关闭环。
 
 - 压力板、门、钥匙和胜利区继续使用服务器权威 Actor 规则，不为了使用 GAS 而迁移成熟机关。
 - GAS 进阶版以伤害、治疗、状态免疫、客户端预测、服务器校验和网络优化为验收范围。
-- 当前 M0～M9 执行顺序、实验矩阵和完成门禁统一维护在
-  [《Co-op GAS 作品集技术路线与执行清单》](GAS_Portfolio_Technical_Route.md)，更长的源码阅读计划保留在
-  [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)。
+- 详细架构、20+4 周计划、实验矩阵、性能指标和阶段门禁统一维护在
+  [《UE5.5 GAS 与网络预测深度路线》](GAS_Network_Deep_Dive_Roadmap.md)，本总文档不再重复维护计划细节。
 - GAS 进阶版必须有独立双端日志和弱网数据；未通过门禁前不计入基础版完成度。
 
 ## 13. 下一步收口顺序
@@ -1488,8 +1535,7 @@ DestroySession
 → 服务器 TryCompleteGame
 → GameState.bGameWon = true
 → 属性复制到两个客户端
-→ 每个本地 VictoryPresenter 只调用一次 Character.On Coop Game Won
-→ Character Blueprint 创建并显示胜利 UMG
+→ 每个本地 VictoryPresenter 创建胜利 UMG
 → 玩家可选择重新开始或退出游戏
 ```
 
@@ -1516,8 +1562,6 @@ DestroySession
 钥匙.DestinationSocket ──引用──> 对应钥匙架插槽实例
 WinArea ──运行时获取──> CoopGameState
 VictoryPresenter ──运行时监听──> CoopGameState.OnGameWon
-VictoryPresenter ──本地一次性转发──> Character.ReceiveCoopGameWon
-Character Blueprint ──表现接线──> winandquit
 ```
 
 ### 18.3 压力板配置
@@ -1610,42 +1654,38 @@ GameState 对蓝图提供的读取和事件接口：
 | `ConfigureRequiredKeys()` | `BlueprintAuthorityOnly` | 服务器配置钥匙需求 |
 | `OnObjectiveProgressChanged` | `BlueprintAssignable` | UI 或机关监听钥匙进度 |
 | `OnGameWon` | `BlueprintAssignable` | 本地 UI 监听胜利结果 |
-| `On Coop Game Won` | Character `BlueprintImplementableEvent` | Presenter 当前转发的本地胜利表现入口 |
+| `On Game Won UI` | `BlueprintImplementableEvent` | 可选的 GameState 蓝图扩展入口 |
 
 `RegisterActivatedKey()` 和 `TryCompleteGame()` 保持为 C++ 内部接口，没有暴露为普通客户端可调用的
 `BlueprintCallable`。这是有意的权限边界，不是接口遗漏。
 
-`bGameWon` 先检查旧值再写入，因此服务器只结算一次；VictoryPresenter 用 `bVictoryNotified` 保证每个本地 Character 只收到一次 `On Coop Game Won`。Widget 实例幂等由 Character Blueprint 自己保存的引用保证。
+`bGameWon` 先检查旧值再写入，因此服务器只结算一次；VictoryPresenter 也检查现有 Widget，避免本地重复创建。
 
 ### 18.7 胜利 UI、重新开始与退出
 
 每个本地 Character 都包含 `VictoryPresenter` 组件。它只在 `IsLocallyControlled()` 为真时绑定
-`GameState.OnGameWon`，然后调用 Character C++ 声明的 `BlueprintImplementableEvent ReceiveCoopGameWon`（蓝图显示名 `On Coop Game Won`）。Presenter 不创建 Widget、不按字符串查找按钮，也不设置本地输入状态。
+`GameState.OnGameWon`，因此 Listen Server 和远端 Client 会各自创建一份本地胜利界面。
 
-`BP_ThirdPersonCharacter` 应在 `On Coop Game Won` 中完成：
+角色蓝图必须把 `VictoryPresenter.VictoryWidgetClass` 设置为 `Content/UI/winandquit`。胜利时组件会：
 
 ```text
-On Coop Game Won
-→ 检查已保存的胜利 Widget 引用（防重）
-→ Create Widget（Class = /Game/UI/winandquit，Owning Player = 本地 Controller）
-→ 保存 Widget 引用
-→ Add to Viewport
-→ Set Show Mouse Cursor = true
-→ Set Input Mode Game and UI（Widget to Focus = 新建 Widget）
+CreateWidget
+→ AddToViewport(100)
+→ Show Mouse Cursor
+→ Set Input Mode Game And UI
 ```
 
-重新开始按钮的当前调用链：
+重新开始按钮的正确蓝图链：
 
 ```text
-重新开始.OnClicked（winandquit）
+OnClicked
 → Get Owning Player Pawn
-→ Request Restart Coop Game（multiplayerCharacter）
+→ Cast To multiplayerCharacter
+→ Request Restart Coop Game
 → ServerRestartCoopGame RPC
-→ GameMode::RestartCoopGame（bRestartTravelRequested 并发门禁）
+→ GameMode::RestartCoopGame
 → ServerTravel(CurrentMap + "?listen")
 ```
-
-Character 的 owning-client Server RPC 和 GameMode 的 `bRestartTravelRequested` 仍是权威与并发门禁；ServerTravel 启动失败会解锁并记录 `COOP_RESTART`。蓝图可在点击后禁用按钮作为本地反馈，但不能以此替代服务器门禁，也不得直接 `OpenLevel`。Presenter 只在 EndPlay/Refresh 解除 GameState 委托；Widget 移除与输入/鼠标恢复是蓝图表现生命周期的验收项。
 
 退出按钮的正确蓝图链：
 
@@ -1655,7 +1695,8 @@ OnClicked
 → Quit Game
 ```
 
-退出按钮仍使用 Widget 已有的本地 `QuitGame`。中文 `重新开始` 是蓝图设计器中的直接节点引用，不再是 Presenter 使用的运行时字符串契约。旧的 `GetWidgetFromName("重新开始")` 方案已被取代，其历史问题和取舍保留在阶段 3～4 报告中。当前接口只确认 C++ Game Target 通过；Editor/蓝图 Compile/Save 和正式双端点击待关闭 Editor 后验收。
+静态资源检查已经发现 `winandquit` 中存在 `OnClicked` 和 `QuitGame`，但没有发现
+`RequestRestartCoopGame` 节点。重新开始按钮仍需要在编辑器中连接、编译并保存后再做双端验收。
 
 ### 18.8 机关碰撞基线
 
@@ -1702,28 +1743,11 @@ OnGameWon 在两个本地客户端各执行一次
 1. `TSet` 可以防止同一 Character 的多个碰撞组件在 BeginOverlap 时重复加人；但当前 EndOverlap 收到任意
    一个组件离开事件后就会移除整个 Character。若角色确实有多个参与 Pawn Overlap 的组件，需要增加组件级
    引用计数，或确认 Actor 已完全离开 Trigger 后再移除。WinArea、压力板和平台都应做相同审计。
-2. 胜利 Presenter 的 C++ 事件转发已通过 Game Target；需关闭 Editor 后在 `BP_ThirdPersonCharacter` 接入 `On Coop Game Won -> Create winandquit`，并给中文重开按钮接 `Get Owning Player Pawn -> Request Restart Coop Game`。
-3. 需在 Editor/蓝图 Compile/Save 后做可见双窗口点击验收；Travel 后结合 `COOP_VICTORY_UI Phase=Bound/BlueprintEvent` 与 Object List 验证蓝图保存的 Widget 引用、GameState Delegate 和输入状态无残留。
+2. `winandquit` 的重新开始按钮仍需连接 `RequestRestartCoopGame`，然后 Compile/Save。
+3. 需要在 `BP_ThirdPersonCharacter` 中确认 `VictoryWidgetClass=winandquit`。
 4. 需要确认玩法地图 World Settings 没有使用错误的 GameMode Override；项目默认值已经指向
    `/Script/multiplayer.multiplayerGameMode`。
 5. 独立游戏目标已经构建成功，但机关、钥匙、胜利、重开仍需完整双窗口运行证据。
-
-阶段 3～4 的实现、真实问题、命令和 RunId 见[阶段 3～4 证据报告](Evidence/Phase3_4_Victory_UI_Combat_Attributes_Report.md)。
-
-### 18.11 阶段 4 GAS 数值链
-
-AttributeSet 现在除 Health/Energy 外，还复制 AttackPower、Armor、CriticalChance、CriticalMultiplier 和 Resistance；InitStats 用 9 个 Override Modifier 建立确定基线。伤害 Spec 创建时 Snapshot Source 进攻属性，Execution 时实时捕获 Target 的 Health/Armor/Resistance；暴击 Roll 只由服务器产生，最终结果写入 `IncomingDamage`，Critical/HitType/ImpactImpulse 写入自定义 EffectContext。
-
-```text
-(BaseDamage + AttackPower)
--> Armor 100/(100+Armor)
--> Resistance (1-clamp)
--> Vulnerability (1+0.1*Stacks)
--> CriticalMultiplier
--> IncomingDamage
-```
-
-阶段 4 的 Editor/Game 编译、`multiplayer.GAS` 2/2 和扩展后的 M5/M6/M6Intent 回归均通过；阶段 4 二进制 0ms 回归 `20260815_004559` 为 52/52。该运行早于后续胜利 UI 接口重构，因此只证明当时的 GAS/数值链，不证明当前蓝图已接线。旧 `GAS_DAMAGE_EXEC` 前六字段保持不变，新中间值只追加在后面，避免破坏既有 M6Intent 正则证据链。装备数值资产化、正式 UI、Dedicated、晚加入和 Network Insights 仍待完成。
 
 ---
 

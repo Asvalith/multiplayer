@@ -53,7 +53,6 @@ protected:
 
 private:
 	AmultiplayerCoopKey* FindCarriedKey(ACharacter* Character) const;
-	void CommitServerActivation();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
 	TObjectPtr<USceneComponent> SceneRoot;

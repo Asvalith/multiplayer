@@ -67,6 +67,10 @@ protected:
 	UFUNCTION()
 	void OnRep_ObjectiveState();
 
+	/** Implement this in the GameState Blueprint to create the local victory UMG. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Objective", meta = (DisplayName = "On Game Won UI"))
+	void ReceiveGameWon();
+
 private:
 	UPROPERTY(ReplicatedUsing = OnRep_ObjectiveState)
 	FmultiplayerCoopObjectiveState ObjectiveState;

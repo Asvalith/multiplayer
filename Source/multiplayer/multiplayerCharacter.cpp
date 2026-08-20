@@ -1,27 +1,21 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "multiplayerCharacter.h"
-#include "AbilitySystem/multiplayerAbilitySet.h"
-#include "AbilitySystem/multiplayerAbilitySystemComponent.h"
-#include "AbilitySystem/multiplayerAttributeSet.h"
-#include "Developer/multiplayerGASDeveloperHarnessComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
-#include "Components/PointLightComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/Controller.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Engine/Engine.h"
 #include "InputActionValue.h"
-#include "Input/multiplayerInputConfig.h"
-#include "multiplayer.h"
+#include "InputCoreTypes.h"
+#include "multiplayerReplicatedCube.h"
 #include "multiplayerVictoryPresenterComponent.h"
 #include "multiplayerGameMode.h"
-#include "Player/multiplayerGASPlayerState.h"
-#include "UI/multiplayerGASCuePresenterComponent.h"
-#include "UI/multiplayerGASHUDPresenterComponent.h"
+#include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -63,26 +57,6 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
 
 	VictoryPresenter = CreateDefaultSubobject<UmultiplayerVictoryPresenterComponent>(TEXT("VictoryPresenter"));
-	GASHUDPresenter = CreateDefaultSubobject<UmultiplayerGASHUDPresenterComponent>(TEXT("GASHUDPresenter"));
-	GASCuePresenter = CreateDefaultSubobject<UmultiplayerGASCuePresenterComponent>(
-		TEXT("GASCuePresenter"));
-	GASDeveloperHarness = CreateDefaultSubobject<UmultiplayerGASDeveloperHarnessComponent>(
-		TEXT("GASDeveloperHarness"));
-
-	GameplayCueFlashLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("GameplayCueFlashLight"));
-	GameplayCueFlashLight->SetupAttachment(RootComponent);
-	GameplayCueFlashLight->SetRelativeLocation(FVector(0.0f, 0.0f, 80.0f));
-	GameplayCueFlashLight->SetAttenuationRadius(260.0f);
-	GameplayCueFlashLight->SetIntensity(0.0f);
-	GameplayCueFlashLight->SetVisibility(false);
-
-	GameplayCueStateLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("GameplayCueStateLight"));
-	GameplayCueStateLight->SetupAttachment(RootComponent);
-	GameplayCueStateLight->SetRelativeLocation(FVector(0.0f, 0.0f, 110.0f));
-	GameplayCueStateLight->SetAttenuationRadius(180.0f);
-	GameplayCueStateLight->SetIntensity(0.0f);
-	GameplayCueStateLight->SetVisibility(false);
-	GASCuePresenter->BindLights(GameplayCueFlashLight, GameplayCueStateLight);
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
@@ -91,59 +65,10 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 //////////////////////////////////////////////////////////////////////////
 // Input
 
-void AmultiplayerCharacter::PossessedBy(AController* NewController)
-{
-	Super::PossessedBy(NewController);
-	InitializeAbilitySystem();
-}
-
-void AmultiplayerCharacter::OnRep_PlayerState()
-{
-	Super::OnRep_PlayerState();
-	InitializeAbilitySystem();
-}
-
-void AmultiplayerCharacter::GameplayCueDefaultHandler(
-	EGameplayCueEvent::Type EventType,
-	const FGameplayCueParameters& Parameters)
-{
-	if (GASCuePresenter == nullptr
-		|| !GASCuePresenter->HandleGameplayCue(EventType, Parameters))
-	{
-		IGameplayCueInterface::GameplayCueDefaultHandler(EventType, Parameters);
-	}
-}
-
-void AmultiplayerCharacter::HandleAbilityPresentation_Implementation(
-	const FmultiplayerAbilityPresentationEvent& Event)
-{
-	// The C++ interface deliberately has no gameplay side effects. The formal
-	// Character Blueprint may override "On Ability Presentation Phase" to add
-	// camera, animation-layer, or debug UI reactions without becoming authority.
-}
-
-UAbilitySystemComponent* AmultiplayerCharacter::GetAbilitySystemComponent() const
-{
-	if (AbilitySystemComponent != nullptr)
-	{
-		return AbilitySystemComponent;
-	}
-
-	const AmultiplayerGASPlayerState* GASPlayerState = GetPlayerState<AmultiplayerGASPlayerState>();
-	return GASPlayerState != nullptr ? GASPlayerState->GetAbilitySystemComponent() : nullptr;
-}
-
-UmultiplayerAbilitySystemComponent* AmultiplayerCharacter::GetMultiplayerAbilitySystemComponent() const
-{
-	return Cast<UmultiplayerAbilitySystemComponent>(GetAbilitySystemComponent());
-}
-
 void AmultiplayerCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
 	VictoryPresenter->RefreshBinding();
-	GASHUDPresenter->RefreshBinding();
-	InitializeAbilitySystem();
 
 	// Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
@@ -151,10 +76,6 @@ void AmultiplayerCharacter::NotifyControllerChanged()
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
 		{
 			Subsystem->AddMappingContext(DefaultMappingContext, 0);
-			if (AbilityMappingContext != nullptr)
-			{
-				Subsystem->AddMappingContext(AbilityMappingContext, 1);
-			}
 		}
 	}
 }
@@ -174,35 +95,10 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AmultiplayerCharacter::Look);
 
-		// Formal GAS input is data-driven: InputAction -> InputTag -> AbilitySpec.
-		if (AbilityInputConfig != nullptr)
-		{
-			for (const FmultiplayerTaggedInputAction& Entry : AbilityInputConfig->GetAbilityInputActions())
-			{
-				if (Entry.InputAction == nullptr || !Entry.InputTag.IsValid())
-				{
-					continue;
-				}
-
-				EnhancedInputComponent->BindAction(
-					Entry.InputAction,
-					ETriggerEvent::Started,
-					this,
-					&AmultiplayerCharacter::AbilityInputTagPressed,
-					Entry.InputTag);
-				EnhancedInputComponent->BindAction(
-					Entry.InputAction,
-					ETriggerEvent::Completed,
-					this,
-					&AmultiplayerCharacter::AbilityInputTagReleased,
-					Entry.InputTag);
-			}
-		}
-
-		if (GASDeveloperHarness != nullptr)
-		{
-			GASDeveloperHarness->BindDeveloperInput(PlayerInputComponent);
-		}
+		// Temporary network verification controls.
+		PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AmultiplayerCharacter::PrintNetworkRole);
+		PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AmultiplayerCharacter::RequestServerAction);
+		PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AmultiplayerCharacter::RequestSpawnReplicatedCube);
 	}
 	else
 	{
@@ -210,126 +106,114 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 	}
 }
 
-void AmultiplayerCharacter::ApplyDeathState(bool bNewDeadState)
+void AmultiplayerCharacter::GetLifetimeReplicatedProps(
+	TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
-	if (GASCuePresenter != nullptr)
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(AmultiplayerCharacter, NetworkActionCount);
+}
+
+void AmultiplayerCharacter::PrintNetworkRole()
+{
+	const TCHAR* NetModeText = TEXT("Unknown");
+	switch (GetNetMode())
 	{
-		GASCuePresenter->ApplyDeathState(bNewDeadState);
+	case NM_Standalone:
+		NetModeText = TEXT("Standalone");
+		break;
+	case NM_DedicatedServer:
+		NetModeText = TEXT("DedicatedServer");
+		break;
+	case NM_ListenServer:
+		NetModeText = TEXT("ListenServer");
+		break;
+	case NM_Client:
+		NetModeText = TEXT("Client");
+		break;
+	default:
+		break;
 	}
 
-	if (bNewDeadState)
+	const FString Message = FString::Printf(
+		TEXT("%s | NetMode=%s LocalRole=%s RemoteRole=%s Authority=%s LocallyControlled=%s"),
+		*GetName(),
+		NetModeText,
+		*UEnum::GetValueAsString(GetLocalRole()),
+		*UEnum::GetValueAsString(GetRemoteRole()),
+		HasAuthority() ? TEXT("true") : TEXT("false"),
+		IsLocallyControlled() ? TEXT("true") : TEXT("false")
+	);
+
+	UE_LOG(LogTemplateCharacter, Log, TEXT("%s"), *Message);
+	if (GEngine != nullptr)
 	{
-		GetCharacterMovement()->DisableMovement();
-		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
-		{
-			DisableInput(PlayerController);
-		}
-	}
-	else
-	{
-		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
-		if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
-		{
-			EnableInput(PlayerController);
-		}
+		GEngine->AddOnScreenDebugMessage(
+			-1,
+			5.0f,
+			HasAuthority() ? FColor::Green : FColor::Cyan,
+			Message
+		);
 	}
 }
 
-void AmultiplayerCharacter::AbilityInputTagPressed(FGameplayTag InputTag)
+void AmultiplayerCharacter::RequestServerAction()
 {
-	if (const AmultiplayerGASPlayerState* GASPlayerState =
-		GetPlayerState<AmultiplayerGASPlayerState>();
-		GASPlayerState != nullptr && GASPlayerState->IsDead())
-	{
-		return;
-	}
-
-	if (UmultiplayerAbilitySystemComponent* ASC = GetMultiplayerAbilitySystemComponent())
-	{
-		ASC->AbilityInputTagPressed(InputTag);
-	}
+	ServerRequestAction();
 }
 
-void AmultiplayerCharacter::AbilityInputTagReleased(FGameplayTag InputTag)
+bool AmultiplayerCharacter::ServerRequestAction_Validate()
 {
-	if (UmultiplayerAbilitySystemComponent* ASC = GetMultiplayerAbilitySystemComponent())
-	{
-		ASC->AbilityInputTagReleased(InputTag);
-	}
+	return !IsActorBeingDestroyed();
 }
 
-void AmultiplayerCharacter::InitializeAbilitySystem()
+void AmultiplayerCharacter::ServerRequestAction_Implementation()
 {
-	AmultiplayerGASPlayerState* GASPlayerState = GetPlayerState<AmultiplayerGASPlayerState>();
-	if (GASPlayerState == nullptr)
-	{
-		return;
-	}
+	++NetworkActionCount;
+	BroadcastNetworkActionCount();
 
-	UmultiplayerAbilitySystemComponent* NewAbilitySystemComponent =
-		GASPlayerState->GetMultiplayerAbilitySystemComponent();
-	UmultiplayerAttributeSet* NewAttributeSet = GASPlayerState->GetAttributeSet();
-	if (NewAbilitySystemComponent == nullptr || NewAttributeSet == nullptr)
-	{
-		return;
-	}
+	// Persistent state uses replication; these RPCs only carry acknowledgement
+	// and transient presentation, so late joiners do not depend on them.
+	ClientConfirmServerAction(NetworkActionCount);
+	MulticastPlayNetworkActionEffect(GetActorLocation());
+}
 
-	const bool bActorInfoAlreadyInitialized =
-		AbilitySystemComponent == NewAbilitySystemComponent
-		&& AttributeSet == NewAttributeSet
-		&& NewAbilitySystemComponent->GetOwnerActor() == GASPlayerState
-		&& NewAbilitySystemComponent->GetAvatarActor() == this;
+void AmultiplayerCharacter::ClientConfirmServerAction_Implementation(
+	int32 ConfirmedCount)
+{
+	OnServerActionConfirmed.Broadcast(ConfirmedCount);
 
-	if (!bActorInfoAlreadyInitialized)
-	{
-		GASPlayerState->InitializeAbilityActorInfo(this);
-		AbilitySystemComponent = NewAbilitySystemComponent;
-		AttributeSet = NewAttributeSet;
-	}
+	UE_LOG(
+		LogTemplateCharacter,
+		Log,
+		TEXT("%s received owner-only confirmation: count=%d"),
+		*GetName(),
+		ConfirmedCount
+	);
+}
 
-	if (HasAuthority())
-	{
-		GASPlayerState->GrantStartupAbilities(StartupAbilitySet);
-	}
+void AmultiplayerCharacter::MulticastPlayNetworkActionEffect_Implementation(
+	FVector_NetQuantize EffectLocation)
+{
+	OnNetworkActionEffect.Broadcast(EffectLocation);
 
-	// Bind presentation before publishing initialization so synchronous ability
-	// activation from listeners cannot outrun prediction reconciliation.
-	GASCuePresenter->BindAbilitySystem(AbilitySystemComponent);
+	UE_LOG(
+		LogTemplateCharacter,
+		Verbose,
+		TEXT("%s received multicast effect at %s"),
+		*GetName(),
+		*EffectLocation.ToCompactString()
+	);
+}
 
-	if (!bActorInfoAlreadyInitialized)
-	{
-		UE_LOG(
-			LogMultiplayerGAS,
-			Display,
-			TEXT("GAS_INIT Character=%s PlayerState=%s Owner=%s Avatar=%s LocalRole=%s LocallyControlled=%s"),
-			*GetName(),
-			*GetNameSafe(GASPlayerState),
-			*GetNameSafe(AbilitySystemComponent->GetOwnerActor()),
-			*GetNameSafe(AbilitySystemComponent->GetAvatarActor()),
-			*UEnum::GetValueAsString(GetLocalRole()),
-			IsLocallyControlled() ? TEXT("true") : TEXT("false"));
+void AmultiplayerCharacter::RequestSpawnReplicatedCube()
+{
+	const FVector SpawnLocation =
+		GetActorLocation()
+		+ GetActorForwardVector() * 200.0f
+		+ FVector(0.0f, 0.0f, 100.0f);
 
-		OnAbilitySystemInitialized.Broadcast();
-	}
-	else
-	{
-		UE_LOG(
-			LogMultiplayerGAS,
-			Verbose,
-			TEXT("GAS_INIT_SKIPPED Character=%s PlayerState=%s reason=AlreadyInitialized"),
-			*GetName(),
-			*GetNameSafe(GASPlayerState));
-	}
-
-	GASHUDPresenter->RefreshBinding();
-	VictoryPresenter->RefreshBinding();
-	ApplyDeathState(GASPlayerState->IsDead());
-	if (GASDeveloperHarness != nullptr)
-	{
-		GASDeveloperHarness->OnAbilitySystemReady(AbilitySystemComponent);
-	}
+	ServerSpawnReplicatedCube(SpawnLocation);
 }
 
 void AmultiplayerCharacter::RequestRestartCoopGame()
@@ -348,6 +232,66 @@ void AmultiplayerCharacter::ServerRestartCoopGame_Implementation()
 		GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AmultiplayerGameMode>() : nullptr)
 	{
 		CoopGameMode->RestartCoopGame();
+	}
+}
+
+bool AmultiplayerCharacter::ServerSpawnReplicatedCube_Validate(
+	FVector_NetQuantize SpawnLocation)
+{
+	const bool bLocationIsFinite =
+		FMath::IsFinite(SpawnLocation.X)
+		&& FMath::IsFinite(SpawnLocation.Y)
+		&& FMath::IsFinite(SpawnLocation.Z);
+
+	const bool bLocationIsNearCharacter =
+		FVector::DistSquared(SpawnLocation, GetActorLocation())
+		<= FMath::Square(500.0f);
+
+	return bLocationIsFinite && bLocationIsNearCharacter;
+}
+
+void AmultiplayerCharacter::ServerSpawnReplicatedCube_Implementation(
+	FVector_NetQuantize SpawnLocation)
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr || !HasAuthority())
+	{
+		return;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.Instigator = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	World->SpawnActor<AmultiplayerReplicatedCube>(
+		AmultiplayerReplicatedCube::StaticClass(),
+		SpawnLocation,
+		FRotator::ZeroRotator,
+		SpawnParameters
+	);
+}
+
+void AmultiplayerCharacter::OnRep_NetworkActionCount()
+{
+	BroadcastNetworkActionCount();
+}
+
+void AmultiplayerCharacter::BroadcastNetworkActionCount()
+{
+	OnNetworkActionCountChanged.Broadcast(NetworkActionCount);
+
+	const FString Message = FString::Printf(
+		TEXT("%s received NetworkActionCount=%d"),
+		*GetName(),
+		NetworkActionCount
+	);
+	UE_LOG(LogTemplateCharacter, Log, TEXT("%s"), *Message);
+
+	if (GEngine != nullptr)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Yellow, Message);
 	}
 }
 

@@ -2,12 +2,8 @@
 
 #pragma once
 
-#include "AbilitySystemInterface.h"
-#include "AbilitySystem/Abilities/multiplayerAbilityPresentationInterface.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
-#include "GameplayCueInterface.h"
-#include "GameplayTagContainer.h"
 #include "Logging/LogMacros.h"
 #include "multiplayerCharacter.generated.h"
 
@@ -15,25 +11,16 @@ class USpringArmComponent;
 class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
-class UPointLightComponent;
 class UmultiplayerVictoryPresenterComponent;
-class UmultiplayerAbilitySet;
-class UmultiplayerAbilitySystemComponent;
-class UmultiplayerAttributeSet;
-class UmultiplayerInputConfig;
-class UmultiplayerGASHUDPresenterComponent;
-class UmultiplayerGASDeveloperHarnessComponent;
-class UmultiplayerGASCuePresenterComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnMultiplayerAbilitySystemInitialized);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNetworkActionCountChanged, int32, NewCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnServerActionConfirmed, int32, ConfirmedCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNetworkActionEffect, FVector, EffectLocation);
 
 UCLASS(config=Game)
-class AmultiplayerCharacter : public ACharacter,
-	public IAbilitySystemInterface,
-	public IGameplayCueInterface,
-	public ImultiplayerAbilityPresentationInterface
+class AmultiplayerCharacter : public ACharacter
 {
 	GENERATED_BODY()
 
@@ -45,7 +32,7 @@ class AmultiplayerCharacter : public ACharacter,
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
 
-	/** Local bridge from replicated game-over state to the Character Blueprint event. */
+	/** Local-only bridge from replicated game-over state to the configured victory UMG. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Victory", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UmultiplayerVictoryPresenterComponent> VictoryPresenter;
 	
@@ -65,76 +52,37 @@ class AmultiplayerCharacter : public ACharacter,
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* LookAction;
 
-	/** Single authoritative startup ability/effect set for this character. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UmultiplayerAbilitySet> StartupAbilitySet;
-
-	/** Formal Enhanced Input to GAS tag mapping. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS|Input", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UmultiplayerInputConfig> AbilityInputConfig;
-
-	/** Dedicated mapping context for formal GAS actions. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GAS|Input", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UInputMappingContext> AbilityMappingContext;
-
-	/** Owns the local GAS HUD and its binding lifecycle. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "GAS|UI", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UmultiplayerGASHUDPresenterComponent> GASHUDPresenter;
-
-	/** Owns local GameplayCue lights and prediction presentation state. */
-	UPROPERTY(VisibleAnywhere, Category = "GAS|Cue", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UmultiplayerGASCuePresenterComponent> GASCuePresenter;
-
-	/** Non-shipping multiplayer/GAS verification fixture, isolated from gameplay responsibilities. */
-	UPROPERTY(VisibleAnywhere, Category = "Developer", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UmultiplayerGASDeveloperHarnessComponent> GASDeveloperHarness;
-
 public:
 	AmultiplayerCharacter();
 
-	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
-	virtual void PossessedBy(AController* NewController) override;
-	virtual void OnRep_PlayerState() override;
-	virtual void GameplayCueDefaultHandler(
-		EGameplayCueEvent::Type EventType,
-		const FGameplayCueParameters& Parameters) override;
-	virtual void HandleAbilityPresentation_Implementation(
-		const FmultiplayerAbilityPresentationEvent& Event) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	UFUNCTION(BlueprintPure, Category = "GAS")
-	UmultiplayerAbilitySystemComponent* GetMultiplayerAbilitySystemComponent() const;
+	UFUNCTION(BlueprintCallable, Category = "Network|Debug")
+	void PrintNetworkRole();
 
-	UFUNCTION(BlueprintPure, Category = "GAS")
-	UmultiplayerAttributeSet* GetMultiplayerAttributeSet() const { return AttributeSet; }
+	UFUNCTION(BlueprintCallable, Category = "Network|Test")
+	void RequestServerAction();
 
-	UFUNCTION(BlueprintPure, Category = "GAS|Input")
-	UmultiplayerInputConfig* GetAbilityInputConfig() const { return AbilityInputConfig; }
-
-	UFUNCTION(BlueprintPure, Category = "GAS|Input")
-	UInputMappingContext* GetAbilityMappingContext() const { return AbilityMappingContext; }
-
-	UFUNCTION(BlueprintPure, Category = "GAS")
-	UmultiplayerAbilitySet* GetStartupAbilitySet() const { return StartupAbilitySet; }
-
-	/** Local Blueprint presentation hook fired once when replicated victory arrives. */
-	UFUNCTION(
-		BlueprintImplementableEvent,
-		Category = "Coop|Victory",
-		meta = (DisplayName = "On Coop Game Won"))
-	void ReceiveCoopGameWon();
+	UFUNCTION(BlueprintCallable, Category = "Network|Test")
+	void RequestSpawnReplicatedCube();
 
 	/** May be called by the victory widget on either player's owning client. */
-	UFUNCTION(
-		BlueprintCallable,
-		Category = "Coop|Victory",
-		meta = (DisplayName = "Request Restart Coop Game"))
+	UFUNCTION(BlueprintCallable, Category = "Coop|Match")
 	void RequestRestartCoopGame();
 
-	/** Called on server and clients by the persistent PlayerState death state. */
-	void ApplyDeathState(bool bNewDeadState);
+	UFUNCTION(BlueprintPure, Category = "Network|Test")
+	int32 GetNetworkActionCount() const { return NetworkActionCount; }
 
-	UPROPERTY(BlueprintAssignable, Category = "GAS")
-	FOnMultiplayerAbilitySystemInitialized OnAbilitySystemInitialized;
+	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
+	FOnNetworkActionCountChanged OnNetworkActionCountChanged;
+
+	/** Only the owning client receives this server acknowledgement. */
+	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
+	FOnServerActionConfirmed OnServerActionConfirmed;
+
+	/** Every connected peer receives this transient presentation event. */
+	UPROPERTY(BlueprintAssignable, Category = "Network|Test")
+	FOnNetworkActionEffect OnNetworkActionEffect;
 
 protected:
 
@@ -143,6 +91,7 @@ protected:
 
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
+			
 
 protected:
 
@@ -151,24 +100,28 @@ protected:
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerRequestAction();
+
+	UFUNCTION(Client, Reliable)
+	void ClientConfirmServerAction(int32 ConfirmedCount);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayNetworkActionEffect(FVector_NetQuantize EffectLocation);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerSpawnReplicatedCube(FVector_NetQuantize SpawnLocation);
+
+	UFUNCTION(Server, Reliable, WithValidation)
 	void ServerRestartCoopGame();
 
+	UFUNCTION()
+	void OnRep_NetworkActionCount();
+
 private:
-	void InitializeAbilitySystem();
-	void AbilityInputTagPressed(FGameplayTag InputTag);
-	void AbilityInputTagReleased(FGameplayTag InputTag);
+	void BroadcastNetworkActionCount();
 
-	UPROPERTY(Transient)
-	TObjectPtr<UmultiplayerAbilitySystemComponent> AbilitySystemComponent;
-
-	UPROPERTY(Transient)
-	TObjectPtr<UmultiplayerAttributeSet> AttributeSet;
-
-	UPROPERTY(VisibleAnywhere, Category = "GAS|Cue")
-	TObjectPtr<UPointLightComponent> GameplayCueFlashLight;
-
-	UPROPERTY(VisibleAnywhere, Category = "GAS|Cue")
-	TObjectPtr<UPointLightComponent> GameplayCueStateLight;
+	UPROPERTY(ReplicatedUsing = OnRep_NetworkActionCount)
+	int32 NetworkActionCount = 0;
 
 public:
 	/** Returns CameraBoom subobject **/

@@ -6,6 +6,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/EngineBaseTypes.h"
 #include "Interfaces/OnlineSessionInterface.h"
+#include "OnlineSessionSettings.h"
 #include "multiplayerGameInstance.generated.h"
 
 UENUM(BlueprintType)
@@ -15,7 +16,8 @@ enum class EMultiplayerSessionOperation : uint8
 	Hosting,
 	Finding,
 	Joining,
-	Destroying
+	Destroying,
+	Reconnecting
 };
 
 UENUM(BlueprintType)
@@ -107,6 +109,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void DestroyGameSession();
 
+	/** Rejoins the last successfully joined client session while its host is still running. */
+	UFUNCTION(BlueprintCallable, Category = "Network|Session")
+	void ReconnectLastSession();
+
+	UFUNCTION(BlueprintPure, Category = "Network|Session")
+	bool CanReconnectLastSession() const;
+
 	UFUNCTION(BlueprintPure, Category = "Network|Session")
 	bool IsSessionOperationInProgress() const
 	{
@@ -141,6 +150,9 @@ public:
 	FmultiplayerSessionOperationEvent OnDestroyComplete;
 
 	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
+	FmultiplayerSessionOperationEvent OnReconnectComplete;
+
+	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
 	FmultiplayerSessionOperationChanged OnSessionOperationChanged;
 
 	/** Network and map travel failures are surfaced to UI instead of failing silently. */
@@ -161,9 +173,20 @@ protected:
 	EMultiplayerSessionMap SelectedSessionMap = EMultiplayerSessionMap::DesertCityExample;
 
 private:
+	enum class EDestroySessionContinuation : uint8
+	{
+		None,
+		CreateHostedSession,
+		JoinReconnectSession
+	};
+
 	void CreateSession();
 	void BindDestroyDelegate();
 	void ClearSessionDelegates();
+	void ClearReconnectTarget();
+	bool BeginJoinSession(const FOnlineSessionSearchResult& SearchResult);
+	void StartReconnectJoin();
+	void CompleteReconnect(bool bWasSuccessful);
 	bool BeginSessionOperation(EMultiplayerSessionOperation NewOperation);
 	void EndSessionOperation();
 
@@ -198,7 +221,13 @@ private:
 	FString PendingServerName = TEXT("Coop Session");
 	int32 PendingPublicConnections = 4;
 	bool bPendingIsLanMatch = true;
-	bool bCreateSessionAfterDestroy = false;
+	EDestroySessionContinuation DestroySessionContinuation = EDestroySessionContinuation::None;
+
+	FOnlineSessionSearchResult PendingJoinResult;
+	FOnlineSessionSearchResult LastJoinedResult;
+	bool bHasPendingJoinResult = false;
+	bool bHasLastJoinedResult = false;
+
 	EMultiplayerSessionOperation CurrentOperation = EMultiplayerSessionOperation::None;
 	FString LastConnectionError;
 };

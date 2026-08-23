@@ -26,6 +26,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void PostLogin(APlayerController* NewPlayer) override;
+	virtual void Logout(AController* Exiting) override;
 
 	/** Authoritative number of rack slots that must be activated before victory. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Coop|Objective", meta = (ClampMin = "1"))
@@ -36,7 +38,10 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|LAN")
 	FString LANServerAddress = TEXT("127.0.0.1");
+
+private:
+	void LogConnectionSnapshot(
+		const TCHAR* Phase,
+		const AController* Controller,
+		const APawn* Pawn) const;
 };
-
-
-

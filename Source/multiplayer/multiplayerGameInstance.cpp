@@ -74,6 +74,11 @@ void UmultiplayerGameInstance::ClearLastConnectionError()
 	LastConnectionError.Reset();
 }
 
+bool UmultiplayerGameInstance::CanReconnectLastSession() const
+{
+	return SessionInterface.IsValid() && bHasLastJoinedResult;
+}
+
 void UmultiplayerGameInstance::SelectSessionMap(EMultiplayerSessionMap NewMap)
 {
 	SelectedSessionMap = NewMap;
@@ -111,10 +116,11 @@ void UmultiplayerGameInstance::HostGame(
 	PendingServerName = ServerName.IsEmpty() ? TEXT("Coop Session") : ServerName;
 	PendingPublicConnections = FMath::Max(2, PublicConnections);
 	bPendingIsLanMatch = bIsLanMatch;
+	ClearReconnectTarget();
 
 	if (SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
 	{
-		bCreateSessionAfterDestroy = true;
+		DestroySessionContinuation = EDestroySessionContinuation::CreateHostedSession;
 		BindDestroyDelegate();
 
 		if (!SessionInterface->DestroySession(NAME_GameSession))
@@ -122,7 +128,7 @@ void UmultiplayerGameInstance::HostGame(
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
 				DestroySessionCompleteHandle);
 			DestroySessionCompleteHandle.Reset();
-			bCreateSessionAfterDestroy = false;
+			DestroySessionContinuation = EDestroySessionContinuation::None;
 			EndSessionOperation();
 			OnHostComplete.Broadcast(false);
 		}
@@ -218,20 +224,8 @@ void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 		return;
 	}
 
-	JoinSessionCompleteHandle =
-		SessionInterface->AddOnJoinSessionCompleteDelegate_Handle(
-			FOnJoinSessionCompleteDelegate::CreateUObject(
-				this,
-				&UmultiplayerGameInstance::HandleJoinSessionComplete));
-
-	if (!SessionInterface->JoinSession(
-		0,
-		NAME_GameSession,
-		SessionSearch->SearchResults[ResultIndex]))
+	if (!BeginJoinSession(SessionSearch->SearchResults[ResultIndex]))
 	{
-		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
-			JoinSessionCompleteHandle);
-		JoinSessionCompleteHandle.Reset();
 		EndSessionOperation();
 		OnJoinComplete.Broadcast(false);
 	}
@@ -246,7 +240,8 @@ void UmultiplayerGameInstance::DestroyGameSession()
 		return;
 	}
 
-	bCreateSessionAfterDestroy = false;
+	ClearReconnectTarget();
+	DestroySessionContinuation = EDestroySessionContinuation::None;
 
 	if (SessionInterface->GetNamedSession(NAME_GameSession) == nullptr)
 	{
@@ -264,6 +259,98 @@ void UmultiplayerGameInstance::DestroyGameSession()
 		EndSessionOperation();
 		OnDestroyComplete.Broadcast(false);
 	}
+}
+
+void UmultiplayerGameInstance::ReconnectLastSession()
+{
+	if (!CanReconnectLastSession()
+		|| !BeginSessionOperation(EMultiplayerSessionOperation::Reconnecting))
+	{
+		OnReconnectComplete.Broadcast(false);
+		return;
+	}
+
+	ClearLastConnectionError();
+	bHasPendingJoinResult = false;
+	DestroySessionContinuation = EDestroySessionContinuation::None;
+
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Reconnect started. SessionId=%s"),
+		*LastJoinedResult.GetSessionIdStr());
+
+	if (SessionInterface->GetNamedSession(NAME_GameSession) == nullptr)
+	{
+		StartReconnectJoin();
+		return;
+	}
+
+	DestroySessionContinuation = EDestroySessionContinuation::JoinReconnectSession;
+	BindDestroyDelegate();
+	if (!SessionInterface->DestroySession(NAME_GameSession))
+	{
+		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
+			DestroySessionCompleteHandle);
+		DestroySessionCompleteHandle.Reset();
+		DestroySessionContinuation = EDestroySessionContinuation::None;
+		CompleteReconnect(false);
+	}
+}
+void UmultiplayerGameInstance::ClearReconnectTarget()
+{
+	PendingJoinResult = FOnlineSessionSearchResult();
+	LastJoinedResult = FOnlineSessionSearchResult();
+	bHasPendingJoinResult = false;
+	bHasLastJoinedResult = false;
+}
+
+bool UmultiplayerGameInstance::BeginJoinSession(
+	const FOnlineSessionSearchResult& SearchResult)
+{
+	PendingJoinResult = SearchResult;
+	bHasPendingJoinResult = true;
+
+	JoinSessionCompleteHandle =
+		SessionInterface->AddOnJoinSessionCompleteDelegate_Handle(
+			FOnJoinSessionCompleteDelegate::CreateUObject(
+				this,
+				&UmultiplayerGameInstance::HandleJoinSessionComplete));
+
+	if (SessionInterface->JoinSession(
+		0,
+		NAME_GameSession,
+		PendingJoinResult))
+	{
+		return true;
+	}
+
+	SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
+		JoinSessionCompleteHandle);
+	JoinSessionCompleteHandle.Reset();
+	bHasPendingJoinResult = false;
+	return false;
+}
+
+void UmultiplayerGameInstance::StartReconnectJoin()
+{
+	if (CurrentOperation != EMultiplayerSessionOperation::Reconnecting
+		|| !bHasLastJoinedResult
+		|| !BeginJoinSession(LastJoinedResult))
+	{
+		CompleteReconnect(false);
+	}
+}
+
+void UmultiplayerGameInstance::CompleteReconnect(bool bWasSuccessful)
+{
+	DestroySessionContinuation = EDestroySessionContinuation::None;
+	bHasPendingJoinResult = false;
+	EndSessionOperation();
+
+	UE_LOG(LogTemp, Log, TEXT("Reconnect completed. Success=%s"),
+		bWasSuccessful ? TEXT("true") : TEXT("false"));
+	OnReconnectComplete.Broadcast(bWasSuccessful);
 }
 
 void UmultiplayerGameInstance::BindDestroyDelegate()
@@ -359,6 +446,30 @@ void UmultiplayerGameInstance::HandleJoinSessionComplete(
 		World != nullptr ? World->GetFirstPlayerController() : nullptr;
 
 	const bool bCanTravel = bResolved && PlayerController != nullptr;
+	const bool bWasReconnect =
+		CurrentOperation == EMultiplayerSessionOperation::Reconnecting;
+
+	if (bCanTravel && bHasPendingJoinResult)
+	{
+		LastJoinedResult = PendingJoinResult;
+		bHasLastJoinedResult = true;
+		LastConnectionError.Reset();
+	}
+	bHasPendingJoinResult = false;
+
+	if (bWasReconnect)
+	{
+		if (!bCanTravel)
+		{
+			CompleteReconnect(false);
+			return;
+		}
+
+		CompleteReconnect(true);
+		PlayerController->ClientTravel(ConnectString, TRAVEL_Absolute);
+		return;
+	}
+
 	EndSessionOperation();
 	OnJoinComplete.Broadcast(bCanTravel);
 
@@ -376,10 +487,10 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 		DestroySessionCompleteHandle);
 	DestroySessionCompleteHandle.Reset();
 
-	const bool bShouldCreate = bCreateSessionAfterDestroy;
-	bCreateSessionAfterDestroy = false;
+	const EDestroySessionContinuation Continuation = DestroySessionContinuation;
+	DestroySessionContinuation = EDestroySessionContinuation::None;
 
-	if (bShouldCreate)
+	if (Continuation == EDestroySessionContinuation::CreateHostedSession)
 	{
 		if (bWasSuccessful)
 		{
@@ -389,6 +500,19 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 		{
 			EndSessionOperation();
 			OnHostComplete.Broadcast(false);
+		}
+		return;
+	}
+
+	if (Continuation == EDestroySessionContinuation::JoinReconnectSession)
+	{
+		if (bWasSuccessful)
+		{
+			StartReconnectJoin();
+		}
+		else
+		{
+			CompleteReconnect(false);
 		}
 		return;
 	}
@@ -425,9 +549,13 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 	const FString& FailureType,
 	const FString& ErrorString)
 {
+	const bool bWasReconnect =
+		CurrentOperation == EMultiplayerSessionOperation::Reconnecting;
+
 	ClearSessionDelegates();
 	SessionSearch.Reset();
-	bCreateSessionAfterDestroy = false;
+	bHasPendingJoinResult = false;
+	DestroySessionContinuation = EDestroySessionContinuation::None;
 	EndSessionOperation();
 
 	LastConnectionError = FString::Printf(
@@ -438,6 +566,10 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 
 	UE_LOG(LogTemp, Error, TEXT("%s"), *LastConnectionError);
 	OnConnectionFailure.Broadcast(FailureSource, FailureType, ErrorString);
+	if (bWasReconnect)
+	{
+		OnReconnectComplete.Broadcast(false);
+	}
 }
 
 bool UmultiplayerGameInstance::BeginSessionOperation(

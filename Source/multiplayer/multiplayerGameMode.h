@@ -14,12 +14,6 @@ class AmultiplayerGameMode : public AGameModeBase
 public:
 	AmultiplayerGameMode();
 
-	UFUNCTION(BlueprintCallable, Category = "Network|LAN")
-	void HostLANGame();
-
-	UFUNCTION(BlueprintCallable, Category = "Network|LAN")
-	void JoinLANGame();
-
 	/** Reloads the current match and travels every connected player together. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Match")
 	void RestartCoopGame();
@@ -31,9 +25,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Coop|Objective", meta = (ClampMin = "1"))
 	int32 RequiredKeys = 4;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|LAN")
-	FString LANMapPath = TEXT("/Script/Engine.World'/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo'");
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|LAN")
-	FString LANServerAddress = TEXT("127.0.0.1");
+private:
+	/** Makes simultaneous restart clicks from both victory screens idempotent. */
+	bool bRestartTravelRequested = false;
 };

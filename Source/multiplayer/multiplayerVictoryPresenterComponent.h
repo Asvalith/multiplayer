@@ -7,10 +7,9 @@
 #include "multiplayerVictoryPresenterComponent.generated.h"
 
 class AmultiplayerCoopGameState;
-class UUserWidget;
 
-/** Local-only presentation layer that turns the replicated win state into a UMG screen. */
-UCLASS(ClassGroup = (Coop), meta = (BlueprintSpawnableComponent))
+/** Bridges replicated victory state to the owning local PlayerController. */
+UCLASS(ClassGroup = (Coop))
 class MULTIPLAYER_API UmultiplayerVictoryPresenterComponent : public UActorComponent
 {
 	GENERATED_BODY()
@@ -18,7 +17,7 @@ class MULTIPLAYER_API UmultiplayerVictoryPresenterComponent : public UActorCompo
 public:
 	UmultiplayerVictoryPresenterComponent();
 
-	/** Re-evaluates local ownership after possession or controller changes. */
+	/** Re-evaluates local ownership and the current replicated GameState. */
 	void RefreshBinding();
 
 protected:
@@ -28,21 +27,12 @@ protected:
 	UFUNCTION()
 	void HandleGameWon();
 
-	UPROPERTY(EditAnywhere, Category = "Coop|Victory")
-	TSubclassOf<UUserWidget> VictoryWidgetClass;
-
-	UPROPERTY(EditAnywhere, Category = "Coop|Victory")
-	bool bShowMouseCursor = true;
-
-	UPROPERTY(EditAnywhere, Category = "Coop|Victory")
-	bool bSwitchToGameAndUIInput = true;
-
 private:
 	void ClearBinding();
 
 	UPROPERTY()
 	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
 
-	UPROPERTY(Transient)
-	TObjectPtr<UUserWidget> VictoryWidget;
+	/** Prevents duplicate Blueprint presentation when the replicated state repeats. */
+	bool bVictoryNotified = false;
 };

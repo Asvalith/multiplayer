@@ -112,7 +112,8 @@ private:
 	bool bPlateActive = false;
 
 	FVector ReleasedRelativeLocation = FVector::ZeroVector;
-	TSet<TWeakObjectPtr<ACharacter>> Occupants;
+	/** Counts overlapping components per Character so one EndOverlap cannot remove another active overlap. */
+	TMap<TWeakObjectPtr<ACharacter>, int32> OccupantOverlapCounts;
 
 	UPROPERTY()
 	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;

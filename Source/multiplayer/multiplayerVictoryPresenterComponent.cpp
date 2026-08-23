@@ -2,14 +2,13 @@
 
 #include "multiplayerVictoryPresenterComponent.h"
 
-#include "Blueprint/UserWidget.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/PlayerController.h"
+#include "multiplayerCoopPlayerController.h"
 #include "multiplayerCoopGameState.h"
 
 UmultiplayerVictoryPresenterComponent::UmultiplayerVictoryPresenterComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	SetIsReplicatedByDefault(false);
 }
 
 void UmultiplayerVictoryPresenterComponent::BeginPlay()
@@ -20,18 +19,28 @@ void UmultiplayerVictoryPresenterComponent::BeginPlay()
 
 void UmultiplayerVictoryPresenterComponent::RefreshBinding()
 {
+	AmultiplayerCoopGameState* PreviousGameState = CoopGameState;
 	ClearBinding();
 
-	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	if (OwnerPawn == nullptr || !OwnerPawn->IsLocallyControlled())
+	const AmultiplayerCoopPlayerController* PlayerController =
+		Cast<AmultiplayerCoopPlayerController>(GetOwner());
+	if (PlayerController == nullptr || !PlayerController->IsLocalController())
 	{
 		return;
 	}
 
-	CoopGameState = GetWorld()->GetGameState<AmultiplayerCoopGameState>();
+	UWorld* World = GetWorld();
+	CoopGameState = World != nullptr
+		? World->GetGameState<AmultiplayerCoopGameState>()
+		: nullptr;
 	if (CoopGameState == nullptr)
 	{
 		return;
+	}
+
+	if (CoopGameState != PreviousGameState)
+	{
+		bVictoryNotified = false;
 	}
 
 	CoopGameState->OnGameWon.AddUniqueDynamic(
@@ -47,12 +56,13 @@ void UmultiplayerVictoryPresenterComponent::RefreshBinding()
 void UmultiplayerVictoryPresenterComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ClearBinding();
+	bVictoryNotified = false;
 	Super::EndPlay(EndPlayReason);
 }
 
 void UmultiplayerVictoryPresenterComponent::ClearBinding()
 {
-	if (CoopGameState != nullptr)
+	if (IsValid(CoopGameState))
 	{
 		CoopGameState->OnGameWon.RemoveDynamic(
 			this,
@@ -63,33 +73,18 @@ void UmultiplayerVictoryPresenterComponent::ClearBinding()
 
 void UmultiplayerVictoryPresenterComponent::HandleGameWon()
 {
-	if (VictoryWidget != nullptr || VictoryWidgetClass == nullptr)
+	if (bVictoryNotified)
 	{
 		return;
 	}
 
-	APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	APlayerController* PlayerController = OwnerPawn != nullptr
-		? Cast<APlayerController>(OwnerPawn->GetController())
-		: nullptr;
+	AmultiplayerCoopPlayerController* PlayerController =
+		Cast<AmultiplayerCoopPlayerController>(GetOwner());
 	if (PlayerController == nullptr || !PlayerController->IsLocalController())
 	{
 		return;
 	}
 
-	VictoryWidget = CreateWidget<UUserWidget>(PlayerController, VictoryWidgetClass);
-	if (VictoryWidget == nullptr)
-	{
-		return;
-	}
-
-	VictoryWidget->AddToViewport(100);
-	PlayerController->bShowMouseCursor = bShowMouseCursor;
-	if (bSwitchToGameAndUIInput)
-	{
-		FInputModeGameAndUI InputMode;
-		InputMode.SetWidgetToFocus(VictoryWidget->TakeWidget());
-		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		PlayerController->SetInputMode(InputMode);
-	}
+	bVictoryNotified = true;
+	PlayerController->ReceiveCoopGameWon();
 }

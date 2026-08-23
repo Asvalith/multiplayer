@@ -105,17 +105,17 @@ void AmultiplayerMovingPlatform::EndPlay(const EEndPlayReason::Type EndPlayReaso
 			&AmultiplayerMovingPlatform::HandleActivationPlateChanged);
 	}
 
-	for (const TWeakObjectPtr<ACharacter>& Occupant : Occupants)
+	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OccupantOverlapCounts)
 	{
-		if (Occupant.IsValid())
+		if (Entry.Key.IsValid())
 		{
-			Occupant->OnDestroyed.RemoveDynamic(
+			Entry.Key->OnDestroyed.RemoveDynamic(
 				this,
 				&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
 		}
 	}
 
-	Occupants.Reset();
+	OccupantOverlapCounts.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -142,10 +142,14 @@ void AmultiplayerMovingPlatform::HandleBeginOverlap(
 	ACharacter* Character = Cast<ACharacter>(OtherActor);
 	if (Character != nullptr && Character->IsPlayerControlled())
 	{
-		Occupants.Add(Character);
-		Character->OnDestroyed.AddUniqueDynamic(
-			this,
-			&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
+		int32& OverlapCount = OccupantOverlapCounts.FindOrAdd(Character);
+		++OverlapCount;
+		if (OverlapCount == 1)
+		{
+			Character->OnDestroyed.AddUniqueDynamic(
+				this,
+				&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
+		}
 		RefreshOccupancy();
 	}
 }
@@ -163,10 +167,20 @@ void AmultiplayerMovingPlatform::HandleEndOverlap(
 
 	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
 	{
-		Occupants.Remove(Character);
-		Character->OnDestroyed.RemoveDynamic(
-			this,
-			&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
+		int32* OverlapCount = OccupantOverlapCounts.Find(Character);
+		if (OverlapCount == nullptr)
+		{
+			return;
+		}
+
+		--(*OverlapCount);
+		if (*OverlapCount <= 0)
+		{
+			OccupantOverlapCounts.Remove(Character);
+			Character->OnDestroyed.RemoveDynamic(
+				this,
+				&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
+		}
 		RefreshOccupancy();
 	}
 }
@@ -180,7 +194,7 @@ void AmultiplayerMovingPlatform::HandleOccupantDestroyed(AActor* DestroyedActor)
 
 	if (ACharacter* Character = Cast<ACharacter>(DestroyedActor))
 	{
-		Occupants.Remove(Character);
+		OccupantOverlapCounts.Remove(Character);
 		Character->OnDestroyed.RemoveDynamic(
 			this,
 			&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
@@ -192,7 +206,7 @@ void AmultiplayerMovingPlatform::RefreshOccupancy()
 {
 	RemoveInvalidOccupants();
 
-	const int32 NewPlayerCount = Occupants.Num();
+	const int32 NewPlayerCount = OccupantOverlapCounts.Num();
 	if (ReplicatedPlayerCount != NewPlayerCount)
 	{
 		ReplicatedPlayerCount = NewPlayerCount;
@@ -226,9 +240,9 @@ void AmultiplayerMovingPlatform::RefreshActivation()
 
 void AmultiplayerMovingPlatform::RemoveInvalidOccupants()
 {
-	for (auto It = Occupants.CreateIterator(); It; ++It)
+	for (auto It = OccupantOverlapCounts.CreateIterator(); It; ++It)
 	{
-		if (!It->IsValid())
+		if (!It.Key().IsValid() || It.Value() <= 0)
 		{
 			It.RemoveCurrent();
 		}

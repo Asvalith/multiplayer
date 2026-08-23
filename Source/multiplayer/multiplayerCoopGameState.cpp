@@ -64,6 +64,5 @@ void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 	if (ObjectiveState.bGameWon)
 	{
 		OnGameWon.Broadcast();
-		ReceiveGameWon();
 	}
 }

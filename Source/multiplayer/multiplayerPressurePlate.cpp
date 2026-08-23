@@ -73,15 +73,15 @@ void AmultiplayerPressurePlate::EndPlay(const EEndPlayReason::Type EndPlayReason
 	ActivationTrigger->OnComponentBeginOverlap.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleBeginOverlap);
 	ActivationTrigger->OnComponentEndOverlap.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleEndOverlap);
 
-	for (const TWeakObjectPtr<ACharacter>& Occupant : Occupants)
+	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OccupantOverlapCounts)
 	{
-		if (Occupant.IsValid())
+		if (Entry.Key.IsValid())
 		{
-			Occupant->OnDestroyed.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
+			Entry.Key->OnDestroyed.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
 		}
 	}
 
-	Occupants.Reset();
+	OccupantOverlapCounts.Reset();
 	if (CoopGameState != nullptr)
 	{
 		CoopGameState->OnObjectiveProgressChanged.RemoveDynamic(
@@ -119,11 +119,11 @@ void AmultiplayerPressurePlate::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 
 void AmultiplayerPressurePlate::GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const
 {
-	for (const TWeakObjectPtr<ACharacter>& Occupant : Occupants)
+	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OccupantOverlapCounts)
 	{
-		if (Occupant.IsValid())
+		if (Entry.Key.IsValid())
 		{
-			OutCharacters.Add(Occupant.Get());
+			OutCharacters.Add(Entry.Key.Get());
 		}
 	}
 }
@@ -166,8 +166,12 @@ void AmultiplayerPressurePlate::AddOccupant(AActor* OtherActor)
 		return;
 	}
 
-	Occupants.Add(Character);
-	Character->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
+	int32& OverlapCount = OccupantOverlapCounts.FindOrAdd(Character);
+	++OverlapCount;
+	if (OverlapCount == 1)
+	{
+		Character->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
+	}
 	EvaluatePlateState();
 }
 
@@ -180,8 +184,18 @@ void AmultiplayerPressurePlate::RemoveOccupant(AActor* OtherActor)
 
 	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
 	{
-		Occupants.Remove(Character);
-		Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
+		int32* OverlapCount = OccupantOverlapCounts.Find(Character);
+		if (OverlapCount == nullptr)
+		{
+			return;
+		}
+
+		--(*OverlapCount);
+		if (*OverlapCount <= 0)
+		{
+			OccupantOverlapCounts.Remove(Character);
+			Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
+		}
 		EvaluatePlateState();
 	}
 }
@@ -195,7 +209,7 @@ void AmultiplayerPressurePlate::HandleOccupantDestroyed(AActor* DestroyedActor)
 
 	if (ACharacter* Character = Cast<ACharacter>(DestroyedActor))
 	{
-		Occupants.Remove(Character);
+		OccupantOverlapCounts.Remove(Character);
 		Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerPressurePlate::HandleOccupantDestroyed);
 		EvaluatePlateState();
 	}
@@ -210,9 +224,9 @@ void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
 
 void AmultiplayerPressurePlate::RemoveInvalidOccupants()
 {
-	for (auto It = Occupants.CreateIterator(); It; ++It)
+	for (auto It = OccupantOverlapCounts.CreateIterator(); It; ++It)
 	{
-		if (!It->IsValid())
+		if (!It.Key().IsValid() || It.Value() <= 0)
 		{
 			It.RemoveCurrent();
 		}
@@ -231,13 +245,13 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 	const bool bObjectiveReady = !bRequireObjectiveComplete
 		|| (CoopGameState != nullptr && CoopGameState->IsObjectiveComplete());
 	const bool bNewPlateActive = (bLatchOnceActivated && bPlateActive)
-		|| (bObjectiveReady && !Occupants.IsEmpty());
+		|| (bObjectiveReady && !OccupantOverlapCounts.IsEmpty());
 	UE_LOG(
 		LogTemp,
 		Log,
 		TEXT("PressurePlate[%s] Evaluate: Occupants=%d ObjectiveRequired=%s ObjectiveReady=%s Current=%s New=%s"),
 		*GetName(),
-		Occupants.Num(),
+		OccupantOverlapCounts.Num(),
 		bRequireObjectiveComplete ? TEXT("true") : TEXT("false"),
 		bObjectiveReady ? TEXT("true") : TEXT("false"),
 		bPlateActive ? TEXT("true") : TEXT("false"),

@@ -117,5 +117,6 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerCount)
 	int32 ReplicatedPlayerCount = 0;
 
-	TSet<TWeakObjectPtr<ACharacter>> Occupants;
+	/** Counts overlapping components per Character to keep occupancy stable. */
+	TMap<TWeakObjectPtr<ACharacter>, int32> OccupantOverlapCounts;
 };

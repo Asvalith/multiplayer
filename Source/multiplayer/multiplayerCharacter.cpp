@@ -9,13 +9,7 @@
 #include "GameFramework/Controller.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
-#include "Engine/Engine.h"
 #include "InputActionValue.h"
-#include "InputCoreTypes.h"
-#include "multiplayerReplicatedCube.h"
-#include "multiplayerVictoryPresenterComponent.h"
-#include "multiplayerGameMode.h"
-#include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -56,8 +50,6 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName); // Attach the camera to the end of the boom and let the boom adjust to match the controller orientation
 	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
 
-	VictoryPresenter = CreateDefaultSubobject<UmultiplayerVictoryPresenterComponent>(TEXT("VictoryPresenter"));
-
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
 }
@@ -68,7 +60,6 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 void AmultiplayerCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
-	VictoryPresenter->RefreshBinding();
 
 	// Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
@@ -95,203 +86,10 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AmultiplayerCharacter::Look);
 
-		// Temporary network verification controls.
-		PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AmultiplayerCharacter::PrintNetworkRole);
-		PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AmultiplayerCharacter::RequestServerAction);
-		PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AmultiplayerCharacter::RequestSpawnReplicatedCube);
 	}
 	else
 	{
 		UE_LOG(LogTemplateCharacter, Error, TEXT("'%s' Failed to find an Enhanced Input component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."), *GetNameSafe(this));
-	}
-}
-
-void AmultiplayerCharacter::GetLifetimeReplicatedProps(
-	TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-
-	DOREPLIFETIME(AmultiplayerCharacter, NetworkActionCount);
-}
-
-void AmultiplayerCharacter::PrintNetworkRole()
-{
-	const TCHAR* NetModeText = TEXT("Unknown");
-	switch (GetNetMode())
-	{
-	case NM_Standalone:
-		NetModeText = TEXT("Standalone");
-		break;
-	case NM_DedicatedServer:
-		NetModeText = TEXT("DedicatedServer");
-		break;
-	case NM_ListenServer:
-		NetModeText = TEXT("ListenServer");
-		break;
-	case NM_Client:
-		NetModeText = TEXT("Client");
-		break;
-	default:
-		break;
-	}
-
-	const FString Message = FString::Printf(
-		TEXT("%s | NetMode=%s LocalRole=%s RemoteRole=%s Authority=%s LocallyControlled=%s"),
-		*GetName(),
-		NetModeText,
-		*UEnum::GetValueAsString(GetLocalRole()),
-		*UEnum::GetValueAsString(GetRemoteRole()),
-		HasAuthority() ? TEXT("true") : TEXT("false"),
-		IsLocallyControlled() ? TEXT("true") : TEXT("false")
-	);
-
-	UE_LOG(LogTemplateCharacter, Log, TEXT("%s"), *Message);
-	if (GEngine != nullptr)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			5.0f,
-			HasAuthority() ? FColor::Green : FColor::Cyan,
-			Message
-		);
-	}
-}
-
-void AmultiplayerCharacter::RequestServerAction()
-{
-	ServerRequestAction();
-}
-
-bool AmultiplayerCharacter::ServerRequestAction_Validate()
-{
-	return !IsActorBeingDestroyed();
-}
-
-void AmultiplayerCharacter::ServerRequestAction_Implementation()
-{
-	++NetworkActionCount;
-	BroadcastNetworkActionCount();
-
-	// Persistent state uses replication; these RPCs only carry acknowledgement
-	// and transient presentation, so late joiners do not depend on them.
-	ClientConfirmServerAction(NetworkActionCount);
-	MulticastPlayNetworkActionEffect(GetActorLocation());
-}
-
-void AmultiplayerCharacter::ClientConfirmServerAction_Implementation(
-	int32 ConfirmedCount)
-{
-	OnServerActionConfirmed.Broadcast(ConfirmedCount);
-
-	UE_LOG(
-		LogTemplateCharacter,
-		Log,
-		TEXT("%s received owner-only confirmation: count=%d"),
-		*GetName(),
-		ConfirmedCount
-	);
-}
-
-void AmultiplayerCharacter::MulticastPlayNetworkActionEffect_Implementation(
-	FVector_NetQuantize EffectLocation)
-{
-	OnNetworkActionEffect.Broadcast(EffectLocation);
-
-	UE_LOG(
-		LogTemplateCharacter,
-		Verbose,
-		TEXT("%s received multicast effect at %s"),
-		*GetName(),
-		*EffectLocation.ToCompactString()
-	);
-}
-
-void AmultiplayerCharacter::RequestSpawnReplicatedCube()
-{
-	const FVector SpawnLocation =
-		GetActorLocation()
-		+ GetActorForwardVector() * 200.0f
-		+ FVector(0.0f, 0.0f, 100.0f);
-
-	ServerSpawnReplicatedCube(SpawnLocation);
-}
-
-void AmultiplayerCharacter::RequestRestartCoopGame()
-{
-	ServerRestartCoopGame();
-}
-
-bool AmultiplayerCharacter::ServerRestartCoopGame_Validate()
-{
-	return !IsActorBeingDestroyed();
-}
-
-void AmultiplayerCharacter::ServerRestartCoopGame_Implementation()
-{
-	if (AmultiplayerGameMode* CoopGameMode =
-		GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AmultiplayerGameMode>() : nullptr)
-	{
-		CoopGameMode->RestartCoopGame();
-	}
-}
-
-bool AmultiplayerCharacter::ServerSpawnReplicatedCube_Validate(
-	FVector_NetQuantize SpawnLocation)
-{
-	const bool bLocationIsFinite =
-		FMath::IsFinite(SpawnLocation.X)
-		&& FMath::IsFinite(SpawnLocation.Y)
-		&& FMath::IsFinite(SpawnLocation.Z);
-
-	const bool bLocationIsNearCharacter =
-		FVector::DistSquared(SpawnLocation, GetActorLocation())
-		<= FMath::Square(500.0f);
-
-	return bLocationIsFinite && bLocationIsNearCharacter;
-}
-
-void AmultiplayerCharacter::ServerSpawnReplicatedCube_Implementation(
-	FVector_NetQuantize SpawnLocation)
-{
-	UWorld* World = GetWorld();
-	if (World == nullptr || !HasAuthority())
-	{
-		return;
-	}
-
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.Owner = this;
-	SpawnParameters.Instigator = this;
-	SpawnParameters.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-
-	World->SpawnActor<AmultiplayerReplicatedCube>(
-		AmultiplayerReplicatedCube::StaticClass(),
-		SpawnLocation,
-		FRotator::ZeroRotator,
-		SpawnParameters
-	);
-}
-
-void AmultiplayerCharacter::OnRep_NetworkActionCount()
-{
-	BroadcastNetworkActionCount();
-}
-
-void AmultiplayerCharacter::BroadcastNetworkActionCount()
-{
-	OnNetworkActionCountChanged.Broadcast(NetworkActionCount);
-
-	const FString Message = FString::Printf(
-		TEXT("%s received NetworkActionCount=%d"),
-		*GetName(),
-		NetworkActionCount
-	);
-	UE_LOG(LogTemplateCharacter, Log, TEXT("%s"), *Message);
-
-	if (GEngine != nullptr)
-	{
-		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Yellow, Message);
 	}
 }
 

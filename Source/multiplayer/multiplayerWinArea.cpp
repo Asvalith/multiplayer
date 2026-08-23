@@ -52,15 +52,15 @@ void AmultiplayerWinArea::EndPlay(const EEndPlayReason::Type EndPlayReason)
 			&AmultiplayerWinArea::HandleObjectiveProgressChanged);
 	}
 
-	for (const TWeakObjectPtr<ACharacter>& Player : PlayersInside)
+	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : PlayerOverlapCounts)
 	{
-		if (Player.IsValid())
+		if (Entry.Key.IsValid())
 		{
-			Player->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
+			Entry.Key->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
 		}
 	}
 
-	PlayersInside.Reset();
+	PlayerOverlapCounts.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -80,8 +80,12 @@ void AmultiplayerWinArea::HandleBeginOverlap(
 	ACharacter* Character = Cast<ACharacter>(OtherActor);
 	if (Character != nullptr && Character->IsPlayerControlled())
 	{
-		PlayersInside.Add(Character);
-		Character->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
+		int32& OverlapCount = PlayerOverlapCounts.FindOrAdd(Character);
+		++OverlapCount;
+		if (OverlapCount == 1)
+		{
+			Character->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
+		}
 		EvaluateWinCondition();
 	}
 }
@@ -99,8 +103,19 @@ void AmultiplayerWinArea::HandleEndOverlap(
 
 	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
 	{
-		PlayersInside.Remove(Character);
-		Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
+		int32* OverlapCount = PlayerOverlapCounts.Find(Character);
+		if (OverlapCount == nullptr)
+		{
+			return;
+		}
+
+		--(*OverlapCount);
+		if (*OverlapCount <= 0)
+		{
+			PlayerOverlapCounts.Remove(Character);
+			Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
+		}
+		EvaluateWinCondition();
 	}
 }
 
@@ -113,7 +128,7 @@ void AmultiplayerWinArea::HandlePlayerDestroyed(AActor* DestroyedActor)
 
 	if (ACharacter* Character = Cast<ACharacter>(DestroyedActor))
 	{
-		PlayersInside.Remove(Character);
+		PlayerOverlapCounts.Remove(Character);
 		Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
 		EvaluateWinCondition();
 	}
@@ -128,9 +143,9 @@ void AmultiplayerWinArea::HandleObjectiveProgressChanged(
 
 void AmultiplayerWinArea::RemoveInvalidPlayers()
 {
-	for (auto Iterator = PlayersInside.CreateIterator(); Iterator; ++Iterator)
+	for (auto Iterator = PlayerOverlapCounts.CreateIterator(); Iterator; ++Iterator)
 	{
-		if (!Iterator->IsValid())
+		if (!Iterator.Key().IsValid() || Iterator.Value() <= 0)
 		{
 			Iterator.RemoveCurrent();
 		}
@@ -150,10 +165,10 @@ void AmultiplayerWinArea::EvaluateWinCondition()
 		Log,
 		TEXT("WinArea[%s] Evaluate: Players=%d RequiredPlayers=%d KeysComplete=%s"),
 		*GetName(),
-		PlayersInside.Num(),
+		PlayerOverlapCounts.Num(),
 		RequiredPlayers,
 		CoopGameState->IsObjectiveComplete() ? TEXT("true") : TEXT("false"));
-	if (PlayersInside.Num() >= RequiredPlayers
+	if (PlayerOverlapCounts.Num() >= RequiredPlayers
 		&& CoopGameState->IsObjectiveComplete())
 	{
 		CoopGameState->TryCompleteGame();

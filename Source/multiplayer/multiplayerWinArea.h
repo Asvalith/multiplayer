@@ -58,5 +58,6 @@ private:
 	UPROPERTY()
 	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
 
-	TSet<TWeakObjectPtr<ACharacter>> PlayersInside;
+	/** Counts overlapping components per Character so the win condition uses distinct players. */
+	TMap<TWeakObjectPtr<ACharacter>, int32> PlayerOverlapCounts;
 };

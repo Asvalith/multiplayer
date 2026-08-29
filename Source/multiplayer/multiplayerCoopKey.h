@@ -74,6 +74,7 @@ private:
 	void ApplyHeldState();
 	void HandleHolderChanged();
 	void HandleInstalledChanged();
+	void RefreshVisualTick();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
 	TObjectPtr<USceneComponent> SceneRoot;

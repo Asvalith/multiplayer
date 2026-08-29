@@ -52,10 +52,6 @@ public:
 			&& ObjectiveState.ActivatedKeys >= ObjectiveState.RequiredKeys;
 	}
 
-	/** Compatibility entry point. New rule code should mutate state through GameMode. */
-	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Objective", meta = (DeprecatedFunction, DeprecationMessage = "Configure the objective through multiplayerGameMode."))
-	void ConfigureRequiredKeys(int32 RequiredKeys);
-
 	/** Applies a server-computed snapshot and notifies local/server listeners. */
 	void ApplyAuthoritativeState(
 		const FmultiplayerCoopObjectiveState& NewObjectiveState);

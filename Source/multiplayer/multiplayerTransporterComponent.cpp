@@ -10,16 +10,6 @@ UmultiplayerTransporterComponent::UmultiplayerTransporterComponent()
 	PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
-void UmultiplayerTransporterComponent::BeginPlay()
-{
-	Super::BeginPlay();
-
-	if (const AActor* Owner = GetOwner())
-	{
-		StartLocation = Owner->GetActorLocation();
-	}
-}
-
 void UmultiplayerTransporterComponent::TickComponent(
 	float DeltaTime,
 	ELevelTick TickType,
@@ -78,8 +68,7 @@ void UmultiplayerTransporterComponent::ConfigureWorldTargets(
 	const FVector& InActiveLocation)
 {
 	StartLocation = InStartLocation;
-	ConfiguredActiveLocation = InActiveLocation;
-	bUseConfiguredWorldTargets = true;
+	ActiveLocation = InActiveLocation;
 }
 
 FVector UmultiplayerTransporterComponent::GetTargetLocation() const
@@ -89,22 +78,11 @@ FVector UmultiplayerTransporterComponent::GetTargetLocation() const
 		return StartLocation;
 	}
 
-	if (bUseConfiguredWorldTargets)
-	{
-		return ConfiguredActiveLocation;
-	}
-
-	const AActor* Owner = GetOwner();
-	const FVector Offset = bOffsetUsesActorRotation && Owner != nullptr
-		? Owner->GetActorQuat().RotateVector(ActiveOffset)
-		: ActiveOffset;
-
-	return StartLocation + Offset;
+	return ActiveLocation;
 }
 
 void UmultiplayerTransporterComponent::FinishMovement()
 {
 	bMoving = false;
 	SetComponentTickEnabled(false);
-	OnTransportTargetReached.Broadcast(bTransportActive);
 }

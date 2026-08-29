@@ -14,6 +14,7 @@
 AmultiplayerCoopKey::AmultiplayerCoopKey()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 	bReplicates = true;
 	SetReplicateMovement(true);
 
@@ -61,6 +62,8 @@ void AmultiplayerCoopKey::BeginPlay()
 	{
 		PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
+
+	RefreshVisualTick();
 }
 
 void AmultiplayerCoopKey::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -210,6 +213,7 @@ void AmultiplayerCoopKey::OnRep_Installed()
 void AmultiplayerCoopKey::HandleHolderChanged()
 {
 	ApplyHeldState();
+	RefreshVisualTick();
 	OnKeyPickedUp.Broadcast(Holder);
 	ReceiveKeyHolderChanged(Holder);
 }
@@ -222,6 +226,16 @@ void AmultiplayerCoopKey::HandleInstalledChanged()
 	}
 
 	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RefreshVisualTick();
+}
+
+void AmultiplayerCoopKey::RefreshVisualTick()
+{
+	SetActorTickEnabled(
+		Holder == nullptr
+		&& !bInstalled
+		&& RotationSpeedDegrees > 0.0f
+		&& !RotationAxis.IsNearlyZero());
 }
 
 void AmultiplayerCoopKey::ApplyHeldState()

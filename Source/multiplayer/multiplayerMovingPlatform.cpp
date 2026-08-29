@@ -10,7 +10,6 @@
 #include "multiplayerPlayerOccupancyComponent.h"
 #include "multiplayerPressurePlate.h"
 #include "multiplayerTransporterComponent.h"
-#include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
 AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
@@ -83,7 +82,6 @@ void AmultiplayerMovingPlatform::BeginPlay()
 	if (!HasAuthority())
 	{
 		ActivationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		HandlePlayerCountChanged();
 		return;
 	}
 
@@ -102,7 +100,6 @@ void AmultiplayerMovingPlatform::BeginPlay()
 		}
 	}
 
-	HandlePlayerCountChanged();
 	RefreshActivation();
 }
 
@@ -124,26 +121,12 @@ void AmultiplayerMovingPlatform::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
-void AmultiplayerMovingPlatform::GetLifetimeReplicatedProps(
-	TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(AmultiplayerMovingPlatform, ReplicatedPlayerCount);
-}
-
-void AmultiplayerMovingPlatform::HandleOccupancyChanged(int32 PlayerCount)
+void AmultiplayerMovingPlatform::HandleOccupancyChanged(int32 /*PlayerCount*/)
 {
 	if (!HasAuthority()
 		|| ActivationSource != EMovingPlatformActivationSource::PlatformOccupancy)
 	{
 		return;
-	}
-
-	if (ReplicatedPlayerCount != PlayerCount)
-	{
-		ReplicatedPlayerCount = PlayerCount;
-		HandlePlayerCountChanged();
-		ForceNetUpdate();
 	}
 
 	RefreshActivation();
@@ -166,21 +149,6 @@ void AmultiplayerMovingPlatform::RefreshActivation()
 	const bool bShouldActivate =
 		ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate
 			? ActivationPlate != nullptr && ActivationPlate->IsPlateActive()
-			: ReplicatedPlayerCount >= RequiredPlayers;
+			: PlayerOccupancy->GetPlayerCount() >= RequiredPlayers;
 	Transporter->SetTransportActive(bShouldActivate);
-}
-
-void AmultiplayerMovingPlatform::OnRep_PlayerCount()
-{
-	HandlePlayerCountChanged();
-}
-
-void AmultiplayerMovingPlatform::HandlePlayerCountChanged()
-{
-	OnPlatformOccupancyChanged.Broadcast(
-		ReplicatedPlayerCount,
-		RequiredPlayers);
-	ReceivePlatformOccupancyChanged(
-		ReplicatedPlayerCount,
-		RequiredPlayers);
 }

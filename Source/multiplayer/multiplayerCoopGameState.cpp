@@ -10,18 +10,6 @@ void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AmultiplayerCoopGameState, ObjectiveState);
 }
-void AmultiplayerCoopGameState::ConfigureRequiredKeys(int32 RequiredKeys)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	FmultiplayerCoopObjectiveState NewState = ObjectiveState;
-	NewState.RequiredKeys = RequiredKeys;
-	ApplyAuthoritativeState(NewState);
-}
-
 void AmultiplayerCoopGameState::ApplyAuthoritativeState(
 	const FmultiplayerCoopObjectiveState& NewObjectiveState)
 {

@@ -21,18 +21,12 @@ enum class EMovingPlatformActivationSource : uint8
 	PlatformOccupancy
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
-	FmultiplayerPlatformOccupancyEvent,
-	int32,
-	CurrentPlayers,
-	int32,
-	RequiredPlayers);
-
 /**
  * Replicated moving platform.
  *
  * PlayerOccupancy owns overlap bookkeeping, while Transporter owns movement.
- * This actor only selects the activation source and replicates UI state.
+ * This actor only selects the activation source; transform replication handles
+ * client presentation.
  */
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerMovingPlatform : public AActor
@@ -41,18 +35,6 @@ class MULTIPLAYER_API AmultiplayerMovingPlatform : public AActor
 
 public:
 	AmultiplayerMovingPlatform();
-
-	virtual void GetLifetimeReplicatedProps(
-		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
-	UFUNCTION(BlueprintPure, Category = "Coop|Platform")
-	int32 GetPlayerCount() const { return ReplicatedPlayerCount; }
-
-	UFUNCTION(BlueprintPure, Category = "Coop|Platform")
-	int32 GetRequiredPlayers() const { return RequiredPlayers; }
-
-	UPROPERTY(BlueprintAssignable, Category = "Coop|Platform")
-	FmultiplayerPlatformOccupancyEvent OnPlatformOccupancyChanged;
 
 protected:
 	virtual void BeginPlay() override;
@@ -66,17 +48,8 @@ protected:
 		AmultiplayerPressurePlate* Plate,
 		bool bIsActive);
 
-	UFUNCTION()
-	void OnRep_PlayerCount();
-
-	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Platform", meta = (DisplayName = "On Platform Occupancy Visual Changed"))
-	void ReceivePlatformOccupancyChanged(
-		int32 CurrentPlayers,
-		int32 NeededPlayers);
-
 private:
 	void RefreshActivation();
-	void HandlePlayerCountChanged();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
 	TObjectPtr<USceneComponent> PlatformRoot;
@@ -109,6 +82,4 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Coop|Platform|Activation", meta = (ClampMin = "1", EditCondition = "ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy", EditConditionHides))
 	int32 RequiredPlayers = 1;
 
-	UPROPERTY(ReplicatedUsing = OnRep_PlayerCount)
-	int32 ReplicatedPlayerCount = 0;
 };

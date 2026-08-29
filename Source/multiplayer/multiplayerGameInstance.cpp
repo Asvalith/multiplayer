@@ -70,33 +70,6 @@ void UmultiplayerGameInstance::Shutdown()
 	Super::Shutdown();
 }
 
-void UmultiplayerGameInstance::ClearLastConnectionError()
-{
-	LastConnectionError.Reset();
-}
-
-void UmultiplayerGameInstance::SelectSessionMap(EMultiplayerSessionMap NewMap)
-{
-	SelectedSessionMap = NewMap;
-
-	switch (SelectedSessionMap)
-	{
-	case EMultiplayerSessionMap::DesertCityExample:
-		SessionMapPath = DesertCityMapPath;
-		break;
-	case EMultiplayerSessionMap::ThirdPersonMap:
-	default:
-		SessionMapPath = ThirdPersonMapPath;
-		break;
-	}
-
-	UE_LOG(
-		LogMultiplayer,
-		Log,
-		TEXT("Selected session map: %s"),
-		*SessionMapPath);
-}
-
 void UmultiplayerGameInstance::HostGame(
 	const FString& ServerName,
 	int32 PublicConnections,
@@ -105,7 +78,6 @@ void UmultiplayerGameInstance::HostGame(
 	if (!SessionInterface.IsValid()
 		|| !BeginSessionOperation(EMultiplayerSessionOperation::Hosting))
 	{
-		OnHostComplete.Broadcast(false);
 		return;
 	}
 
@@ -115,7 +87,6 @@ void UmultiplayerGameInstance::HostGame(
 
 	if (SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
 	{
-		bCreateSessionAfterDestroy = true;
 		BindDestroyDelegate();
 
 		if (!SessionInterface->DestroySession(NAME_GameSession))
@@ -123,9 +94,8 @@ void UmultiplayerGameInstance::HostGame(
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
 				DestroySessionCompleteHandle);
 			DestroySessionCompleteHandle.Reset();
-			bCreateSessionAfterDestroy = false;
 			EndSessionOperation();
-			OnHostComplete.Broadcast(false);
+			UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 		}
 		return;
 	}
@@ -166,7 +136,7 @@ void UmultiplayerGameInstance::CreateSession()
 			CreateSessionCompleteHandle);
 		CreateSessionCompleteHandle.Reset();
 		EndSessionOperation();
-		OnHostComplete.Broadcast(false);
+		UE_LOG(LogMultiplayer, Error, TEXT("CreateSession request was rejected."));
 	}
 }
 
@@ -215,7 +185,6 @@ void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 		|| !SessionSearch->SearchResults.IsValidIndex(ResultIndex)
 		|| !BeginSessionOperation(EMultiplayerSessionOperation::Joining))
 	{
-		OnJoinComplete.Broadcast(false);
 		return;
 	}
 
@@ -234,36 +203,7 @@ void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 			JoinSessionCompleteHandle);
 		JoinSessionCompleteHandle.Reset();
 		EndSessionOperation();
-		OnJoinComplete.Broadcast(false);
-	}
-}
-
-void UmultiplayerGameInstance::DestroyGameSession()
-{
-	if (!SessionInterface.IsValid()
-		|| !BeginSessionOperation(EMultiplayerSessionOperation::Destroying))
-	{
-		OnDestroyComplete.Broadcast(false);
-		return;
-	}
-
-	bCreateSessionAfterDestroy = false;
-
-	if (SessionInterface->GetNamedSession(NAME_GameSession) == nullptr)
-	{
-		EndSessionOperation();
-		OnDestroyComplete.Broadcast(true);
-		return;
-	}
-
-	BindDestroyDelegate();
-	if (!SessionInterface->DestroySession(NAME_GameSession))
-	{
-		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
-			DestroySessionCompleteHandle);
-		DestroySessionCompleteHandle.Reset();
-		EndSessionOperation();
-		OnDestroyComplete.Broadcast(false);
+		UE_LOG(LogMultiplayer, Error, TEXT("JoinSession request was rejected."));
 	}
 }
 
@@ -293,7 +233,7 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 	if (!bWasSuccessful)
 	{
 		EndSessionOperation();
-		OnHostComplete.Broadcast(false);
+		UE_LOG(LogMultiplayer, Error, TEXT("Session creation failed."));
 		return;
 	}
 
@@ -305,12 +245,10 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 	{
 		EndSessionOperation();
 		UE_LOG(LogMultiplayer, Error, TEXT("Session created, but ServerTravel failed."));
-		OnHostComplete.Broadcast(false);
 		return;
 	}
 
 	EndSessionOperation();
-	OnHostComplete.Broadcast(true);
 }
 
 void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
@@ -366,12 +304,14 @@ void UmultiplayerGameInstance::HandleJoinSessionComplete(
 
 	const bool bCanTravel = bResolved && PlayerController != nullptr;
 	EndSessionOperation();
-	OnJoinComplete.Broadcast(bCanTravel);
 
 	if (bCanTravel)
 	{
 		PlayerController->ClientTravel(ConnectString, TRAVEL_Absolute);
+		return;
 	}
+
+	UE_LOG(LogMultiplayer, Error, TEXT("Session join completed without a usable connection address."));
 }
 
 void UmultiplayerGameInstance::HandleDestroySessionComplete(
@@ -382,25 +322,14 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 		DestroySessionCompleteHandle);
 	DestroySessionCompleteHandle.Reset();
 
-	const bool bShouldCreate = bCreateSessionAfterDestroy;
-	bCreateSessionAfterDestroy = false;
-
-	if (bShouldCreate)
+	if (bWasSuccessful)
 	{
-		if (bWasSuccessful)
-		{
-			CreateSession();
-		}
-		else
-		{
-			EndSessionOperation();
-			OnHostComplete.Broadcast(false);
-		}
+		CreateSession();
 		return;
 	}
 
 	EndSessionOperation();
-	OnDestroyComplete.Broadcast(bWasSuccessful);
+	UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 }
 
 void UmultiplayerGameInstance::HandleNetworkFailure(
@@ -433,17 +362,15 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 {
 	ClearSessionDelegates();
 	SessionSearch.Reset();
-	bCreateSessionAfterDestroy = false;
 	EndSessionOperation();
 
-	LastConnectionError = FString::Printf(
+	UE_LOG(
+		LogMultiplayer,
+		Error,
 		TEXT("%s [%s]: %s"),
 		FailureSource,
 		*FailureType,
 		*ErrorString);
-
-	UE_LOG(LogMultiplayer, Error, TEXT("%s"), *LastConnectionError);
-	OnConnectionFailure.Broadcast(FailureSource, FailureType, ErrorString);
 }
 
 bool UmultiplayerGameInstance::BeginSessionOperation(

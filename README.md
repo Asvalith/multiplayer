@@ -8,13 +8,13 @@
 
 本项目是一个双人合作网络 Demo。一名玩家创建房间，另一名玩家搜索并加入；两人进入同一张地图后，通过机关配合完成钥匙收集，并在共同进入胜利区域后结束本局。
 
-主要玩法包括：创建和加入房间、双人角色移动、压力板与门联动、钥匙收集与插槽展示、合作移动平台、共享目标、双人胜利判定以及重新开始接口。
+主要玩法包括：创建和加入房间、双人角色移动、压力板与门联动、钥匙收集与插槽展示、合作移动平台、共享目标和双人胜利判定。C++ 另提供服务器重开接口，当前胜利界面尚未接入。
 
 ### 核心特点
 
 1. **服务器权威的协作玩法闭环：** 钥匙、机关、共享进度和胜利结果都由服务器决定，并通过状态门禁处理多人同时交互和重复触发。
 2. **按对象选择网络同步方式：** 角色使用 Unreal 自带的移动同步，门和压力板只同步关键状态，移动平台由服务器移动并同步位置；玩家离开或对象销毁时会清理相关引用和事件绑定。
-3. **完整的双人联机入口：** 基于 OnlineSubsystem 实现创建、搜索、加入和销毁房间，并处理异步操作冲突、连接失败和多人地图切换。
+3. **双人联机入口：** 基于 OnlineSubsystem 实现创建、搜索和加入房间，避免异步操作互相重叠，并记录连接与加载失败。
 
 ### 游戏目标流程
 
@@ -26,7 +26,6 @@
 6. 四个插槽全部激活后，共享目标完成。
 7. 两名玩家同时进入胜利区域，服务器确认本局胜利。
 8. 两端收到胜利状态，由本地 PlayerController 交给胜利界面。
-9. 玩家请求重新开始后，服务器验证胜利状态并重新加载当前地图。
 
 整个过程中，服务器负责决定钥匙是否被拾取、机关是否生效以及游戏是否胜利；客户端负责输入、移动和画面表现。
 
@@ -36,11 +35,11 @@
 
 ```text
 GameInstance
-  └─ 创建、搜索、加入和销毁房间
+  └─ 创建、搜索和加入房间
        └─ 进入合作地图
             ├─ GameMode：执行服务器权威规则
             ├─ GameState：复制所有玩家共享的状态快照
-            ├─ PlayerController：管理本地胜利界面和重开请求
+            ├─ PlayerController：管理本地胜利界面并提供重开请求接口
             ├─ Character：处理移动、输入并持有 CarryComponent
             └─ 机关 Actor
                  ├─ PlayerOccupancyComponent：统一玩家区域统计
@@ -77,8 +76,7 @@ GameInstance
 
 - 接收本地胜利通知。
 - 将胜利事件交给蓝图创建并显示 UMG。
-- 接收“重新开始”按钮操作。
-- 把重开请求发送给服务器。
+- 提供可由蓝图调用的服务器重开请求接口；当前胜利 Widget 尚未接线。
 
 [`multiplayerVictoryPresenterComponent.cpp`](Source/multiplayer/multiplayerVictoryPresenterComponent.cpp) 在本地控制器上监听 GameState 的胜利状态，并保证同一局只通知一次胜利 UI。
 
@@ -118,7 +116,7 @@ GameState 只保存、校验并复制 GameMode 计算出的共享状态快照；
 
 如果两名玩家同时点击重新开始，GameMode 的单次请求标记会忽略后续请求，避免重复发起地图迁移。
 
-### GameInstance：房间和地图连接
+### GameInstance：房间和连接
 
 主要文件：[`multiplayerGameInstance.h`](Source/multiplayer/multiplayerGameInstance.h)、[`multiplayerGameInstance.cpp`](Source/multiplayer/multiplayerGameInstance.cpp)、[`WBPmainmenu.uasset`](Content/UI/WBPmainmenu.uasset)。
 
@@ -127,9 +125,10 @@ GameState 只保存、校验并复制 GameMode 计算出的共享状态快照；
 - 创建房间。
 - 搜索可加入的房间。
 - 加入选中的房间。
-- 销毁已有房间。
 - 记录连接和地图加载失败。
 - 防止创建、搜索、加入等异步操作互相重叠。
+
+再次创建房间时，GameInstance 会在内部先销毁同名 Session；项目没有独立的“退出房间”界面流程。
 
 Host 创建房间成功后，服务器切换到合作地图，并带上已经连接的玩家。Client 加入成功后，根据 OnlineSubsystem 返回的地址连接服务器。
 

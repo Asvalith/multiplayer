@@ -13,7 +13,6 @@ class USceneComponent;
 class UStaticMeshComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCoopGateStateChanged, bool, bIsOpen);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnCoopGatePlateProgressChanged, int32, ActivePlateCount, int32, RequiredPlateCount);
 
 /**
  * Server-authoritative gate that opens when linked pressure plates are active.
@@ -36,16 +35,10 @@ public:
 	bool IsGateOpen() const { return bGateOpen; }
 
 	UFUNCTION(BlueprintPure, Category = "Coop Gate")
-	int32 GetActivePlateCount() const { return ActivePlateCount; }
-
-	UFUNCTION(BlueprintPure, Category = "Coop Gate")
 	int32 GetRequiredPlateCount() const;
 
 	UPROPERTY(BlueprintAssignable, Category = "Coop Gate")
 	FOnCoopGateStateChanged OnGateStateChanged;
-
-	UPROPERTY(BlueprintAssignable, Category = "Coop Gate")
-	FOnCoopGatePlateProgressChanged OnPlateProgressChanged;
 
 protected:
 	virtual void BeginPlay() override;
@@ -60,21 +53,14 @@ protected:
 	UFUNCTION()
 	void OnRep_GateOpen();
 
-	UFUNCTION()
-	void OnRep_ActivePlateCount();
-
 	UFUNCTION(BlueprintImplementableEvent, Category = "Coop Gate", meta = (DisplayName = "On Gate Visual State Changed"))
 	void ReceiveGateVisualStateChanged(bool bIsOpen);
-
-	UFUNCTION(BlueprintImplementableEvent, Category = "Coop Gate", meta = (DisplayName = "On Plate Progress Changed"))
-	void ReceivePlateProgressChanged(int32 NewActivePlateCount, int32 NewRequiredPlateCount);
 
 private:
 	void BindRequiredPlates();
 	void UnbindRequiredPlates();
 	void EvaluateGateState();
 	void HandleGateStateChanged();
-	void HandleActivePlateCountChanged();
 	void ApplyGateState(bool bSnapToTarget);
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
@@ -108,9 +94,6 @@ private:
 
 	UPROPERTY(ReplicatedUsing = OnRep_GateOpen)
 	bool bGateOpen = false;
-
-	UPROPERTY(ReplicatedUsing = OnRep_ActivePlateCount)
-	int32 ActivePlateCount = 0;
 
 	UPROPERTY()
 	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;

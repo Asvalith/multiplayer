@@ -11,12 +11,6 @@ UmultiplayerVictoryPresenterComponent::UmultiplayerVictoryPresenterComponent()
 	SetIsReplicatedByDefault(false);
 }
 
-void UmultiplayerVictoryPresenterComponent::BeginPlay()
-{
-	Super::BeginPlay();
-	RefreshBinding();
-}
-
 void UmultiplayerVictoryPresenterComponent::RefreshBinding()
 {
 	AmultiplayerCoopGameState* PreviousGameState = CoopGameState;

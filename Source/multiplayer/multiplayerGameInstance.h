@@ -14,15 +14,7 @@ enum class EMultiplayerSessionOperation : uint8
 	None,
 	Hosting,
 	Finding,
-	Joining,
-	Destroying
-};
-
-UENUM(BlueprintType)
-enum class EMultiplayerSessionMap : uint8
-{
-	ThirdPersonMap UMETA(DisplayName = "Third Person Map"),
-	DesertCityExample UMETA(DisplayName = "Desert City Example")
+	Joining
 };
 
 USTRUCT(BlueprintType)
@@ -46,11 +38,6 @@ struct FmultiplayerSessionInfo
 	int32 MaxPlayers = 0;
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
-	FmultiplayerSessionOperationEvent,
-	bool,
-	bWasSuccessful);
-
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FmultiplayerSessionSearchEvent,
 	bool,
@@ -62,15 +49,6 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FmultiplayerSessionOperationChanged,
 	EMultiplayerSessionOperation,
 	NewOperation);
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
-	FmultiplayerConnectionFailureEvent,
-	FString,
-	FailureSource,
-	FString,
-	FailureType,
-	FString,
-	ErrorMessage);
 
 /**
  * Owns the online session lifecycle across map travel.
@@ -88,24 +66,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void HostGame(const FString& ServerName, int32 PublicConnections, bool bIsLanMatch);
 
-	/** Selects the gameplay map used by the next hosted session. */
-	UFUNCTION(BlueprintCallable, Category = "Network|Session")
-	void SelectSessionMap(EMultiplayerSessionMap NewMap);
-
-	UFUNCTION(BlueprintPure, Category = "Network|Session")
-	EMultiplayerSessionMap GetSelectedSessionMap() const
-	{
-		return SelectedSessionMap;
-	}
-
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void FindGames(int32 MaxResults, bool bIsLanQuery);
 
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void JoinGame(int32 ResultIndex);
-
-	UFUNCTION(BlueprintCallable, Category = "Network|Session")
-	void DestroyGameSession();
 
 	UFUNCTION(BlueprintPure, Category = "Network|Session")
 	bool IsSessionOperationInProgress() const
@@ -119,46 +84,16 @@ public:
 		return CurrentOperation;
 	}
 
-	UFUNCTION(BlueprintPure, Category = "Network|Diagnostics")
-	const FString& GetLastConnectionError() const
-	{
-		return LastConnectionError;
-	}
-
-	UFUNCTION(BlueprintCallable, Category = "Network|Diagnostics")
-	void ClearLastConnectionError();
-
-	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
-	FmultiplayerSessionOperationEvent OnHostComplete;
-
 	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
 	FmultiplayerSessionSearchEvent OnFindComplete;
 
 	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
-	FmultiplayerSessionOperationEvent OnJoinComplete;
-
-	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
-	FmultiplayerSessionOperationEvent OnDestroyComplete;
-
-	UPROPERTY(BlueprintAssignable, Category = "Network|Session")
 	FmultiplayerSessionOperationChanged OnSessionOperationChanged;
 
-	/** Network and map travel failures are surfaced to UI instead of failing silently. */
-	UPROPERTY(BlueprintAssignable, Category = "Network|Diagnostics")
-	FmultiplayerConnectionFailureEvent OnConnectionFailure;
-
 protected:
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Network|Session")
+	/** Fixed gameplay map opened by a successfully hosted session. */
+	UPROPERTY(EditDefaultsOnly, Category = "Network|Session")
 	FString SessionMapPath = TEXT("/Script/Engine.World'/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo'");
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|Session|Maps")
-	FString ThirdPersonMapPath = TEXT("/Game/ThirdPerson/Maps/ThirdPersonMap");
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Network|Session|Maps")
-	FString DesertCityMapPath = TEXT("/Script/Engine.World'/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo'");
-
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Network|Session|Maps")
-	EMultiplayerSessionMap SelectedSessionMap = EMultiplayerSessionMap::DesertCityExample;
 
 private:
 	void CreateSession();
@@ -198,7 +133,5 @@ private:
 	FString PendingServerName = TEXT("Coop Session");
 	int32 PendingPublicConnections = 4;
 	bool bPendingIsLanMatch = true;
-	bool bCreateSessionAfterDestroy = false;
 	EMultiplayerSessionOperation CurrentOperation = EMultiplayerSessionOperation::None;
-	FString LastConnectionError;
 };

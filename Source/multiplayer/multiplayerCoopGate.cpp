@@ -114,7 +114,6 @@ void AmultiplayerCoopGate::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AmultiplayerCoopGate, bGateOpen);
-	DOREPLIFETIME(AmultiplayerCoopGate, ActivePlateCount);
 }
 
 int32 AmultiplayerCoopGate::GetRequiredPlateCount() const
@@ -166,8 +165,7 @@ void AmultiplayerCoopGate::EvaluateGateState()
 		return;
 	}
 
-	bool bReplicatedStateChanged = false;
-	int32 NewActivePlateCount = 0;
+	int32 ActivePlateCount = 0;
 	TSet<ACharacter*> DistinctPlayers;
 	for (const AmultiplayerPressurePlate* Plate : RequiredPlates)
 	{
@@ -176,7 +174,7 @@ void AmultiplayerCoopGate::EvaluateGateState()
 			continue;
 		}
 
-		++NewActivePlateCount;
+		++ActivePlateCount;
 
 		TArray<ACharacter*> PlateOccupants;
 		Plate->GetOccupyingCharacters(PlateOccupants);
@@ -187,13 +185,6 @@ void AmultiplayerCoopGate::EvaluateGateState()
 				DistinctPlayers.Add(Occupant);
 			}
 		}
-	}
-
-	if (ActivePlateCount != NewActivePlateCount)
-	{
-		ActivePlateCount = NewActivePlateCount;
-		HandleActivePlateCountChanged();
-		bReplicatedStateChanged = true;
 	}
 
 	const int32 RequiredCount = GetRequiredPlateCount();
@@ -223,11 +214,6 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	{
 		bGateOpen = bNewGateOpen;
 		HandleGateStateChanged();
-		bReplicatedStateChanged = true;
-	}
-
-	if (bReplicatedStateChanged)
-	{
 		ForceNetUpdate();
 	}
 }
@@ -237,22 +223,11 @@ void AmultiplayerCoopGate::OnRep_GateOpen()
 	HandleGateStateChanged();
 }
 
-void AmultiplayerCoopGate::OnRep_ActivePlateCount()
-{
-	HandleActivePlateCountChanged();
-}
-
 void AmultiplayerCoopGate::HandleGateStateChanged()
 {
 	ApplyGateState(false);
 	OnGateStateChanged.Broadcast(bGateOpen);
 	ReceiveGateVisualStateChanged(bGateOpen);
-}
-
-void AmultiplayerCoopGate::HandleActivePlateCountChanged()
-{
-	OnPlateProgressChanged.Broadcast(ActivePlateCount, GetRequiredPlateCount());
-	ReceivePlateProgressChanged(ActivePlateCount, GetRequiredPlateCount());
 }
 
 void AmultiplayerCoopGate::ApplyGateState(bool bSnapToTarget)

@@ -3,17 +3,23 @@
 #include "multiplayerGameInstance.h"
 
 #include "Engine/Engine.h"
+#include "Engine/NetDriver.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
+#include "TimerManager.h"
 #include "multiplayerLog.h"
 #include "UObject/SoftObjectPath.h"
 
 namespace MultiplayerSession
 {
 	const FName ServerNameKey(TEXT("SERVER_NAME"));
+	constexpr int32 MaxReconnectAttempts = 3;
+	constexpr float ReconnectDelays[] = {1.0f, 2.0f, 4.0f};
 }
 
 void UmultiplayerGameInstance::Init()
@@ -49,6 +55,11 @@ void UmultiplayerGameInstance::Init()
 
 void UmultiplayerGameInstance::Shutdown()
 {
+	GetTimerManager().ClearTimer(ReconnectTimerHandle);
+#if !UE_BUILD_SHIPPING
+	GetTimerManager().ClearTimer(ReconnectTestTimerHandle);
+#endif
+
 	if (GEngine != nullptr)
 	{
 		if (NetworkFailureHandle.IsValid())
@@ -75,6 +86,8 @@ void UmultiplayerGameInstance::HostGame(
 	int32 PublicConnections,
 	bool bIsLanMatch)
 {
+	CancelAutomaticReconnect();
+
 	if (!SessionInterface.IsValid()
 		|| !BeginSessionOperation(EMultiplayerSessionOperation::Hosting))
 	{
@@ -142,6 +155,8 @@ void UmultiplayerGameInstance::CreateSession()
 
 void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 {
+	CancelAutomaticReconnect();
+
 	if (!SessionInterface.IsValid()
 		|| !BeginSessionOperation(EMultiplayerSessionOperation::Finding))
 	{
@@ -180,6 +195,8 @@ void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 
 void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 {
+	CancelAutomaticReconnect();
+
 	if (!SessionInterface.IsValid()
 		|| !SessionSearch.IsValid()
 		|| !SessionSearch->SearchResults.IsValidIndex(ResultIndex)
@@ -307,6 +324,7 @@ void UmultiplayerGameInstance::HandleJoinSessionComplete(
 
 	if (bCanTravel)
 	{
+		LastConnectString = ConnectString;
 		PlayerController->ClientTravel(ConnectString, TRAVEL_Absolute);
 		return;
 	}
@@ -338,6 +356,21 @@ void UmultiplayerGameInstance::HandleNetworkFailure(
 	ENetworkFailure::Type FailureType,
 	const FString& ErrorString)
 {
+	if (CanRetryNetworkFailure(NetDriver, FailureType))
+	{
+		ClearSessionDelegates();
+		SessionSearch.Reset();
+		EndSessionOperation();
+		UE_LOG(
+			LogMultiplayer,
+			Warning,
+			TEXT("Network [%s]: %s. Automatic reconnect will be attempted."),
+			ENetworkFailure::ToString(FailureType),
+			*ErrorString);
+		ScheduleAutomaticReconnect();
+		return;
+	}
+
 	RecordConnectionFailure(
 		TEXT("Network"),
 		ENetworkFailure::ToString(FailureType),
@@ -349,6 +382,19 @@ void UmultiplayerGameInstance::HandleTravelFailure(
 	ETravelFailure::Type FailureType,
 	const FString& ErrorString)
 {
+	if (ReconnectState == EMultiplayerReconnectState::Connecting
+		&& !LastConnectString.IsEmpty())
+	{
+		UE_LOG(
+			LogMultiplayer,
+			Warning,
+			TEXT("Reconnect travel [%s]: %s"),
+			ETravelFailure::ToString(FailureType),
+			*ErrorString);
+		ScheduleAutomaticReconnect();
+		return;
+	}
+
 	RecordConnectionFailure(
 		TEXT("Travel"),
 		ETravelFailure::ToString(FailureType),
@@ -363,6 +409,14 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 	ClearSessionDelegates();
 	SessionSearch.Reset();
 	EndSessionOperation();
+	GetTimerManager().ClearTimer(ReconnectTimerHandle);
+
+	if (ReconnectState == EMultiplayerReconnectState::Waiting
+		|| ReconnectState == EMultiplayerReconnectState::Connecting)
+	{
+		ReconnectState = EMultiplayerReconnectState::Failed;
+	}
+	LastConnectString.Reset();
 
 	UE_LOG(
 		LogMultiplayer,
@@ -372,6 +426,168 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 		*FailureType,
 		*ErrorString);
 }
+
+bool UmultiplayerGameInstance::CanRetryNetworkFailure(
+	UNetDriver* NetDriver,
+	ENetworkFailure::Type FailureType) const
+{
+	if (ReconnectState == EMultiplayerReconnectState::Failed
+		|| LastConnectString.IsEmpty()
+		|| NetDriver == nullptr
+		|| NetDriver->GetNetMode() != NM_Client)
+	{
+		return false;
+	}
+
+	if (FailureType == ENetworkFailure::ConnectionLost
+		|| FailureType == ENetworkFailure::ConnectionTimeout)
+	{
+		return true;
+	}
+
+	return ReconnectState == EMultiplayerReconnectState::Connecting
+		&& FailureType == ENetworkFailure::PendingConnectionFailure;
+}
+
+void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
+{
+	if (ReconnectState == EMultiplayerReconnectState::Waiting)
+	{
+		return;
+	}
+
+	if (ReconnectAttempt >= MultiplayerSession::MaxReconnectAttempts)
+	{
+		ReconnectState = EMultiplayerReconnectState::Failed;
+		LastConnectString.Reset();
+		UE_LOG(
+			LogMultiplayer,
+			Error,
+			TEXT("Automatic reconnect failed after %d attempts."),
+			ReconnectAttempt);
+		return;
+	}
+
+	ReconnectState = EMultiplayerReconnectState::Waiting;
+	const float Delay = MultiplayerSession::ReconnectDelays[ReconnectAttempt];
+	GetTimerManager().SetTimer(
+		ReconnectTimerHandle,
+		this,
+		&UmultiplayerGameInstance::TryAutomaticReconnect,
+		Delay,
+		false);
+
+	UE_LOG(
+		LogMultiplayer,
+		Log,
+		TEXT("Automatic reconnect attempt %d/%d scheduled in %.0f second(s)."),
+		ReconnectAttempt + 1,
+		MultiplayerSession::MaxReconnectAttempts,
+		Delay);
+}
+
+void UmultiplayerGameInstance::TryAutomaticReconnect()
+{
+	UWorld* World = GetWorld();
+	APlayerController* PlayerController =
+		World != nullptr ? World->GetFirstPlayerController() : nullptr;
+
+	ReconnectState = EMultiplayerReconnectState::Connecting;
+	++ReconnectAttempt;
+	if (PlayerController == nullptr)
+	{
+		UE_LOG(
+			LogMultiplayer,
+			Warning,
+			TEXT("Automatic reconnect attempt %d could not find a local player."),
+			ReconnectAttempt);
+		ScheduleAutomaticReconnect();
+		return;
+	}
+
+	UE_LOG(
+		LogMultiplayer,
+		Log,
+		TEXT("Automatic reconnect attempt %d/%d started."),
+		ReconnectAttempt,
+		MultiplayerSession::MaxReconnectAttempts);
+	PlayerController->ClientTravel(LastConnectString, TRAVEL_Absolute);
+}
+
+void UmultiplayerGameInstance::NotifyClientConnected()
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr || World->GetNetMode() != NM_Client)
+	{
+		return;
+	}
+
+	if (LastConnectString.IsEmpty() && !World->URL.Host.IsEmpty())
+	{
+		LastConnectString = World->URL.Port > 0
+			? FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port)
+			: World->URL.Host;
+	}
+
+	GetTimerManager().ClearTimer(ReconnectTimerHandle);
+
+	if (ReconnectState == EMultiplayerReconnectState::Connecting
+		|| ReconnectState == EMultiplayerReconnectState::Waiting)
+	{
+		const int32 SuccessfulAttempt = ReconnectAttempt;
+		ReconnectState = EMultiplayerReconnectState::Succeeded;
+		ReconnectAttempt = 0;
+		UE_LOG(
+			LogMultiplayer,
+			Log,
+			TEXT("Automatic reconnect succeeded after %d attempt(s)."),
+			SuccessfulAttempt);
+	}
+
+#if !UE_BUILD_SHIPPING
+	if (!bReconnectTestTriggered
+		&& FParse::Param(FCommandLine::Get(), TEXT("CoopTestReconnect")))
+	{
+		bReconnectTestTriggered = true;
+		GetTimerManager().SetTimer(
+			ReconnectTestTimerHandle,
+			this,
+			&UmultiplayerGameInstance::SimulateConnectionLossForTesting,
+			2.0f,
+			false);
+	}
+#endif
+}
+
+void UmultiplayerGameInstance::CancelAutomaticReconnect()
+{
+	GetTimerManager().ClearTimer(ReconnectTimerHandle);
+	ReconnectState = EMultiplayerReconnectState::Idle;
+	ReconnectAttempt = 0;
+	LastConnectString.Reset();
+}
+
+#if !UE_BUILD_SHIPPING
+void UmultiplayerGameInstance::SimulateConnectionLossForTesting()
+{
+	UWorld* World = GetWorld();
+	UNetDriver* NetDriver = World != nullptr ? World->GetNetDriver() : nullptr;
+	if (GEngine == nullptr
+		|| NetDriver == nullptr
+		|| NetDriver->GetNetMode() != NM_Client)
+	{
+		UE_LOG(LogMultiplayer, Error, TEXT("Reconnect test could not find the client net driver."));
+		return;
+	}
+
+	UE_LOG(LogMultiplayer, Log, TEXT("Reconnect test: simulating connection loss."));
+	GEngine->BroadcastNetworkFailure(
+		World,
+		NetDriver,
+		ENetworkFailure::ConnectionLost,
+		TEXT("Development reconnect test"));
+}
+#endif
 
 bool UmultiplayerGameInstance::BeginSessionOperation(
 	EMultiplayerSessionOperation NewOperation)

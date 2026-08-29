@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Engine/GameInstance.h"
 #include "Engine/EngineBaseTypes.h"
+#include "Engine/TimerHandle.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "multiplayerGameInstance.generated.h"
 
@@ -15,6 +16,16 @@ enum class EMultiplayerSessionOperation : uint8
 	Hosting,
 	Finding,
 	Joining
+};
+
+UENUM(BlueprintType)
+enum class EMultiplayerReconnectState : uint8
+{
+	Idle,
+	Waiting,
+	Connecting,
+	Succeeded,
+	Failed
 };
 
 USTRUCT(BlueprintType)
@@ -72,6 +83,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void JoinGame(int32 ResultIndex);
 
+	/** Called by the local PlayerController after a client connection becomes playable. */
+	void NotifyClientConnected();
+
+	/** Stops pending retries before an intentional leave or a new connection request. */
+	UFUNCTION(BlueprintCallable, Category = "Network|Reconnect")
+	void CancelAutomaticReconnect();
+
+	UFUNCTION(BlueprintPure, Category = "Network|Reconnect")
+	EMultiplayerReconnectState GetReconnectState() const
+	{
+		return ReconnectState;
+	}
+
 	UFUNCTION(BlueprintPure, Category = "Network|Session")
 	bool IsSessionOperationInProgress() const
 	{
@@ -119,6 +143,15 @@ private:
 		const TCHAR* FailureSource,
 		const FString& FailureType,
 		const FString& ErrorString);
+	bool CanRetryNetworkFailure(
+		UNetDriver* NetDriver,
+		ENetworkFailure::Type FailureType) const;
+	void ScheduleAutomaticReconnect();
+	void TryAutomaticReconnect();
+
+#if !UE_BUILD_SHIPPING
+	void SimulateConnectionLossForTesting();
+#endif
 
 	IOnlineSessionPtr SessionInterface;
 	TSharedPtr<FOnlineSessionSearch> SessionSearch;
@@ -131,7 +164,16 @@ private:
 	FDelegateHandle TravelFailureHandle;
 
 	FString PendingServerName = TEXT("Coop Session");
+	FString LastConnectString;
 	int32 PendingPublicConnections = 4;
 	bool bPendingIsLanMatch = true;
 	EMultiplayerSessionOperation CurrentOperation = EMultiplayerSessionOperation::None;
+	EMultiplayerReconnectState ReconnectState = EMultiplayerReconnectState::Idle;
+	FTimerHandle ReconnectTimerHandle;
+	int32 ReconnectAttempt = 0;
+
+#if !UE_BUILD_SHIPPING
+	FTimerHandle ReconnectTestTimerHandle;
+	bool bReconnectTestTriggered = false;
+#endif
 };

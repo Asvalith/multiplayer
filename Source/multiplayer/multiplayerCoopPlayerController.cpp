@@ -2,6 +2,7 @@
 
 #include "multiplayerCoopPlayerController.h"
 
+#include "multiplayerGameInstance.h"
 #include "multiplayerGameMode.h"
 #include "multiplayerVictoryPresenterComponent.h"
 
@@ -13,6 +14,15 @@ AmultiplayerCoopPlayerController::AmultiplayerCoopPlayerController()
 void AmultiplayerCoopPlayerController::BeginPlayingState()
 {
 	Super::BeginPlayingState();
+
+	if (IsLocalController())
+	{
+		if (UmultiplayerGameInstance* GameInstance =
+			GetGameInstance<UmultiplayerGameInstance>())
+		{
+			GameInstance->NotifyClientConnected();
+		}
+	}
 
 	if (VictoryPresenter != nullptr)
 	{

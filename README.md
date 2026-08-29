@@ -15,6 +15,7 @@
 1. **服务器权威的协作玩法闭环：** 钥匙、机关、共享进度和胜利结果都由服务器决定，并通过状态门禁处理多人同时交互和重复触发。
 2. **按对象选择网络同步方式：** 角色使用 Unreal 自带的移动同步，门和压力板只同步关键状态，移动平台由服务器移动并同步位置；玩家离开或对象销毁时会清理相关引用和事件绑定。
 3. **双人联机入口：** 基于 OnlineSubsystem 实现创建、搜索和加入房间，避免异步操作互相重叠，并记录连接与加载失败。
+4. **轻量断线恢复：** 客户端保存最近一次服务器地址，意外断线后最多自动重试三次；重新进入后继续读取服务器上的共享进度。
 
 ### 游戏目标流程
 
@@ -127,12 +128,49 @@ GameState 只保存、校验并复制 GameMode 计算出的共享状态快照；
 - 加入选中的房间。
 - 记录连接和地图加载失败。
 - 防止创建、搜索、加入等异步操作互相重叠。
+- 客户端意外断线后按 1、2、4 秒间隔自动尝试恢复连接。
 
 再次创建房间时，GameInstance 会在内部先销毁同名 Session；项目没有独立的“退出房间”界面流程。
 
 Host 创建房间成功后，服务器切换到合作地图，并带上已经连接的玩家。Client 加入成功后，根据 OnlineSubsystem 返回的地址连接服务器。
 
 项目使用 OnlineSubsystem NULL 完成本地与局域网房间联调。
+
+## 网络回归测试
+
+项目提供自动双客户端测试入口 [TestTwoPlayers.bat](TestTwoPlayers.bat)，底层由
+[RunMultiplayerNetworkTests.ps1](Scripts/RunMultiplayerNetworkTests.ps1) 启动无画面的
+Listen Server 和 Client，并根据运行日志自动判断成功或失败。
+
+~~~powershell
+# 正常网络，并验证客户端断开后能够自动重连
+.\TestTwoPlayers.bat
+
+# 100ms 延迟、20ms 波动、2% 丢包
+.\TestTwoPlayers.bat -Profile Moderate
+
+# 200ms 延迟、50ms 波动、5% 丢包
+.\TestTwoPlayers.bat -Profile Harsh
+
+# 依次执行全部网络环境
+.\TestTwoPlayers.bat -Profile All
+~~~
+
+如果 UnrealEditor 不在批处理的默认位置，可先通过 UE_EDITOR 环境变量指定完整路径；
+也可以直接运行 PowerShell 脚本并传入 EditorPath。
+
+测试会验证：
+
+- 服务器成功初始化四把钥匙目标。
+- 客户端成功加入并进入合作地图。
+- 弱网参数确实在 Host 和 Client 上生效。
+- 开发测试主动制造一次连接丢失后，同一客户端进程能够自动回到服务器。
+- 除测试主动制造的断线外，日志中没有地图加载失败、项目错误或崩溃标记。
+
+每次运行会在 Saved/TestReports 生成 JSON 报告，并在 Saved/Logs 保存各进程日志；
+这些运行产物不会提交到仓库。这里验证的是连接、地图加载、共享目标初始化和自动重连，
+不替代钥匙、机关和胜利流程的双人操作测试。重连玩家会以新角色重新进入，GameState
+中的共享目标继续由服务器同步；本实现不额外恢复断线前的位置或手持物品。
 
 ---
 

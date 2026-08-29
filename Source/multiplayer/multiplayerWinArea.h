@@ -6,11 +6,14 @@
 #include "GameFramework/Actor.h"
 #include "multiplayerWinArea.generated.h"
 
-class ACharacter;
 class AmultiplayerCoopGameState;
 class UBoxComponent;
+class UmultiplayerPlayerOccupancyComponent;
 
-/** Completes the match when the objective is ready and enough distinct players are inside. */
+/**
+ * Server-only rule adapter that asks GameMode to complete the cooperative match
+ * when the replicated objective is ready and enough distinct players are inside.
+ */
 UCLASS()
 class MULTIPLAYER_API AmultiplayerWinArea : public AActor
 {
@@ -24,40 +27,23 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
-	void HandleBeginOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex,
-		bool bFromSweep,
-		const FHitResult& SweepResult);
-
-	UFUNCTION()
-	void HandleEndOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex);
+	void HandleOccupancyChanged(int32 PlayerCount);
 
 	UFUNCTION()
 	void HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys);
 
-	UFUNCTION()
-	void HandlePlayerDestroyed(AActor* DestroyedActor);
-
 private:
-	void RemoveInvalidPlayers();
 	void EvaluateWinCondition();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Win")
 	TObjectPtr<UBoxComponent> WinTrigger;
+
+	UPROPERTY(VisibleAnywhere, Category = "Coop|Win")
+	TObjectPtr<UmultiplayerPlayerOccupancyComponent> PlayerOccupancy;
 
 	UPROPERTY(EditAnywhere, Category = "Coop|Win", meta = (ClampMin = "1"))
 	int32 RequiredPlayers = 2;
 
 	UPROPERTY()
 	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
-
-	/** Counts overlapping components per Character so the win condition uses distinct players. */
-	TMap<TWeakObjectPtr<ACharacter>, int32> PlayerOverlapCounts;
 };

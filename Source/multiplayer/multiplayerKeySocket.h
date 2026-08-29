@@ -36,6 +36,7 @@ public:
 	FmultiplayerKeySocketActivatedEvent OnSocketActivated;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
@@ -56,6 +57,7 @@ protected:
 private:
 	AmultiplayerCoopKey* FindCarriedKey(ACharacter* Character) const;
 	void CommitServerActivation();
+	void HandleActivatedChanged();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
 	TObjectPtr<USceneComponent> SceneRoot;

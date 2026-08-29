@@ -15,7 +15,7 @@ struct FmultiplayerCoopObjectiveState
 	int32 ActivatedKeys = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Coop|Objective")
-	int32 RequiredKeys = 4;
+	int32 RequiredKeys = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Coop|Objective")
 	bool bGameWon = false;
@@ -48,14 +48,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Coop|Objective")
 	bool IsObjectiveComplete() const
 	{
-		return ObjectiveState.ActivatedKeys >= ObjectiveState.RequiredKeys;
+		return ObjectiveState.RequiredKeys > 0
+			&& ObjectiveState.ActivatedKeys >= ObjectiveState.RequiredKeys;
 	}
 
-	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Objective")
+	/** Compatibility entry point. New rule code should mutate state through GameMode. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Objective", meta = (DeprecatedFunction, DeprecationMessage = "Configure the objective through multiplayerGameMode."))
 	void ConfigureRequiredKeys(int32 RequiredKeys);
 
-	bool RegisterActivatedKey();
-	bool TryCompleteGame();
+	/** Applies a server-computed snapshot and notifies local/server listeners. */
+	void ApplyAuthoritativeState(
+		const FmultiplayerCoopObjectiveState& NewObjectiveState);
 
 	UPROPERTY(BlueprintAssignable, Category = "Coop|Objective")
 	FmultiplayerObjectiveProgressEvent OnObjectiveProgressChanged;
@@ -68,6 +71,8 @@ protected:
 	void OnRep_ObjectiveState();
 
 private:
+	void HandleObjectiveStateChanged();
+
 	UPROPERTY(ReplicatedUsing = OnRep_ObjectiveState)
 	FmultiplayerCoopObjectiveState ObjectiveState;
 };

@@ -2,13 +2,13 @@
 
 #include "multiplayerCoopKey.h"
 
-#include "multiplayerKeySocket.h"
-
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Character.h"
+#include "multiplayerCoopCarryComponent.h"
+#include "multiplayerKeySocket.h"
 #include "Net/UnrealNetwork.h"
 
 AmultiplayerCoopKey::AmultiplayerCoopKey()
@@ -30,9 +30,6 @@ AmultiplayerCoopKey::AmultiplayerCoopKey()
 	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	PickupTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	PickupTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
-	PickupTrigger->OnComponentBeginOverlap.AddDynamic(
-		this,
-		&AmultiplayerCoopKey::HandlePickupOverlap);
 }
 
 void AmultiplayerCoopKey::Tick(float DeltaSeconds)
@@ -48,6 +45,22 @@ void AmultiplayerCoopKey::Tick(float DeltaSeconds)
 		RotationAxis.GetSafeNormal(),
 		FMath::DegreesToRadians(RotationSpeedDegrees * DeltaSeconds));
 	KeyMesh->AddLocalRotation(RotationDelta);
+}
+
+void AmultiplayerCoopKey::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		PickupTrigger->OnComponentBeginOverlap.AddUniqueDynamic(
+			this,
+			&AmultiplayerCoopKey::HandlePickupOverlap);
+	}
+	else
+	{
+		PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
 }
 
 void AmultiplayerCoopKey::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -105,12 +118,18 @@ void AmultiplayerCoopKey::PickupBy(ACharacter* Character)
 		return;
 	}
 
+	UmultiplayerCoopCarryComponent* CarryComponent =
+		Character->FindComponentByClass<UmultiplayerCoopCarryComponent>();
+	if (CarryComponent == nullptr || !CarryComponent->TryCarryKey(this))
+	{
+		return;
+	}
+
 	Holder = Character;
 	Holder->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerCoopKey::HandleHolderDestroyed);
 	SetOwner(Character);
-	ApplyHeldState();
+	HandleHolderChanged();
 	ForceNetUpdate();
-	OnRep_Holder();
 }
 
 bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
@@ -127,7 +146,7 @@ bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
 	AttachToComponent(
 		SocketPoint,
 		FAttachmentTransformRules::SnapToTargetNotIncludingScale);
-	OnRep_Installed();
+	HandleInstalledChanged();
 	ForceNetUpdate();
 	return true;
 }
@@ -159,6 +178,11 @@ void AmultiplayerCoopKey::ReleaseHolder(bool bBroadcastChange)
 	if (Holder != nullptr)
 	{
 		Holder->OnDestroyed.RemoveDynamic(this, &AmultiplayerCoopKey::HandleHolderDestroyed);
+		if (UmultiplayerCoopCarryComponent* CarryComponent =
+			Holder->FindComponentByClass<UmultiplayerCoopCarryComponent>())
+		{
+			CarryComponent->ClearCarriedKey(this);
+		}
 	}
 
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
@@ -169,18 +193,28 @@ void AmultiplayerCoopKey::ReleaseHolder(bool bBroadcastChange)
 
 	if (bBroadcastChange)
 	{
-		OnRep_Holder();
+		HandleHolderChanged();
 	}
 }
 
 void AmultiplayerCoopKey::OnRep_Holder()
+{
+	HandleHolderChanged();
+}
+
+void AmultiplayerCoopKey::OnRep_Installed()
+{
+	HandleInstalledChanged();
+}
+
+void AmultiplayerCoopKey::HandleHolderChanged()
 {
 	ApplyHeldState();
 	OnKeyPickedUp.Broadcast(Holder);
 	ReceiveKeyHolderChanged(Holder);
 }
 
-void AmultiplayerCoopKey::OnRep_Installed()
+void AmultiplayerCoopKey::HandleInstalledChanged()
 {
 	if (!bInstalled)
 	{
@@ -194,7 +228,9 @@ void AmultiplayerCoopKey::ApplyHeldState()
 {
 	const bool bIsHeld = Holder != nullptr;
 	PickupTrigger->SetCollisionEnabled(
-		bIsHeld ? ECollisionEnabled::NoCollision : ECollisionEnabled::QueryOnly);
+		HasAuthority() && !bIsHeld && !bInstalled
+			? ECollisionEnabled::QueryOnly
+			: ECollisionEnabled::NoCollision);
 
 	if (!bIsHeld)
 	{

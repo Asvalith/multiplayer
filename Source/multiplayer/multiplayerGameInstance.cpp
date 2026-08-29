@@ -8,6 +8,7 @@
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
+#include "multiplayerLog.h"
 #include "UObject/SoftObjectPath.h"
 
 namespace MultiplayerSession
@@ -34,7 +35,7 @@ void UmultiplayerGameInstance::Init()
 	{
 		SessionInterface = OnlineSubsystem->GetSessionInterface();
 		UE_LOG(
-			LogTemp,
+			LogMultiplayer,
 			Log,
 			TEXT("Session subsystem initialized: %s"),
 			*OnlineSubsystem->GetSubsystemName().ToString());
@@ -42,7 +43,7 @@ void UmultiplayerGameInstance::Init()
 
 	if (!SessionInterface.IsValid())
 	{
-		UE_LOG(LogTemp, Error, TEXT("Online session interface is unavailable."));
+		UE_LOG(LogMultiplayer, Error, TEXT("Online session interface is unavailable."));
 	}
 }
 
@@ -90,7 +91,7 @@ void UmultiplayerGameInstance::SelectSessionMap(EMultiplayerSessionMap NewMap)
 	}
 
 	UE_LOG(
-		LogTemp,
+		LogMultiplayer,
 		Log,
 		TEXT("Selected session map: %s"),
 		*SessionMapPath);
@@ -288,12 +289,11 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 	SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(
 		CreateSessionCompleteHandle);
 	CreateSessionCompleteHandle.Reset();
-	EndSessionOperation();
-
-	OnHostComplete.Broadcast(bWasSuccessful);
 
 	if (!bWasSuccessful)
 	{
+		EndSessionOperation();
+		OnHostComplete.Broadcast(false);
 		return;
 	}
 
@@ -303,8 +303,14 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 
 	if (World == nullptr || !World->ServerTravel(TravelUrl))
 	{
-		UE_LOG(LogTemp, Error, TEXT("Session created, but ServerTravel failed."));
+		EndSessionOperation();
+		UE_LOG(LogMultiplayer, Error, TEXT("Session created, but ServerTravel failed."));
+		OnHostComplete.Broadcast(false);
+		return;
 	}
+
+	EndSessionOperation();
+	OnHostComplete.Broadcast(true);
 }
 
 void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
@@ -436,7 +442,7 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 		*FailureType,
 		*ErrorString);
 
-	UE_LOG(LogTemp, Error, TEXT("%s"), *LastConnectionError);
+	UE_LOG(LogMultiplayer, Error, TEXT("%s"), *LastConnectionError);
 	OnConnectionFailure.Broadcast(FailureSource, FailureType, ErrorString);
 }
 
@@ -446,7 +452,7 @@ bool UmultiplayerGameInstance::BeginSessionOperation(
 	if (CurrentOperation != EMultiplayerSessionOperation::None)
 	{
 		UE_LOG(
-			LogTemp,
+			LogMultiplayer,
 			Warning,
 			TEXT("Ignored overlapping session operation. Current=%s Requested=%s"),
 			*UEnum::GetValueAsString(CurrentOperation),

@@ -18,6 +18,12 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Coop|Match")
 	void RestartCoopGame();
 
+	/** Records one newly activated socket in the authoritative objective. */
+	bool RegisterActivatedKey();
+
+	/** Completes the match when both objective and occupancy rules are satisfied. */
+	bool TryCompleteCoopGame(int32 CurrentPlayers, int32 RequiredPlayers);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -26,6 +32,8 @@ protected:
 	int32 RequiredKeys = 4;
 
 private:
+	int32 ResolveRequiredKeys() const;
+
 	/** Makes simultaneous restart clicks from both victory screens idempotent. */
 	bool bRestartTravelRequested = false;
 };

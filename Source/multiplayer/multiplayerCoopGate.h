@@ -8,6 +8,7 @@
 
 class AmultiplayerPressurePlate;
 class AmultiplayerCoopGameState;
+class UArrowComponent;
 class USceneComponent;
 class UStaticMeshComponent;
 
@@ -72,6 +73,8 @@ private:
 	void BindRequiredPlates();
 	void UnbindRequiredPlates();
 	void EvaluateGateState();
+	void HandleGateStateChanged();
+	void HandleActivePlateCountChanged();
 	void ApplyGateState(bool bSnapToTarget);
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
@@ -82,10 +85,10 @@ private:
 
 	/** Designers position these two points in a Blueprint child to define door travel. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<USceneComponent> ClosedPoint;
+	TObjectPtr<UArrowComponent> ClosedPoint;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<USceneComponent> OpenPoint;
+	TObjectPtr<UArrowComponent> OpenPoint;
 
 	UPROPERTY(EditInstanceOnly, Category = "Coop Gate|Rules")
 	TArray<TObjectPtr<AmultiplayerPressurePlate>> RequiredPlates;

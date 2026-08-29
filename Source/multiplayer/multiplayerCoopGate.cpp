@@ -2,12 +2,13 @@
 
 #include "multiplayerCoopGate.h"
 
-#include "Components/SceneComponent.h"
 #include "Components/ArrowComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Character.h"
 #include "multiplayerCoopGameState.h"
+#include "multiplayerLog.h"
 #include "multiplayerPressurePlate.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
@@ -37,14 +38,14 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 	ClosedPoint->SetMobility(EComponentMobility::Movable);
 	ClosedPoint->bEditableWhenInherited = true;
 	ClosedPoint->SetRelativeLocation(FVector(300.0f, 0.0f, 200.0f));
-	CastChecked<UArrowComponent>(ClosedPoint)->ArrowColor = FColor::Red;
+	ClosedPoint->ArrowColor = FColor::Red;
 
 	OpenPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("OpenPoint"));
 	OpenPoint->SetupAttachment(SceneRoot);
 	OpenPoint->SetMobility(EComponentMobility::Movable);
 	OpenPoint->bEditableWhenInherited = true;
 	OpenPoint->SetRelativeLocation(FVector(300.0f, 0.0f, 600.0f));
-	CastChecked<UArrowComponent>(OpenPoint)->ArrowColor = FColor::Green;
+	OpenPoint->ArrowColor = FColor::Green;
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMesh.Succeeded())
@@ -57,6 +58,12 @@ void AmultiplayerCoopGate::BeginPlay()
 {
 	Super::BeginPlay();
 
+	ApplyGateState(true);
+	if (!HasAuthority())
+	{
+		return;
+	}
+
 	BindRequiredPlates();
 	CoopGameState = GetWorld()->GetGameState<AmultiplayerCoopGameState>();
 	if (CoopGameState != nullptr)
@@ -66,7 +73,6 @@ void AmultiplayerCoopGate::BeginPlay()
 			&AmultiplayerCoopGate::HandleObjectiveProgressChanged);
 	}
 	EvaluateGateState();
-	ApplyGateState(true);
 }
 
 void AmultiplayerCoopGate::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -160,6 +166,7 @@ void AmultiplayerCoopGate::EvaluateGateState()
 		return;
 	}
 
+	bool bReplicatedStateChanged = false;
 	int32 NewActivePlateCount = 0;
 	TSet<ACharacter*> DistinctPlayers;
 	for (const AmultiplayerPressurePlate* Plate : RequiredPlates)
@@ -185,7 +192,8 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	if (ActivePlateCount != NewActivePlateCount)
 	{
 		ActivePlateCount = NewActivePlateCount;
-		OnRep_ActivePlateCount();
+		HandleActivePlateCountChanged();
+		bReplicatedStateChanged = true;
 	}
 
 	const int32 RequiredCount = GetRequiredPlateCount();
@@ -197,8 +205,8 @@ void AmultiplayerCoopGate::EvaluateGateState()
 		&& ActivePlateCount >= RequiredCount
 		&& DistinctPlayers.Num() >= RequiredCount;
 	UE_LOG(
-		LogTemp,
-		Log,
+		LogMultiplayer,
+		Verbose,
 		TEXT("CoopGate[%s] Evaluate: Plates=%d Active=%d Required=%d Players=%d ObjectiveRequired=%s ObjectiveReady=%s ShouldOpen=%s CurrentOpen=%s"),
 		*GetName(),
 		RequiredPlates.Num(),
@@ -214,20 +222,34 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	if (bGateOpen != bNewGateOpen)
 	{
 		bGateOpen = bNewGateOpen;
-		OnRep_GateOpen();
+		HandleGateStateChanged();
+		bReplicatedStateChanged = true;
 	}
 
-	ForceNetUpdate();
+	if (bReplicatedStateChanged)
+	{
+		ForceNetUpdate();
+	}
 }
 
 void AmultiplayerCoopGate::OnRep_GateOpen()
+{
+	HandleGateStateChanged();
+}
+
+void AmultiplayerCoopGate::OnRep_ActivePlateCount()
+{
+	HandleActivePlateCountChanged();
+}
+
+void AmultiplayerCoopGate::HandleGateStateChanged()
 {
 	ApplyGateState(false);
 	OnGateStateChanged.Broadcast(bGateOpen);
 	ReceiveGateVisualStateChanged(bGateOpen);
 }
 
-void AmultiplayerCoopGate::OnRep_ActivePlateCount()
+void AmultiplayerCoopGate::HandleActivePlateCountChanged()
 {
 	OnPlateProgressChanged.Broadcast(ActivePlateCount, GetRequiredPlateCount());
 	ReceivePlateProgressChanged(ActivePlateCount, GetRequiredPlateCount());

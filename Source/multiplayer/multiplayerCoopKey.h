@@ -44,6 +44,7 @@ public:
 	FmultiplayerKeyPickedUpEvent OnKeyPickedUp;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
@@ -71,6 +72,8 @@ private:
 	void PickupBy(ACharacter* Character);
 	void ReleaseHolder(bool bBroadcastChange);
 	void ApplyHeldState();
+	void HandleHolderChanged();
+	void HandleInstalledChanged();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -84,7 +87,7 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Coop|Key")
 	FName CarrySocketName = TEXT("KeySocket");
 
-	/** When assigned, collecting this key immediately installs it in this separate rack slot. */
+	/** Legacy direct-install link retained for existing placed Blueprint instances. */
 	UPROPERTY(EditInstanceOnly, Category = "Coop|Key")
 	TObjectPtr<AmultiplayerKeySocket> DestinationSocket;
 

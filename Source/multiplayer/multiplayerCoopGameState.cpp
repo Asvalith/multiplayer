@@ -12,50 +12,53 @@ void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
 }
 void AmultiplayerCoopGameState::ConfigureRequiredKeys(int32 RequiredKeys)
 {
-	if (!HasAuthority() || ObjectiveState.bGameWon)
+	if (!HasAuthority())
 	{
 		return;
 	}
 
-	ObjectiveState.RequiredKeys = FMath::Max(1, RequiredKeys);
-	ObjectiveState.ActivatedKeys = FMath::Min(
-		ObjectiveState.ActivatedKeys,
-		ObjectiveState.RequiredKeys);
-	ForceNetUpdate();
-	OnRep_ObjectiveState();
+	FmultiplayerCoopObjectiveState NewState = ObjectiveState;
+	NewState.RequiredKeys = RequiredKeys;
+	ApplyAuthoritativeState(NewState);
 }
 
-bool AmultiplayerCoopGameState::RegisterActivatedKey()
+void AmultiplayerCoopGameState::ApplyAuthoritativeState(
+	const FmultiplayerCoopObjectiveState& NewObjectiveState)
 {
-	if (!HasAuthority()
-		|| ObjectiveState.bGameWon
-		|| IsObjectiveComplete())
+	if (!HasAuthority())
 	{
-		return false;
+		return;
 	}
 
-	++ObjectiveState.ActivatedKeys;
-	ForceNetUpdate();
-	OnRep_ObjectiveState();
-	return true;
-}
-
-bool AmultiplayerCoopGameState::TryCompleteGame()
-{
-	if (!HasAuthority()
-		|| ObjectiveState.bGameWon
-		|| !IsObjectiveComplete())
+	FmultiplayerCoopObjectiveState SanitizedState = NewObjectiveState;
+	SanitizedState.RequiredKeys = FMath::Max(0, SanitizedState.RequiredKeys);
+	SanitizedState.ActivatedKeys = FMath::Clamp(
+		SanitizedState.ActivatedKeys,
+		0,
+		SanitizedState.RequiredKeys);
+	if (SanitizedState.RequiredKeys == 0)
 	{
-		return false;
+		SanitizedState.bGameWon = false;
 	}
 
-	ObjectiveState.bGameWon = true;
+	if (ObjectiveState.ActivatedKeys == SanitizedState.ActivatedKeys
+		&& ObjectiveState.RequiredKeys == SanitizedState.RequiredKeys
+		&& ObjectiveState.bGameWon == SanitizedState.bGameWon)
+	{
+		return;
+	}
+
+	ObjectiveState = SanitizedState;
+	HandleObjectiveStateChanged();
 	ForceNetUpdate();
-	OnRep_ObjectiveState();
-	return true;
 }
 
 void AmultiplayerCoopGameState::OnRep_ObjectiveState()
+{
+	HandleObjectiveStateChanged();
+}
+
+void AmultiplayerCoopGameState::HandleObjectiveStateChanged()
 {
 	OnObjectiveProgressChanged.Broadcast(
 		ObjectiveState.ActivatedKeys,

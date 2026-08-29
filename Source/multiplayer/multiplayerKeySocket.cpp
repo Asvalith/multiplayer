@@ -2,8 +2,9 @@
 
 #include "multiplayerKeySocket.h"
 
-#include "multiplayerCoopGameState.h"
+#include "multiplayerCoopCarryComponent.h"
 #include "multiplayerCoopKey.h"
+#include "multiplayerGameMode.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -32,9 +33,22 @@ AmultiplayerKeySocket::AmultiplayerKeySocket()
 	ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	ActivationTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	ActivationTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
-	ActivationTrigger->OnComponentBeginOverlap.AddDynamic(
-		this,
-		&AmultiplayerKeySocket::HandleSocketOverlap);
+}
+
+void AmultiplayerKeySocket::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		ActivationTrigger->OnComponentBeginOverlap.AddUniqueDynamic(
+			this,
+			&AmultiplayerKeySocket::HandleSocketOverlap);
+	}
+	else
+	{
+		ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
 }
 
 void AmultiplayerKeySocket::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -100,35 +114,37 @@ void AmultiplayerKeySocket::CommitServerActivation()
 
 	bActivated = true;
 	ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	HandleActivatedChanged();
 	ForceNetUpdate();
-	OnRep_Activated();
 
-	if (AmultiplayerCoopGameState* CoopState =
-		GetWorld()->GetGameState<AmultiplayerCoopGameState>())
+	if (AmultiplayerGameMode* CoopGameMode =
+		GetWorld()->GetAuthGameMode<AmultiplayerGameMode>())
 	{
-		CoopState->RegisterActivatedKey();
+		CoopGameMode->RegisterActivatedKey();
 	}
 }
 
 AmultiplayerCoopKey* AmultiplayerKeySocket::FindCarriedKey(
 	ACharacter* Character) const
 {
-	TArray<AActor*> AttachedActors;
-	Character->GetAttachedActors(AttachedActors);
-
-	for (AActor* AttachedActor : AttachedActors)
+	if (Character == nullptr)
 	{
-		AmultiplayerCoopKey* Key = Cast<AmultiplayerCoopKey>(AttachedActor);
-		if (Key != nullptr && Key->IsHeldBy(Character))
-		{
-			return Key;
-		}
+		return nullptr;
 	}
 
-	return nullptr;
+	const UmultiplayerCoopCarryComponent* CarryComponent =
+		Character->FindComponentByClass<UmultiplayerCoopCarryComponent>();
+	AmultiplayerCoopKey* Key =
+		CarryComponent != nullptr ? CarryComponent->GetCarriedKey() : nullptr;
+	return Key != nullptr && Key->IsHeldBy(Character) ? Key : nullptr;
 }
 
 void AmultiplayerKeySocket::OnRep_Activated()
+{
+	HandleActivatedChanged();
+}
+
+void AmultiplayerKeySocket::HandleActivatedChanged()
 {
 	if (!bActivated)
 	{

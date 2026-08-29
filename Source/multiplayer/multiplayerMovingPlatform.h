@@ -6,12 +6,13 @@
 #include "GameFramework/Actor.h"
 #include "multiplayerMovingPlatform.generated.h"
 
-class ACharacter;
-class UBoxComponent;
-class UStaticMeshComponent;
-class UmultiplayerTransporterComponent;
 class AmultiplayerPressurePlate;
+class UArrowComponent;
+class UBoxComponent;
+class UmultiplayerPlayerOccupancyComponent;
+class UmultiplayerTransporterComponent;
 class USceneComponent;
+class UStaticMeshComponent;
 
 UENUM(BlueprintType)
 enum class EMovingPlatformActivationSource : uint8
@@ -27,7 +28,12 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	int32,
 	RequiredPlayers);
 
-/** A replicated platform activated by a configurable number of distinct players. */
+/**
+ * Replicated moving platform.
+ *
+ * PlayerOccupancy owns overlap bookkeeping, while Transporter owns movement.
+ * This actor only selects the activation source and replicates UI state.
+ */
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerMovingPlatform : public AActor
 {
@@ -53,37 +59,24 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
-	void HandleBeginOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex,
-		bool bFromSweep,
-		const FHitResult& SweepResult);
+	void HandleOccupancyChanged(int32 PlayerCount);
 
 	UFUNCTION()
-	void HandleEndOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex);
+	void HandleActivationPlateChanged(
+		AmultiplayerPressurePlate* Plate,
+		bool bIsActive);
 
 	UFUNCTION()
 	void OnRep_PlayerCount();
 
-	UFUNCTION()
-	void HandleOccupantDestroyed(AActor* DestroyedActor);
-
-	UFUNCTION()
-	void HandleActivationPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive);
-
 	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Platform", meta = (DisplayName = "On Platform Occupancy Visual Changed"))
-	void ReceivePlatformOccupancyChanged(int32 CurrentPlayers, int32 NeededPlayers);
+	void ReceivePlatformOccupancyChanged(
+		int32 CurrentPlayers,
+		int32 NeededPlayers);
 
 private:
-	void RefreshOccupancy();
 	void RefreshActivation();
-	void RemoveInvalidOccupants();
+	void HandlePlayerCountChanged();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
 	TObjectPtr<USceneComponent> PlatformRoot;
@@ -95,19 +88,21 @@ private:
 	TObjectPtr<UBoxComponent> ActivationVolume;
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
+	TObjectPtr<UmultiplayerPlayerOccupancyComponent> PlayerOccupancy;
+
+	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
 	TObjectPtr<UmultiplayerTransporterComponent> Transporter;
 
-	/** Fixed endpoints are captured at BeginPlay and may be positioned in a Blueprint child. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Platform", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<USceneComponent> StartPoint;
+	TObjectPtr<UArrowComponent> StartPoint;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Platform", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<USceneComponent> TargetPoint;
+	TObjectPtr<UArrowComponent> TargetPoint;
 
 	UPROPERTY(EditAnywhere, Category = "Coop|Platform|Activation")
-	EMovingPlatformActivationSource ActivationSource = EMovingPlatformActivationSource::ExternalPressurePlate;
+	EMovingPlatformActivationSource ActivationSource =
+		EMovingPlatformActivationSource::ExternalPressurePlate;
 
-	/** A separately placed pressure plate; the platform never owns the plate. */
 	UPROPERTY(EditInstanceOnly, Category = "Coop|Platform|Activation", meta = (EditCondition = "ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate", EditConditionHides))
 	TObjectPtr<AmultiplayerPressurePlate> ActivationPlate;
 
@@ -116,7 +111,4 @@ private:
 
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerCount)
 	int32 ReplicatedPlayerCount = 0;
-
-	/** Counts overlapping components per Character to keep occupancy stable. */
-	TMap<TWeakObjectPtr<ACharacter>, int32> OccupantOverlapCounts;
 };

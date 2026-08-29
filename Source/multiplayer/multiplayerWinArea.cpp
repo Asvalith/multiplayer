@@ -2,14 +2,16 @@
 
 #include "multiplayerWinArea.h"
 
-#include "multiplayerCoopGameState.h"
 #include "Components/BoxComponent.h"
-#include "GameFramework/Character.h"
+#include "multiplayerCoopGameState.h"
+#include "multiplayerGameMode.h"
+#include "multiplayerLog.h"
+#include "multiplayerPlayerOccupancyComponent.h"
 
 AmultiplayerWinArea::AmultiplayerWinArea()
 {
 	PrimaryActorTick.bCanEverTick = false;
-	bReplicates = true;
+	bReplicates = false;
 
 	WinTrigger = CreateDefaultSubobject<UBoxComponent>(TEXT("WinTrigger"));
 	SetRootComponent(WinTrigger);
@@ -17,17 +19,20 @@ AmultiplayerWinArea::AmultiplayerWinArea()
 	WinTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	WinTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	WinTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
-	WinTrigger->OnComponentBeginOverlap.AddDynamic(
-		this,
-		&AmultiplayerWinArea::HandleBeginOverlap);
-	WinTrigger->OnComponentEndOverlap.AddDynamic(
-		this,
-		&AmultiplayerWinArea::HandleEndOverlap);
+
+	PlayerOccupancy =
+		CreateDefaultSubobject<UmultiplayerPlayerOccupancyComponent>(
+			TEXT("PlayerOccupancy"));
 }
 
 void AmultiplayerWinArea::BeginPlay()
 {
 	Super::BeginPlay();
+
+	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
+		this,
+		&AmultiplayerWinArea::HandleOccupancyChanged);
+	PlayerOccupancy->BindTrigger(WinTrigger);
 
 	if (!HasAuthority())
 	{
@@ -37,14 +42,21 @@ void AmultiplayerWinArea::BeginPlay()
 	CoopGameState = GetWorld()->GetGameState<AmultiplayerCoopGameState>();
 	if (CoopGameState != nullptr)
 	{
-		CoopGameState->OnObjectiveProgressChanged.AddDynamic(
+		CoopGameState->OnObjectiveProgressChanged.AddUniqueDynamic(
 			this,
 			&AmultiplayerWinArea::HandleObjectiveProgressChanged);
 	}
+	EvaluateWinCondition();
 }
 
-void AmultiplayerWinArea::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void AmultiplayerWinArea::EndPlay(
+	const EEndPlayReason::Type EndPlayReason)
 {
+	PlayerOccupancy->OnOccupancyChanged.RemoveDynamic(
+		this,
+		&AmultiplayerWinArea::HandleOccupancyChanged);
+	PlayerOccupancy->UnbindTrigger();
+
 	if (CoopGameState != nullptr)
 	{
 		CoopGameState->OnObjectiveProgressChanged.RemoveDynamic(
@@ -52,86 +64,12 @@ void AmultiplayerWinArea::EndPlay(const EEndPlayReason::Type EndPlayReason)
 			&AmultiplayerWinArea::HandleObjectiveProgressChanged);
 	}
 
-	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : PlayerOverlapCounts)
-	{
-		if (Entry.Key.IsValid())
-		{
-			Entry.Key->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
-		}
-	}
-
-	PlayerOverlapCounts.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
-void AmultiplayerWinArea::HandleBeginOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex,
-	bool bFromSweep,
-	const FHitResult& SweepResult)
+void AmultiplayerWinArea::HandleOccupancyChanged(int32 PlayerCount)
 {
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	ACharacter* Character = Cast<ACharacter>(OtherActor);
-	if (Character != nullptr && Character->IsPlayerControlled())
-	{
-		int32& OverlapCount = PlayerOverlapCounts.FindOrAdd(Character);
-		++OverlapCount;
-		if (OverlapCount == 1)
-		{
-			Character->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
-		}
-		EvaluateWinCondition();
-	}
-}
-
-void AmultiplayerWinArea::HandleEndOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
-	{
-		int32* OverlapCount = PlayerOverlapCounts.Find(Character);
-		if (OverlapCount == nullptr)
-		{
-			return;
-		}
-
-		--(*OverlapCount);
-		if (*OverlapCount <= 0)
-		{
-			PlayerOverlapCounts.Remove(Character);
-			Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
-		}
-		EvaluateWinCondition();
-	}
-}
-
-void AmultiplayerWinArea::HandlePlayerDestroyed(AActor* DestroyedActor)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	if (ACharacter* Character = Cast<ACharacter>(DestroyedActor))
-	{
-		PlayerOverlapCounts.Remove(Character);
-		Character->OnDestroyed.RemoveDynamic(this, &AmultiplayerWinArea::HandlePlayerDestroyed);
-		EvaluateWinCondition();
-	}
+	EvaluateWinCondition();
 }
 
 void AmultiplayerWinArea::HandleObjectiveProgressChanged(
@@ -141,17 +79,6 @@ void AmultiplayerWinArea::HandleObjectiveProgressChanged(
 	EvaluateWinCondition();
 }
 
-void AmultiplayerWinArea::RemoveInvalidPlayers()
-{
-	for (auto Iterator = PlayerOverlapCounts.CreateIterator(); Iterator; ++Iterator)
-	{
-		if (!Iterator.Key().IsValid() || Iterator.Value() <= 0)
-		{
-			Iterator.RemoveCurrent();
-		}
-	}
-}
-
 void AmultiplayerWinArea::EvaluateWinCondition()
 {
 	if (!HasAuthority() || CoopGameState == nullptr)
@@ -159,18 +86,19 @@ void AmultiplayerWinArea::EvaluateWinCondition()
 		return;
 	}
 
-	RemoveInvalidPlayers();
+	const int32 PlayerCount = PlayerOccupancy->GetPlayerCount();
 	UE_LOG(
-		LogTemp,
-		Log,
-		TEXT("WinArea[%s] Evaluate: Players=%d RequiredPlayers=%d KeysComplete=%s"),
+		LogMultiplayer,
+		Verbose,
+		TEXT("WinArea[%s] Players=%d Required=%d ObjectiveComplete=%s"),
 		*GetName(),
-		PlayerOverlapCounts.Num(),
+		PlayerCount,
 		RequiredPlayers,
 		CoopGameState->IsObjectiveComplete() ? TEXT("true") : TEXT("false"));
-	if (PlayerOverlapCounts.Num() >= RequiredPlayers
-		&& CoopGameState->IsObjectiveComplete())
+
+	if (AmultiplayerGameMode* CoopGameMode =
+		GetWorld()->GetAuthGameMode<AmultiplayerGameMode>())
 	{
-		CoopGameState->TryCompleteGame();
+		CoopGameMode->TryCompleteCoopGame(PlayerCount, RequiredPlayers);
 	}
 }

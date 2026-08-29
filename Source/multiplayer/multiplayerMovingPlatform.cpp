@@ -2,14 +2,14 @@
 
 #include "multiplayerMovingPlatform.h"
 
-#include "multiplayerTransporterComponent.h"
-#include "multiplayerPressurePlate.h"
-#include "Components/BoxComponent.h"
 #include "Components/ArrowComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "GameFramework/Character.h"
+#include "multiplayerPlayerOccupancyComponent.h"
+#include "multiplayerPressurePlate.h"
+#include "multiplayerTransporterComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -40,20 +40,25 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	ActivationVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
 	ActivationVolume->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 
-	Transporter = CreateDefaultSubobject<UmultiplayerTransporterComponent>(TEXT("Transporter"));
+	PlayerOccupancy =
+		CreateDefaultSubobject<UmultiplayerPlayerOccupancyComponent>(
+			TEXT("PlayerOccupancy"));
+	Transporter =
+		CreateDefaultSubobject<UmultiplayerTransporterComponent>(
+			TEXT("Transporter"));
 
 	StartPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("StartPoint"));
 	StartPoint->SetupAttachment(PlatformRoot);
 	StartPoint->SetMobility(EComponentMobility::Movable);
 	StartPoint->bEditableWhenInherited = true;
-	CastChecked<UArrowComponent>(StartPoint)->ArrowColor = FColor::Red;
+	StartPoint->ArrowColor = FColor::Red;
 
 	TargetPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("TargetPoint"));
 	TargetPoint->SetupAttachment(PlatformRoot);
 	TargetPoint->SetMobility(EComponentMobility::Movable);
 	TargetPoint->bEditableWhenInherited = true;
 	TargetPoint->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
-	CastChecked<UArrowComponent>(TargetPoint)->ArrowColor = FColor::Green;
+	TargetPoint->ArrowColor = FColor::Green;
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(
 		TEXT("/Engine/BasicShapes/Cube.Cube"));
@@ -71,32 +76,43 @@ void AmultiplayerMovingPlatform::BeginPlay()
 		StartPoint->GetComponentLocation(),
 		TargetPoint->GetComponentLocation());
 
-	ActivationVolume->OnComponentBeginOverlap.AddDynamic(
+	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
 		this,
-		&AmultiplayerMovingPlatform::HandleBeginOverlap);
-	ActivationVolume->OnComponentEndOverlap.AddDynamic(
-		this,
-		&AmultiplayerMovingPlatform::HandleEndOverlap);
+		&AmultiplayerMovingPlatform::HandleOccupancyChanged);
 
-	if (ActivationPlate != nullptr)
+	if (!HasAuthority())
 	{
-		ActivationPlate->OnPlateActiveChanged.AddUniqueDynamic(
-			this,
-			&AmultiplayerMovingPlatform::HandleActivationPlateChanged);
+		ActivationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		HandlePlayerCountChanged();
+		return;
 	}
 
-	OnRep_PlayerCount();
+	if (ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy)
+	{
+		PlayerOccupancy->BindTrigger(ActivationVolume);
+	}
+	else
+	{
+		ActivationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		if (ActivationPlate != nullptr)
+		{
+			ActivationPlate->OnPlateActiveChanged.AddUniqueDynamic(
+				this,
+				&AmultiplayerMovingPlatform::HandleActivationPlateChanged);
+		}
+	}
+
+	HandlePlayerCountChanged();
 	RefreshActivation();
 }
 
-void AmultiplayerMovingPlatform::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void AmultiplayerMovingPlatform::EndPlay(
+	const EEndPlayReason::Type EndPlayReason)
 {
-	ActivationVolume->OnComponentBeginOverlap.RemoveDynamic(
+	PlayerOccupancy->OnOccupancyChanged.RemoveDynamic(
 		this,
-		&AmultiplayerMovingPlatform::HandleBeginOverlap);
-	ActivationVolume->OnComponentEndOverlap.RemoveDynamic(
-		this,
-		&AmultiplayerMovingPlatform::HandleEndOverlap);
+		&AmultiplayerMovingPlatform::HandleOccupancyChanged);
+	PlayerOccupancy->UnbindTrigger();
 
 	if (ActivationPlate != nullptr)
 	{
@@ -105,17 +121,6 @@ void AmultiplayerMovingPlatform::EndPlay(const EEndPlayReason::Type EndPlayReaso
 			&AmultiplayerMovingPlatform::HandleActivationPlateChanged);
 	}
 
-	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OccupantOverlapCounts)
-	{
-		if (Entry.Key.IsValid())
-		{
-			Entry.Key->OnDestroyed.RemoveDynamic(
-				this,
-				&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
-		}
-	}
-
-	OccupantOverlapCounts.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -126,91 +131,18 @@ void AmultiplayerMovingPlatform::GetLifetimeReplicatedProps(
 	DOREPLIFETIME(AmultiplayerMovingPlatform, ReplicatedPlayerCount);
 }
 
-void AmultiplayerMovingPlatform::HandleBeginOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex,
-	bool bFromSweep,
-	const FHitResult& SweepResult)
+void AmultiplayerMovingPlatform::HandleOccupancyChanged(int32 PlayerCount)
 {
-	if (!HasAuthority())
+	if (!HasAuthority()
+		|| ActivationSource != EMovingPlatformActivationSource::PlatformOccupancy)
 	{
 		return;
 	}
 
-	ACharacter* Character = Cast<ACharacter>(OtherActor);
-	if (Character != nullptr && Character->IsPlayerControlled())
+	if (ReplicatedPlayerCount != PlayerCount)
 	{
-		int32& OverlapCount = OccupantOverlapCounts.FindOrAdd(Character);
-		++OverlapCount;
-		if (OverlapCount == 1)
-		{
-			Character->OnDestroyed.AddUniqueDynamic(
-				this,
-				&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
-		}
-		RefreshOccupancy();
-	}
-}
-
-void AmultiplayerMovingPlatform::HandleEndOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
-	{
-		int32* OverlapCount = OccupantOverlapCounts.Find(Character);
-		if (OverlapCount == nullptr)
-		{
-			return;
-		}
-
-		--(*OverlapCount);
-		if (*OverlapCount <= 0)
-		{
-			OccupantOverlapCounts.Remove(Character);
-			Character->OnDestroyed.RemoveDynamic(
-				this,
-				&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
-		}
-		RefreshOccupancy();
-	}
-}
-
-void AmultiplayerMovingPlatform::HandleOccupantDestroyed(AActor* DestroyedActor)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	if (ACharacter* Character = Cast<ACharacter>(DestroyedActor))
-	{
-		OccupantOverlapCounts.Remove(Character);
-		Character->OnDestroyed.RemoveDynamic(
-			this,
-			&AmultiplayerMovingPlatform::HandleOccupantDestroyed);
-		RefreshOccupancy();
-	}
-}
-
-void AmultiplayerMovingPlatform::RefreshOccupancy()
-{
-	RemoveInvalidOccupants();
-
-	const int32 NewPlayerCount = OccupantOverlapCounts.Num();
-	if (ReplicatedPlayerCount != NewPlayerCount)
-	{
-		ReplicatedPlayerCount = NewPlayerCount;
-		OnRep_PlayerCount();
+		ReplicatedPlayerCount = PlayerCount;
+		HandlePlayerCountChanged();
 		ForceNetUpdate();
 	}
 
@@ -231,26 +163,24 @@ void AmultiplayerMovingPlatform::RefreshActivation()
 		return;
 	}
 
-	const bool bShouldActivate = ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate
-		? ActivationPlate != nullptr && ActivationPlate->IsPlateActive()
-		: ReplicatedPlayerCount >= RequiredPlayers;
-
+	const bool bShouldActivate =
+		ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate
+			? ActivationPlate != nullptr && ActivationPlate->IsPlateActive()
+			: ReplicatedPlayerCount >= RequiredPlayers;
 	Transporter->SetTransportActive(bShouldActivate);
-}
-
-void AmultiplayerMovingPlatform::RemoveInvalidOccupants()
-{
-	for (auto It = OccupantOverlapCounts.CreateIterator(); It; ++It)
-	{
-		if (!It.Key().IsValid() || It.Value() <= 0)
-		{
-			It.RemoveCurrent();
-		}
-	}
 }
 
 void AmultiplayerMovingPlatform::OnRep_PlayerCount()
 {
-	OnPlatformOccupancyChanged.Broadcast(ReplicatedPlayerCount, RequiredPlayers);
-	ReceivePlatformOccupancyChanged(ReplicatedPlayerCount, RequiredPlayers);
+	HandlePlayerCountChanged();
+}
+
+void AmultiplayerMovingPlatform::HandlePlayerCountChanged()
+{
+	OnPlatformOccupancyChanged.Broadcast(
+		ReplicatedPlayerCount,
+		RequiredPlayers);
+	ReceivePlatformOccupancyChanged(
+		ReplicatedPlayerCount,
+		RequiredPlayers);
 }

@@ -38,11 +38,14 @@
 GameInstance
   └─ 创建、搜索、加入和销毁房间
        └─ 进入合作地图
-            ├─ GameMode：制定本局规则
-            ├─ GameState：保存所有玩家共享的进度
+            ├─ GameMode：执行服务器权威规则
+            ├─ GameState：复制所有玩家共享的状态快照
             ├─ PlayerController：管理本地胜利界面和重开请求
-            ├─ Character：处理移动、视角和跳跃
-            └─ 机关 Actor：执行钥匙、门、平台和胜利区域逻辑
+            ├─ Character：处理移动、输入并持有 CarryComponent
+            └─ 机关 Actor
+                 ├─ PlayerOccupancyComponent：统一玩家区域统计
+                 ├─ TransporterComponent：移动平台位移
+                 └─ Key / Socket / Plate / Gate / Platform / WinArea
 ```
 
 ### Character：玩家控制
@@ -59,6 +62,7 @@ GameInstance
 - 第三人称相机和弹簧臂。
 - Enhanced Input 输入绑定。
 - 使用 Unreal 自带的 CharacterMovement 完成角色移动同步。
+- 使用 multiplayerCoopCarryComponent 显式保存当前携带的钥匙，插槽不再扫描角色附着 Actor。
 
 ### PlayerController：本地界面和玩家命令
 
@@ -97,7 +101,7 @@ GameInstance
 - 本局需要的钥匙数量。
 - 游戏是否已经胜利。
 
-GameState 统一复制共享进度和胜利状态，并通过数量上限和胜利门禁防止重复结算。
+GameState 只保存、校验并复制 GameMode 计算出的共享状态快照；RepNotify 再把进度和胜利变化广播给本地表现层。
 
 ### GameMode：本局规则
 
@@ -106,8 +110,9 @@ GameState 统一复制共享进度和胜利状态，并通过数量上限和胜�
 [`multiplayerGameMode.cpp`](Source/multiplayer/multiplayerGameMode.cpp) 只在服务器运行，负责：
 
 - 指定本局使用的 Character、PlayerController 和 GameState 类型。
-- 配置本局需要四把钥匙。
-- 验证游戏是否已经胜利。
+- 根据当前地图中实际放置的 KeySocket 数量配置钥匙目标，并使用 RequiredKeys 作为无插槽地图的回退值。
+- 接收 KeySocket 的激活报告并推进权威进度。
+- 同时验证目标进度与 WinArea 人数后提交胜利。
 - 处理重新开始请求。
 - 通过服务器地图迁移让所有已连接玩家一起进入新一局。
 
@@ -142,9 +147,7 @@ Host 创建房间成功后，服务器切换到合作地图，并带上已经连
 
 [`multiplayerPressurePlate.cpp`](Source/multiplayer/multiplayerPressurePlate.cpp) 统计站在板上的玩家，并将是否激活同步给两端。
 
-压力板按玩家记录碰撞组件的重叠次数，最后一个重叠组件离开后才移除该玩家。
-
-玩家或角色对象被销毁时，压力板会主动清理占用记录，避免掉线后压力板仍保持按下。
+multiplayerPlayerOccupancyComponent 统一处理 PressurePlate、MovingPlatform 和 WinArea 的玩家筛选、多碰撞组件计数及角色销毁清理。客户端不再运行这些纯服务器逻辑触发器。
 
 ### 门
 
@@ -166,7 +169,7 @@ Host 创建房间成功后，服务器切换到合作地图，并带上已经连
 
 [`multiplayerCoopKey.cpp`](Source/multiplayer/multiplayerCoopKey.cpp) 由服务器处理拾取和安装。
 
-钥匙保存“当前持有者”和“是否已经安装”两个状态。两名玩家即使几乎同时碰到同一把钥匙，服务器也会依次处理事件：第一个成功后，后续事件会因为钥匙已经被持有或安装而直接结束，因此不会出现一把钥匙被计算两次。
+钥匙保存“当前持有者”和“是否已经安装”两个复制状态；Character 的 CarryComponent 保存服务器当前携带槽。两名玩家即使几乎同时碰到同一把钥匙，服务器也会依次处理事件：第一个成功后，后续事件会因为钥匙已被持有、安装或携带槽已占用而结束，因此不会出现一把钥匙被计算两次。
 
 如果持有钥匙的玩家掉线或角色被销毁，钥匙会解除附着、清除持有者并重新开放拾取，不会永久消失。
 
@@ -174,7 +177,7 @@ Host 创建房间成功后，服务器切换到合作地图，并带上已经连
 
 主要文件：[`multiplayerKeySocket.h`](Source/multiplayer/multiplayerKeySocket.h)、[`multiplayerKeySocket.cpp`](Source/multiplayer/multiplayerKeySocket.cpp)、[`bpkeysocket.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.uasset)。
 
-[`multiplayerKeySocket.cpp`](Source/multiplayer/multiplayerKeySocket.cpp) 负责接收一把钥匙并登记共享进度。
+[`multiplayerKeySocket.cpp`](Source/multiplayer/multiplayerKeySocket.cpp) 从 Character 的 CarryComponent 取得钥匙，并向 GameMode 报告一次插槽激活。
 
 插槽激活后会立即关闭碰撞，并通过 `bActivated` 阻止重复提交。同一插槽无论被触发多少次，都最多只会给共享目标增加一次进度。
 
@@ -184,7 +187,7 @@ Host 创建房间成功后，服务器切换到合作地图，并带上已经连
 
 [`multiplayerMovingPlatform.cpp`](Source/multiplayer/multiplayerMovingPlatform.cpp) 负责判断平台什么时候启动，例如由外部压力板控制，或者需要一定数量的玩家站上平台。
 
-[`multiplayerTransporterComponent.cpp`](Source/multiplayer/multiplayerTransporterComponent.cpp) 只负责把所属平台从起点移动到终点。平台是否启动和平台如何移动被拆开，避免一个类同时承担玩家统计、机关连接和移动计算。
+PlayerOccupancyComponent 负责平台人数，[`multiplayerTransporterComponent.cpp`](Source/multiplayer/multiplayerTransporterComponent.cpp) 只负责把所属平台从起点移动到终点。平台规则、占用统计和移动实现保持独立。
 
 平台的位置由服务器控制并同步给客户端；到达目标后停止更新，减少无意义的 Tick。
 
@@ -192,9 +195,9 @@ Host 创建房间成功后，服务器切换到合作地图，并带上已经连
 
 主要文件：[`multiplayerWinArea.h`](Source/multiplayer/multiplayerWinArea.h)、[`multiplayerWinArea.cpp`](Source/multiplayer/multiplayerWinArea.cpp)、[`winaera.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/winaera.uasset)。
 
-[`multiplayerWinArea.cpp`](Source/multiplayer/multiplayerWinArea.cpp) 只在服务器统计区域中的不同玩家。
+[`multiplayerWinArea.cpp`](Source/multiplayer/multiplayerWinArea.cpp) 读取 PlayerOccupancyComponent 的不同玩家数量。
 
-当四把钥匙已经安装且区域内达到要求人数时，WinArea 请求 GameState 提交胜利结果。
+当钥匙目标完成且区域内达到要求人数时，WinArea 请求 GameMode 验证并提交胜利；GameState 只复制最终状态。
 
 正式地图中的 `winaera` 是该 C++ 类的蓝图子类，用于配置碰撞范围并放置到关卡中。
 
@@ -238,9 +241,11 @@ C++ 负责：
 ```text
 玩家进入钥匙范围
 → 服务器确认钥匙尚未被拿走
+→ Character CarryComponent 记录当前钥匙
 → 钥匙安装到目标插槽
 → 插槽只登记一次
-→ GameState 增加共享进度
+→ GameMode 增加权威进度
+→ GameState 复制新快照
 → 两端更新钥匙和机关表现
 ```
 
@@ -249,8 +254,9 @@ C++ 负责：
 ```text
 四个钥匙插槽激活
 → 两名玩家进入胜利区域
-→ WinArea 请求完成游戏
-→ GameState 提交并复制胜利状态
+→ WinArea 请求 GameMode 完成游戏
+→ GameMode 验证并更新 GameState
+→ GameState 复制胜利状态
 → 两端 PlayerController 显示胜利界面
 ```
 

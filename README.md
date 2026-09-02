@@ -1,149 +1,126 @@
-# UE5 双人 Co-op 网络机关 Demo
+# UE5 双人 Co-op 网络协作 Demo
 
-这是一个使用 Unreal Engine 5 开发的双人合作网络 Demo。两名玩家通过主菜单创建或加入房间，在同一张地图中合作收集钥匙、操作机关、使用移动平台，并在共同完成目标后进入胜利区域。
+这是一个使用 Unreal Engine 5.5 和 C++ 开发的双人局域网合作原型。
+当前版本实现了局域网房间创建、搜索和加入，以及钥匙目标、压力板、门、移动平台、共享进度和双人胜利判定。所有会影响玩法结果的状态由服务器维护，客户端接收复制状态并更新本地表现。
 
----
+## 已实现功能
 
-## 项目概览
+### 局域网会话
 
-本项目是一个双人合作网络 Demo。一名玩家创建房间，另一名玩家搜索并加入；两人进入同一张地图后，通过机关配合完成钥匙收集，并在共同进入胜利区域后结束本局。
+- 基于 `OnlineSubsystem NULL` 创建、搜索和加入局域网房间。
+- 使用明确的异步操作状态限制重复点击，避免创建、搜索和加入请求相互覆盖。
+- 创建新房间前先销毁已有同名 Session，并在完成回调后继续建房。
+- 加入成功后解析连接地址，再由本地 `PlayerController` 发起连接。
+- 监听网络失败和地图加载失败，并输出可定位的项目日志。
 
-主要玩法包括：创建和加入房间、双人角色移动、压力板与门联动、钥匙收集与插槽展示、合作移动平台、共享目标和双人胜利判定。C++ 另提供服务器重开接口，当前胜利界面尚未接入。
+### 服务器权威的协作玩法
 
-### 核心特点
+- 玩家进入钥匙的 Overlap 范围后，服务器校验钥匙及其目标插槽，钥匙自动吸附（Snap）到对应插槽并登记目标进度。
+- 钥匙插槽只接受符合条件的钥匙，并且每个插槽最多登记一次进度。
+- 压力板在服务器统计玩家，门根据关联压力板和共享目标决定是否开启。
+- 移动平台由服务器决定启停和位置，客户端接收 Actor 位移同步。
+- 胜利区域上报当前玩家数量，`GameMode` 再复核钥匙目标、人数和既有胜利状态。
+- `GameState` 将钥匙进度、目标数量和胜利结果作为一份完整快照同步给参与玩家。
 
-1. **服务器权威的协作玩法闭环：** 钥匙、机关、共享进度和胜利结果都由服务器决定，并通过状态门禁处理多人同时交互和重复触发。
-2. **按对象选择网络同步方式：** 角色使用 Unreal 自带的移动同步，门和压力板只同步关键状态，移动平台由服务器移动并同步位置；玩家离开或对象销毁时会清理相关引用和事件绑定。
-3. **双人联机入口：** 基于 OnlineSubsystem 实现创建、搜索和加入房间，避免异步操作互相重叠，并记录连接与加载失败。
-4. **轻量断线恢复：** 客户端保存最近一次服务器地址，意外断线后最多自动重试三次；重新进入后继续读取服务器上的共享进度。
+### 并发与生命周期处理
 
-### 游戏目标流程
+- 钥匙和插槽在修改状态前检查 Authority、钥匙完成状态和插槽状态，避免同一把钥匙或同一插槽被重复计数。
+- 区域统计按“不同玩家”计算，并记录同一角色的多个碰撞组件，避免一个角色被重复计数。
+- 玩家 Pawn 销毁时主动清理区域占用记录。
+- Actor 或组件结束生命周期时移除外部 Delegate，避免残留回调。
+- 相同的目标快照不会重复广播或强制网络更新。
 
-1. 一名玩家在主菜单创建房间，成为 Host。
-2. 另一名玩家搜索房间并加入。
-3. Host 将两名玩家一起带入合作地图。
-4. 两名玩家通过压力板、门和移动平台互相配合。
-5. 玩家收集四把钥匙，钥匙会被安装到对应插槽。
-6. 四个插槽全部激活后，共享目标完成。
-7. 两名玩家同时进入胜利区域，服务器确认本局胜利。
-8. 两端收到胜利状态，由本地 PlayerController 交给胜利界面。
+### 自动短线重连
 
-整个过程中，服务器负责决定钥匙是否被拾取、机关是否生效以及游戏是否胜利；客户端负责输入、移动和画面表现。
+- 客户端保存最近一次有效连接地址。
+- 意外断线后按照 1、2、4 秒间隔进行有限次数重试。
+- 只有本地控制器重新进入 `PlayingState`，才认为重连成功。
+- 主动退出、地址无效或达到重试上限时结束重连流程。
+- 重连后重新读取服务器上的共享目标；不会恢复断线前的位置或未提交的本地表现状态。
 
----
+## 代码结构
 
-## 架构职责
+| 模块 | 主要职责 |
+| --- | --- |
+| `multiplayerGameInstance` | 会话异步流程、连接地址、网络失败处理和自动重连 |
+| `multiplayerGameMode` | 服务器规则、目标数量初始化、进度登记和胜利复核 |
+| `multiplayerCoopGameState` | 复制合作目标快照，并向本地表现层广播变化 |
+| `multiplayerCoopPlayerController` | 确认本地连接进入可操作状态，并承接胜利表现事件 |
+| `multiplayerPlayerOccupancyComponent` | 统一处理区域内玩家筛选、去重和销毁清理 |
+| `multiplayerTransporterComponent` | 只负责服务器上的平台位移 |
+| Key / Socket / Plate / Gate / Platform / WinArea | 各自负责单一机关规则，并把最终判定交给服务器规则层 |
 
-```text
-GameInstance
-  └─ 创建、搜索和加入房间
-       └─ 进入合作地图
-            ├─ GameMode：执行服务器权威规则
-            ├─ GameState：复制所有玩家共享的状态快照
-            ├─ PlayerController：管理本地胜利界面并提供重开请求接口
-            ├─ Character：处理移动、输入并持有 CarryComponent
-            └─ 机关 Actor
-                 ├─ PlayerOccupancyComponent：统一玩家区域统计
-                 ├─ TransporterComponent：移动平台位移
-                 └─ Key / Socket / Plate / Gate / Platform / WinArea
-```
+核心源码位于 [Source/multiplayer](Source/multiplayer)，蓝图和关卡资源位于 [Content](Content)。
 
-### Character：玩家控制
+## 网络设计
 
-主要文件：
+### 规则与共享状态分离
 
-- [`multiplayerCharacter.h`](Source/multiplayer/multiplayerCharacter.h)：声明角色拥有的相机、输入和对外访问接口。
-- [`multiplayerCharacter.cpp`](Source/multiplayer/multiplayerCharacter.cpp)：创建相机组件，配置 CharacterMovement，并绑定移动、视角和跳跃输入。
-- [`BP_ThirdPersonCharacter.uasset`](Content/ThirdPerson/Blueprints/BP_ThirdPersonCharacter.uasset)：配置角色模型、动画蓝图和输入资产。
+`GameMode` 只存在于服务器，负责判断操作是否有效；`GameState` 负责把已经确认的共享结果复制给客户端。机关 Actor 不能直接修改胜利结果，只能向规则层报告当前事实。
 
-[`multiplayerCharacter.cpp`](Source/multiplayer/multiplayerCharacter.cpp) 主要负责：
+### 按对象选择同步方式
 
-- 角色移动、跳跃和视角控制。
-- 第三人称相机和弹簧臂。
-- Enhanced Input 输入绑定。
-- 使用 Unreal 自带的 CharacterMovement 完成角色移动同步。
-- 使用 multiplayerCoopCarryComponent 显式保存当前携带的钥匙，插槽不再扫描角色附着 Actor。
+- 角色移动使用 `CharacterMovementComponent` 自带的预测与服务器校正。
+- 压力板和门只复制影响表现的关键状态。
+- 钥匙复制完成状态，并在需要时同步服务器确认的位置。
+- 移动平台由服务器移动，通过 Actor Movement Replication 同步位置。
+- 目标进度和胜利结果由 `GameState` 统一复制。
 
-### PlayerController：本地界面和玩家命令
+### 控制无意义更新
 
-主要文件：
+- 静止机关不持续 Tick。
+- 钥匙只在尚未归位时启用旋转 Tick，吸附到插槽后关闭。
+- 移动平台仅在尚未到达目标点时启用 Tick。
+- 相同状态不重复提交，不依赖高频 RPC 刷新机关表现。
 
-- [`multiplayerCoopPlayerController.h`](Source/multiplayer/multiplayerCoopPlayerController.h) / [`multiplayerCoopPlayerController.cpp`](Source/multiplayer/multiplayerCoopPlayerController.cpp)：本地胜利事件和服务器重开请求。
-- [`multiplayerVictoryPresenterComponent.h`](Source/multiplayer/multiplayerVictoryPresenterComponent.h) / [`multiplayerVictoryPresenterComponent.cpp`](Source/multiplayer/multiplayerVictoryPresenterComponent.cpp)：监听 GameState，并保证每局只通知一次胜利 UI。
-- [`BP-CoopPlayerController.uasset`](Content/ThirdPerson/Blueprints/BP-CoopPlayerController.uasset)：创建胜利 Widget、设置鼠标和输入模式。
-- [`winandquit.uasset`](Content/UI/winandquit.uasset)：胜利界面及中文按钮。
+## 关键流程
 
-[`multiplayerCoopPlayerController.cpp`](Source/multiplayer/multiplayerCoopPlayerController.cpp) 负责当前玩家自己的界面流程：
-
-- 接收本地胜利通知。
-- 将胜利事件交给蓝图创建并显示 UMG。
-- 提供可由蓝图调用的服务器重开请求接口；当前胜利 Widget 尚未接线。
-
-[`multiplayerVictoryPresenterComponent.cpp`](Source/multiplayer/multiplayerVictoryPresenterComponent.cpp) 在本地控制器上监听 GameState 的胜利状态，并保证同一局只通知一次胜利 UI。
-
-胜利链路如下：
+### 钥匙目标
 
 ```text
-服务器确认胜利
-→ GameState 复制胜利状态
-→ 本地 VictoryPresenter 收到通知
-→ PlayerController 蓝图显示胜利界面
+玩家进入钥匙的 Overlap 范围
+→ 服务器检查钥匙状态和预绑定的目标插槽
+→ 钥匙自动吸附（Snap）到对应插槽
+→ 插槽完成一次性登记
+→ GameMode 推进权威进度
+→ GameState 复制新的目标快照
 ```
 
-### GameState：共享进度
+当前关卡使用预绑定目标插槽：Overlap 触发后，钥匙由服务器校验并自动吸附归位。
+这个流程没有独立交互按键，也不属于背包、装备或手持物品系统。
 
-主要文件：[`multiplayerCoopGameState.h`](Source/multiplayer/multiplayerCoopGameState.h)、[`multiplayerCoopGameState.cpp`](Source/multiplayer/multiplayerCoopGameState.cpp)。
+### 胜利判定
 
-[`multiplayerCoopGameState.cpp`](Source/multiplayer/multiplayerCoopGameState.cpp) 保存：
+```text
+钥匙目标完成
+→ 足够数量的玩家进入胜利区域
+→ WinArea 请求 GameMode 复核
+→ GameMode 首次提交胜利
+→ GameState 同步胜利状态
+→ 本地 PlayerController 收到表现事件
+```
 
-- 已安装钥匙数量。
-- 本局需要的钥匙数量。
-- 游戏是否已经胜利。
+C++ 提供 `ReceiveCoopGameWon` 蓝图事件作为 UI 扩展点。是否创建和显示具体 UMG，由对应的 PlayerController 蓝图实现决定。
 
-GameState 只保存、校验并复制 GameMode 计算出的共享状态快照；RepNotify 再把进度和胜利变化广播给本地表现层。
+## 运行方式
 
-### GameMode：本局规则
+### 编辑器双实例
 
-主要文件：[`multiplayerGameMode.h`](Source/multiplayer/multiplayerGameMode.h)、[`multiplayerGameMode.cpp`](Source/multiplayer/multiplayerGameMode.cpp)。
+1. 使用 Unreal Engine 5.5 打开 `multiplayer.uproject`。
+2. 编译 Development Editor。
+3. 在系统环境变量或当前终端中设置 `UE_EDITOR` 为 `UnrealEditor.exe` 的完整路径。
+4. 运行：
 
-[`multiplayerGameMode.cpp`](Source/multiplayer/multiplayerGameMode.cpp) 只在服务器运行，负责：
+```powershell
+.\LaunchTwoPlayers.bat
+```
 
-- 指定本局使用的 Character、PlayerController 和 GameState 类型。
-- 根据当前地图中实际放置的 KeySocket 数量配置钥匙目标，并使用 RequiredKeys 作为无插槽地图的回退值。
-- 接收 KeySocket 的激活报告并推进权威进度。
-- 同时验证目标进度与 WinArea 人数后提交胜利。
-- 处理重新开始请求。
-- 通过服务器地图迁移让所有已连接玩家一起进入新一局。
+脚本会从项目目录定位 `multiplayer.uproject`，并启动两个窗口进入主菜单。房间创建、搜索和加入需要在两个窗口中手动操作验证。
 
-如果两名玩家同时点击重新开始，GameMode 的单次请求标记会忽略后续请求，避免重复发起地图迁移。
+### 自动网络回归
 
-### GameInstance：房间和连接
-
-主要文件：[`multiplayerGameInstance.h`](Source/multiplayer/multiplayerGameInstance.h)、[`multiplayerGameInstance.cpp`](Source/multiplayer/multiplayerGameInstance.cpp)、[`WBPmainmenu.uasset`](Content/UI/WBPmainmenu.uasset)。
-
-[`multiplayerGameInstance.cpp`](Source/multiplayer/multiplayerGameInstance.cpp) 对应的 GameInstance 在地图切换时不会被销毁，负责：
-
-- 创建房间。
-- 搜索可加入的房间。
-- 加入选中的房间。
-- 记录连接和地图加载失败。
-- 防止创建、搜索、加入等异步操作互相重叠。
-- 客户端意外断线后按 1、2、4 秒间隔自动尝试恢复连接。
-
-再次创建房间时，GameInstance 会在内部先销毁同名 Session；项目没有独立的“退出房间”界面流程。
-
-Host 创建房间成功后，服务器切换到合作地图，并带上已经连接的玩家。Client 加入成功后，根据 OnlineSubsystem 返回的地址连接服务器。
-
-项目使用 OnlineSubsystem NULL 完成本地与局域网房间联调。
-
-## 网络回归测试
-
-项目提供自动双客户端测试入口 [TestTwoPlayers.bat](TestTwoPlayers.bat)，底层由
-[RunMultiplayerNetworkTests.ps1](Scripts/RunMultiplayerNetworkTests.ps1) 启动无画面的
-Listen Server 和 Client，并根据运行日志自动判断成功或失败。
-
-~~~powershell
-# 正常网络，并验证客户端断开后能够自动重连
+```powershell
+# 正常网络，并测试一次自动重连
 .\TestTwoPlayers.bat
 
 # 100ms 延迟、20ms 波动、2% 丢包
@@ -152,157 +129,26 @@ Listen Server 和 Client，并根据运行日志自动判断成功或失败。
 # 200ms 延迟、50ms 波动、5% 丢包
 .\TestTwoPlayers.bat -Profile Harsh
 
-# 依次执行全部网络环境
+# 运行全部网络配置
 .\TestTwoPlayers.bat -Profile All
-~~~
-
-如果 UnrealEditor 不在批处理的默认位置，可先通过 UE_EDITOR 环境变量指定完整路径；
-也可以直接运行 PowerShell 脚本并传入 EditorPath。
-
-测试会验证：
-
-- 服务器成功初始化四把钥匙目标。
-- 客户端成功加入并进入合作地图。
-- 弱网参数确实在 Host 和 Client 上生效。
-- 开发测试主动制造一次连接丢失后，同一客户端进程能够自动回到服务器。
-- 除测试主动制造的断线外，日志中没有地图加载失败、项目错误或崩溃标记。
-
-每次运行会在 Saved/TestReports 生成 JSON 报告，并在 Saved/Logs 保存各进程日志；
-这些运行产物不会提交到仓库。这里验证的是连接、地图加载、共享目标初始化和自动重连，
-不替代钥匙、机关和胜利流程的双人操作测试。重连玩家会以新角色重新进入，GameState
-中的共享目标继续由服务器同步；本实现不额外恢复断线前的位置或手持物品。
-
----
-
-## 机关系统
-
-机关采用同一个基本原则：服务器修改真正的游戏状态，客户端收到结果后更新画面。
-
-### 压力板
-
-主要文件：[`multiplayerPressurePlate.h`](Source/multiplayer/multiplayerPressurePlate.h)、[`multiplayerPressurePlate.cpp`](Source/multiplayer/multiplayerPressurePlate.cpp)、[`pressplate.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/pressplate.uasset)。
-
-[`multiplayerPressurePlate.cpp`](Source/multiplayer/multiplayerPressurePlate.cpp) 统计站在板上的玩家，并将是否激活同步给两端。
-
-multiplayerPlayerOccupancyComponent 统一处理 PressurePlate、MovingPlatform 和 WinArea 的玩家筛选、多碰撞组件计数及角色销毁清理。客户端不再运行这些纯服务器逻辑触发器。
-
-### 门
-
-主要文件：[`multiplayerCoopGate.h`](Source/multiplayer/multiplayerCoopGate.h)、[`multiplayerCoopGate.cpp`](Source/multiplayer/multiplayerCoopGate.cpp)、[`bpcoopgate.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/bpcoopgate.uasset)。
-
-[`multiplayerCoopGate.cpp`](Source/multiplayer/multiplayerCoopGate.cpp) 监听与它关联的压力板，由服务器计算是否满足开门条件。
-
-门复制打开状态，客户端收到状态后在本地完成开关移动。
-
-门可以配置为：
-
-- 需要一个或多个压力板同时激活。
-- 打开后保持开启。
-- 必须先完成钥匙目标才能开启。
-
-### 钥匙
-
-主要文件：[`multiplayerCoopKey.h`](Source/multiplayer/multiplayerCoopKey.h)、[`multiplayerCoopKey.cpp`](Source/multiplayer/multiplayerCoopKey.cpp)、[`bpkey.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/bpkey.uasset)。
-
-[`multiplayerCoopKey.cpp`](Source/multiplayer/multiplayerCoopKey.cpp) 由服务器处理拾取和安装。
-
-钥匙保存“当前持有者”和“是否已经安装”两个复制状态；Character 的 CarryComponent 保存服务器当前携带槽。两名玩家即使几乎同时碰到同一把钥匙，服务器也会依次处理事件：第一个成功后，后续事件会因为钥匙已被持有、安装或携带槽已占用而结束，因此不会出现一把钥匙被计算两次。
-
-如果持有钥匙的玩家掉线或角色被销毁，钥匙会解除附着、清除持有者并重新开放拾取，不会永久消失。
-
-### 钥匙插槽
-
-主要文件：[`multiplayerKeySocket.h`](Source/multiplayer/multiplayerKeySocket.h)、[`multiplayerKeySocket.cpp`](Source/multiplayer/multiplayerKeySocket.cpp)、[`bpkeysocket.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.uasset)。
-
-[`multiplayerKeySocket.cpp`](Source/multiplayer/multiplayerKeySocket.cpp) 从 Character 的 CarryComponent 取得钥匙，并向 GameMode 报告一次插槽激活。
-
-插槽激活后会立即关闭碰撞，并通过 `bActivated` 阻止重复提交。同一插槽无论被触发多少次，都最多只会给共享目标增加一次进度。
-
-### 移动平台
-
-主要文件：[`multiplayerMovingPlatform.h`](Source/multiplayer/multiplayerMovingPlatform.h)、[`multiplayerMovingPlatform.cpp`](Source/multiplayer/multiplayerMovingPlatform.cpp)、[`multiplayerTransporterComponent.h`](Source/multiplayer/multiplayerTransporterComponent.h)、[`multiplayerTransporterComponent.cpp`](Source/multiplayer/multiplayerTransporterComponent.cpp)、[`bpmovingplatform.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.uasset)。
-
-[`multiplayerMovingPlatform.cpp`](Source/multiplayer/multiplayerMovingPlatform.cpp) 负责判断平台什么时候启动，例如由外部压力板控制，或者需要一定数量的玩家站上平台。
-
-PlayerOccupancyComponent 负责平台人数，[`multiplayerTransporterComponent.cpp`](Source/multiplayer/multiplayerTransporterComponent.cpp) 只负责把所属平台从起点移动到终点。平台规则、占用统计和移动实现保持独立。
-
-平台的位置由服务器控制并同步给客户端；到达目标后停止更新，减少无意义的 Tick。
-
-### 胜利区域
-
-主要文件：[`multiplayerWinArea.h`](Source/multiplayer/multiplayerWinArea.h)、[`multiplayerWinArea.cpp`](Source/multiplayer/multiplayerWinArea.cpp)、[`winaera.uasset`](Content/ThirdPerson/Blueprints/gameplayelements/winaera.uasset)。
-
-[`multiplayerWinArea.cpp`](Source/multiplayer/multiplayerWinArea.cpp) 读取 PlayerOccupancyComponent 的不同玩家数量。
-
-当钥匙目标完成且区域内达到要求人数时，WinArea 请求 GameMode 验证并提交胜利；GameState 只复制最终状态。
-
-正式地图中的 `winaera` 是该 C++ 类的蓝图子类，用于配置碰撞范围并放置到关卡中。
-
----
-
-## 网络设计
-
-### 状态同步
-
-项目采用服务器权威的状态同步：
-
-- CharacterMovement 负责角色移动预测和服务器校正。
-- 压力板、门、插槽等机关只同步关键状态。
-- 客户端根据同步结果播放门、压力板和 UI 表现。
-- 移动平台由服务器移动，并同步实际位置。
-- GameState 统一同步共享目标和胜利结果。
-
-### C++ 与蓝图的分工
-
-C++ 负责：
-
-- 服务器规则和状态检查。
-- 网络复制与多人地图迁移。
-- 重复触发保护。
-- 玩家离开、对象销毁和 Delegate 的清理。
-- 给蓝图提供少量稳定的表现接口。
-
-蓝图负责：
-
-- 角色模型、动画和输入资产配置。
-- 机关模型、位置、移动端点与关卡引用。
-- 主菜单和胜利界面。
-- 按钮、鼠标、音效及视觉表现。
-
----
-
-## 关键流程
-
-### 收集钥匙
-
-```text
-玩家进入钥匙范围
-→ 服务器确认钥匙尚未被拿走
-→ Character CarryComponent 记录当前钥匙
-→ 钥匙安装到目标插槽
-→ 插槽只登记一次
-→ GameMode 增加权威进度
-→ GameState 复制新快照
-→ 两端更新钥匙和机关表现
 ```
 
-### 完成本局
+测试脚本会启动无画面的 Listen Server 和 Client，检查客户端连接、共享目标初始化、网络参数、自动重连及错误日志，并在 `Saved/TestReports` 生成 JSON 报告。
 
-```text
-四个钥匙插槽激活
-→ 两名玩家进入胜利区域
-→ WinArea 请求 GameMode 完成游戏
-→ GameMode 验证并更新 GameState
-→ GameState 复制胜利状态
-→ 两端 PlayerController 显示胜利界面
-```
+自动测试使用直接地址连接测试关卡，不覆盖主菜单按钮、Session 搜索流程、完整钥匙目标流程或胜利 UI；这些部分仍需要双窗口人工验证。
 
-### 创建和加入房间
+## 当前边界
 
-```text
-Host 创建房间
-→ 创建成功后服务器进入合作地图
-→ Client 搜索并选择房间
-→ Client 连接服务器
-→ 两名玩家进入同一局游戏
-```
+- 当前只使用 `OnlineSubsystem NULL` 验证本机和局域网连接，没有接入 Steam、EOS 或专用服务器。
+- 创建房间后的 `ServerTravel` 代码已经存在，但当前地图与蓝图配置下的自动地图切换流程尚未完成，因此不计入已完成功能。
+- 胜利状态已经同步到本地表现事件；具体胜利界面取决于蓝图是否实现该事件。
+- 自动重连只尝试返回原服务器，不包含主机迁移、会话续期或玩家运行时状态恢复。
+- 项目没有实现完整的退出房间、重开游戏和存档系统。
+
+## 环境
+
+- Unreal Engine 5.5
+- C++
+- Enhanced Input
+- OnlineSubsystem / OnlineSubsystemNull
+- Listen Server

@@ -1,12 +1,13 @@
 @echo off
 setlocal
 
-set "UE_EDITOR=E:\program\ue554\UE_5.5\Engine\Binaries\Win64\UnrealEditor.exe"
-set "PROJECT=E:\ueprojrct\multiplayer\multiplayer.uproject"
+if not defined UE_EDITOR set "UE_EDITOR=C:\Program Files\Epic Games\UE_5.5\Engine\Binaries\Win64\UnrealEditor.exe"
+set "PROJECT=%~dp0multiplayer.uproject"
 set "START_MAP=/Game/UI/mainmenu"
 
 if not exist "%UE_EDITOR%" (
     echo UnrealEditor.exe not found: %UE_EDITOR%
+    echo Set UE_EDITOR to the full path of UnrealEditor.exe and run again.
     pause
     exit /b 1
 )

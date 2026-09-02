@@ -29,6 +29,9 @@ class MULTIPLAYER_API AmultiplayerWinArea : public AActor
 public:
 	AmultiplayerWinArea();
 
+	// 返回胜利触发体中心，避免测试依赖关卡中硬编码坐标。
+	FVector GetActivationCenter() const;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

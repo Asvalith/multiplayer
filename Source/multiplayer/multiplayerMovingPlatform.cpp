@@ -70,6 +70,13 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	}
 }
 
+FVector AmultiplayerMovingPlatform::GetActivationCenter() const
+{
+	return ActivationVolume != nullptr
+		? ActivationVolume->Bounds.Origin
+		: GetActorLocation();
+}
+
 void AmultiplayerMovingPlatform::BeginPlay()
 {
 	Super::BeginPlay();

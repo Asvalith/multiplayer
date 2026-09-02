@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/GameStateBase.h"
+#include "GameFramework/GameState.h"
 #include "multiplayerCoopGameState.generated.h"
 
 /**
@@ -47,7 +47,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FmultiplayerGameWonEvent);
  * 因此界面和机关表现应根据“当前快照”刷新，不能依赖收到过所有历史变化。
  */
 UCLASS()
-class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameStateBase
+class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameState
 {
 	GENERATED_BODY()
 

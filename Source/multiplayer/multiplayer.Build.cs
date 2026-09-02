@@ -15,7 +15,10 @@ public class multiplayer : ModuleRules
 			"Engine",
 			"InputCore",
 			"EnhancedInput",
-			"OnlineSubsystem"
+			"OnlineSubsystem",
+			"UMG",
+			"Slate",
+			"SlateCore"
 		});
 
 		DynamicallyLoadedModuleNames.Add("OnlineSubsystemNull");

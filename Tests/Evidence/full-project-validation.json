@@ -1,0 +1,78 @@
+{
+  "SchemaVersion": 1,
+  "GeneratedAtUtc": "2026-09-02T05:20:36.4180336Z",
+  "GitCommitAtTestStart": "6be6ad1",
+  "Engine": "Unreal Engine 5.5",
+  "Environment": "Two local UnrealEditor processes using OnlineSubsystemNull",
+  "Success": true,
+  "Results": [
+    {
+      "Profile": "Normal",
+      "LagMs": 0,
+      "LagVarianceMs": 0,
+      "LossPercent": 0,
+      "ReconnectTested": false,
+      "SessionTested": true,
+      "GameplayFlowTested": true,
+      "RestartAndLeaveTested": true,
+      "BandwidthProfile": "Baseline",
+      "BandwidthSample": {
+        "Profile": "Baseline",
+        "Scope": "Server total outgoing bytes during the deterministic two-player gameplay flow",
+        "MovingPlatformMaxNetUpdateHz": 100,
+        "DurationSeconds": 11.6,
+        "OutBytes": 67614,
+        "BytesPerSecond": 5828.634
+      },
+      "Success": true,
+      "DurationSeconds": 41.75,
+      "Evidence": [
+        "Server initialized RequiredKeys=4",
+        "OnlineSubsystemNull advertised the current listen map without automatic map travel",
+        "Client discovered the LAN session, resolved its address, and joined it",
+        "Client joined the cooperative map",
+        "Real server actors completed key/socket, plate, gate, platform, win-area and client victory UI paths",
+        "Captured real UNetDriver outgoing bytes for the Baseline A/B profile",
+        "Server reloaded only the current map, then host and client cleaned their sessions and returned to the menu"
+      ],
+      "Error": null
+    },
+    {
+      "Profile": "Normal",
+      "LagMs": 0,
+      "LagVarianceMs": 0,
+      "LossPercent": 0,
+      "ReconnectTested": false,
+      "SessionTested": true,
+      "GameplayFlowTested": true,
+      "RestartAndLeaveTested": true,
+      "BandwidthProfile": "Optimized",
+      "BandwidthSample": {
+        "Profile": "Optimized",
+        "Scope": "Server total outgoing bytes during the deterministic two-player gameplay flow",
+        "MovingPlatformMaxNetUpdateHz": 30,
+        "DurationSeconds": 11.8,
+        "OutBytes": 61171,
+        "BytesPerSecond": 5183.983
+      },
+      "Success": true,
+      "DurationSeconds": 49.58,
+      "Evidence": [
+        "Server initialized RequiredKeys=4",
+        "OnlineSubsystemNull advertised the current listen map without automatic map travel",
+        "Client discovered the LAN session, resolved its address, and joined it",
+        "Client joined the cooperative map",
+        "Real server actors completed key/socket, plate, gate, platform, win-area and client victory UI paths",
+        "Captured real UNetDriver outgoing bytes for the Optimized A/B profile",
+        "Server reloaded only the current map, then host and client cleaned their sessions and returned to the menu"
+      ],
+      "Error": null
+    }
+  ],
+  "BandwidthComparison": {
+    "Method": "Controlled A/B on the same deterministic flow; Baseline raises moving-platform network update cap from the project setting of 30Hz to 100Hz. This is not a historical-version claim.",
+    "BaselineBytesPerSecond": 5828.634,
+    "OptimizedBytesPerSecond": 5183.983,
+    "ReductionPercent": 11.06
+  }
+}

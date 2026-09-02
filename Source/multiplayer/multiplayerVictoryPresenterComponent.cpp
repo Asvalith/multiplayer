@@ -83,7 +83,7 @@ void UmultiplayerVictoryPresenterComponent::HandleGameWon()
 		return;
 	}
 
-	// 先设置一次性标记再调用蓝图，避免蓝图执行期间的嵌套通知重复弹出表现。
+	// 先设置一次性标记再进入表现层，避免创建界面或蓝图扩展期间的嵌套通知重复弹出。
 	bVictoryNotified = true;
-	PlayerController->ReceiveCoopGameWon();
+	PlayerController->PresentCoopVictory();
 }

@@ -1,0 +1,73 @@
+{
+  "SchemaVersion": 1,
+  "GeneratedAtUtc": "2026-09-02T05:22:22.3086425Z",
+  "GitCommitAtTestStart": "6be6ad1",
+  "Engine": "Unreal Engine 5.5",
+  "Environment": "Two local UnrealEditor processes using OnlineSubsystemNull",
+  "Success": true,
+  "Results": [
+    {
+      "Profile": "Normal",
+      "LagMs": 0,
+      "LagVarianceMs": 0,
+      "LossPercent": 0,
+      "ReconnectTested": true,
+      "SessionTested": false,
+      "GameplayFlowTested": false,
+      "RestartAndLeaveTested": false,
+      "BandwidthProfile": "None",
+      "BandwidthSample": null,
+      "Success": true,
+      "DurationSeconds": 30.47,
+      "Evidence": [
+        "Server initialized RequiredKeys=4",
+        "Client joined the cooperative map",
+        "The same client process automatically reconnected after a simulated connection loss"
+      ],
+      "Error": null
+    },
+    {
+      "Profile": "Moderate",
+      "LagMs": 100,
+      "LagVarianceMs": 20,
+      "LossPercent": 2,
+      "ReconnectTested": true,
+      "SessionTested": false,
+      "GameplayFlowTested": false,
+      "RestartAndLeaveTested": false,
+      "BandwidthProfile": "None",
+      "BandwidthSample": null,
+      "Success": true,
+      "DurationSeconds": 27.8,
+      "Evidence": [
+        "Server initialized RequiredKeys=4",
+        "Client joined the cooperative map",
+        "Packet simulation settings were applied on both peers",
+        "The same client process automatically reconnected after a simulated connection loss"
+      ],
+      "Error": null
+    },
+    {
+      "Profile": "Harsh",
+      "LagMs": 200,
+      "LagVarianceMs": 50,
+      "LossPercent": 5,
+      "ReconnectTested": true,
+      "SessionTested": false,
+      "GameplayFlowTested": false,
+      "RestartAndLeaveTested": false,
+      "BandwidthProfile": "None",
+      "BandwidthSample": null,
+      "Success": true,
+      "DurationSeconds": 31.87,
+      "Evidence": [
+        "Server initialized RequiredKeys=4",
+        "Client joined the cooperative map",
+        "Packet simulation settings were applied on both peers",
+        "The same client process automatically reconnected after a simulated connection loss"
+      ],
+      "Error": null
+    }
+  ],
+  "BandwidthComparison": null
+}

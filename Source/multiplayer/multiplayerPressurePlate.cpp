@@ -146,6 +146,13 @@ void AmultiplayerPressurePlate::GetOccupyingCharacters(
 	PlayerOccupancy->GetOccupyingCharacters(OutCharacters);
 }
 
+FVector AmultiplayerPressurePlate::GetActivationCenter() const
+{
+	return ActivationTrigger != nullptr
+		? ActivationTrigger->Bounds.Origin
+		: GetActorLocation();
+}
+
 void AmultiplayerPressurePlate::HandleOccupancyChanged(int32 PlayerCount)
 {
 	// 事件参数只表示触发原因；统一从 PlayerOccupancy 和 GameState 读取同一时刻的完整条件。

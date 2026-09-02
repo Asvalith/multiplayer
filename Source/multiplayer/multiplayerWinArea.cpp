@@ -27,6 +27,11 @@ AmultiplayerWinArea::AmultiplayerWinArea()
 			TEXT("PlayerOccupancy"));
 }
 
+FVector AmultiplayerWinArea::GetActivationCenter() const
+{
+	return WinTrigger != nullptr ? WinTrigger->Bounds.Origin : GetActorLocation();
+}
+
 void AmultiplayerWinArea::BeginPlay()
 {
 	Super::BeginPlay();

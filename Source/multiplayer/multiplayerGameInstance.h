@@ -48,6 +48,14 @@ enum class EMultiplayerReconnectState : uint8
 	Failed
 };
 
+/** 同一个 DestroySession 回调可能服务于重新建房或主动退出，必须显式区分后续动作。 */
+enum class EMultiplayerDestroyPurpose : uint8
+{
+	None,
+	RecreateSession,
+	LeaveGame
+};
+
 /** 搜索结果的蓝图安全摘要；真正的 FOnlineSessionSearchResult 仍由 GameInstance 持有。 */
 USTRUCT(BlueprintType)
 struct FmultiplayerSessionInfo
@@ -113,7 +121,7 @@ public:
 
 	/**
 	 * 发起主机流程。参数先保存为 Pending 配置；若已有同名会话则先异步销毁，再创建新会话。
-	 * 创建成功只说明会话已发布，后续代码还会发起带 ?listen 的 ServerTravel。
+	 * 当前 World 若尚未监听则原地开启 Listen Server；创建成功不会自动切换地图。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void HostGame(const FString& ServerName, int32 PublicConnections, bool bIsLanMatch);
@@ -133,6 +141,13 @@ public:
 	void JoinGame(int32 ResultIndex);
 
 	/**
+	 * 主动退出房间。先停止重连、销毁本地 Session，再回到项目默认主菜单。
+	 * Listen Server 主机退出时会先通知远端客户端走相同清理路径。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Network|Session")
+	void LeaveGame();
+
+	/**
 	 * 本地 PlayerController 进入可操作状态后调用。
 	 * (**) 发出 ClientTravel 不等于连接成功，进入 PlayingState 才说明玩家已真正加入游戏。
 	 */
@@ -149,8 +164,12 @@ public:
 private:
 	// 使用 Pending 配置真正调用 OnlineSubsystem::CreateSession。
 	void CreateSession();
-	// 为“先销毁旧会话再建房”注册一次销毁完成回调。
-	void BindDestroyDelegate();
+	// 确保当前 World 具备监听连接的 NetDriver；只原地监听，不执行地图切换。
+	bool EnsureCurrentWorldIsListening();
+	// 为销毁旧会话注册一次回调，并记录完成后是重新建房还是退出。
+	void BindDestroyDelegate(EMultiplayerDestroyPurpose Purpose);
+	// Session 销毁完成或无需销毁时，统一返回默认主菜单。
+	void FinishLeaveGame();
 	// 统一解绑所有会话 DelegateHandle；OnlineSubsystem 不替业务对象管理这些句柄。
 	void ClearSessionDelegates();
 	// 获取异步操作占用权；已有操作时拒绝新请求并保持原回调链不变。
@@ -165,6 +184,7 @@ private:
 	void HandleFindSessionsComplete(bool bWasSuccessful);
 	void HandleJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
 	void HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful);
+	void HandlePostLoadMap(UWorld* LoadedWorld);
 	void HandleNetworkFailure(
 		UWorld* World,
 		UNetDriver* NetDriver,
@@ -190,6 +210,8 @@ private:
 
 #if !UE_BUILD_SHIPPING
 	void SimulateConnectionLossForTesting();
+	void StartSessionAutomationIfRequested();
+	void RunSessionAutomationFind();
 #endif
 
 	// OnlineSubsystem 的会话接口与最近一次搜索对象；搜索结果的真实生命周期由后者决定。
@@ -203,6 +225,7 @@ private:
 	FDelegateHandle DestroySessionCompleteHandle;
 	FDelegateHandle NetworkFailureHandle;
 	FDelegateHandle TravelFailureHandle;
+	FDelegateHandle PostLoadMapHandle;
 
 	// HostGame 先写入以下 Pending 配置，销毁旧会话完成后 CreateSession 再读取。
 	FString PendingServerName = TEXT("Coop Session");
@@ -216,13 +239,22 @@ private:
 	bool bPendingIsLanMatch = true;
 	// 菜单异步操作与网络重连使用两套状态，避免把会话回调和连接恢复混为一谈。
 	EMultiplayerSessionOperation CurrentOperation = EMultiplayerSessionOperation::None;
+	EMultiplayerDestroyPurpose DestroyPurpose = EMultiplayerDestroyPurpose::None;
 	EMultiplayerReconnectState ReconnectState = EMultiplayerReconnectState::Idle;
 	FTimerHandle ReconnectTimerHandle;
 	int32 ReconnectAttempt = 0;
+	bool bLeaveInProgress = false;
+	// 部分子系统可能在 JoinSession 返回前同步执行完成回调，用它区分真实拒绝与回调重入。
+	bool bJoinCompletionReceived = false;
 
 #if !UE_BUILD_SHIPPING
 	// 开发包专用的断线模拟入口，Shipping 构建不包含测试行为。
 	FTimerHandle ReconnectTestTimerHandle;
+	FTimerHandle SessionAutomationTimerHandle;
 	bool bReconnectTestTriggered = false;
+	bool bSessionAutomationStarted = false;
+	bool bSessionAutomationTravelStarted = false;
+	bool bSessionAutomationJoinConfirmed = false;
+	int32 SessionAutomationFindAttempt = 0;
 #endif
 };

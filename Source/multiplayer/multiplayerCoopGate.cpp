@@ -137,6 +137,19 @@ int32 AmultiplayerCoopGate::GetRequiredPlateCount() const
 	return FMath::Clamp(RequiredActivePlateCount, 1, RequiredPlates.Num());
 }
 
+void AmultiplayerCoopGate::GetRequiredPlates(
+	TArray<AmultiplayerPressurePlate*>& OutPlates) const
+{
+	OutPlates.Reset();
+	for (AmultiplayerPressurePlate* Plate : RequiredPlates)
+	{
+		if (IsValid(Plate))
+		{
+			OutPlates.Add(Plate);
+		}
+	}
+}
+
 void AmultiplayerCoopGate::BindRequiredPlates()
 {
 	for (AmultiplayerPressurePlate* Plate : RequiredPlates)

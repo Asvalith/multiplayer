@@ -43,6 +43,9 @@ public:
 	// 对配置值和实际引用数量取安全范围，避免要求数量超过已配置压力板。
 	int32 GetRequiredPlateCount() const;
 
+	// 输出有效的关卡引用，供调试和端到端测试按门的真实依赖关系放置玩家。
+	void GetRequiredPlates(TArray<AmultiplayerPressurePlate*>& OutPlates) const;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

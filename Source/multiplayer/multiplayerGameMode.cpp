@@ -5,11 +5,14 @@
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "multiplayerCharacter.h"
+#include "multiplayerCoopTestDriver.h"
 #include "multiplayerCoopGameState.h"
 #include "multiplayerCoopPlayerController.h"
 #include "multiplayerKeySocket.h"
 #include "multiplayerLog.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 AmultiplayerGameMode::AmultiplayerGameMode()
 {
@@ -42,6 +45,13 @@ void AmultiplayerGameMode::BeginPlay()
 			TEXT("Coop objective configured: RequiredKeys=%d"),
 			InitialState.RequiredKeys);
 	}
+
+#if !UE_BUILD_SHIPPING
+	if (FParse::Param(FCommandLine::Get(), TEXT("CoopTestGameplayFlow")))
+	{
+		GetWorld()->SpawnActor<AmultiplayerCoopTestDriver>();
+	}
+#endif
 }
 
 bool AmultiplayerGameMode::RegisterActivatedKey()
@@ -91,6 +101,28 @@ bool AmultiplayerGameMode::TryCompleteCoopGame(
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	NewState.bGameWon = true;
 	CoopState->ApplyAuthoritativeState(NewState);
+	return true;
+}
+
+bool AmultiplayerGameMode::RequestRestartCurrentRound(
+	AController* RequestingController)
+{
+	AmultiplayerCoopGameState* CoopState =
+		GetGameState<AmultiplayerCoopGameState>();
+	if (!HasAuthority()
+		|| RequestingController == nullptr
+		|| RequestingController->GetWorld() != GetWorld()
+		|| CoopState == nullptr
+		|| !CoopState->GetObjectiveState().bGameWon
+		|| bRestartRequested)
+	{
+		return false;
+	}
+
+	// 先锁定请求再触发 Travel，阻止两名玩家同帧点击导致重复重载。
+	bRestartRequested = true;
+	UE_LOG(LogMultiplayer, Log, TEXT("Restarting the current coop map after an authoritative victory."));
+	RestartGame();
 	return true;
 }
 

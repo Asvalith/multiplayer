@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/GameModeBase.h"
+#include "GameFramework/GameMode.h"
 #include "multiplayerGameMode.generated.h"
 
 /**
@@ -18,7 +18,7 @@
  * 胜利状态，防止重复 Overlap、重复 Delegate 或同一帧的多个事件造成重复结算。
  */
 UCLASS(minimalapi)
-class AmultiplayerGameMode : public AGameModeBase
+class AmultiplayerGameMode : public AGameMode
 {
 	GENERATED_BODY()
 
@@ -45,6 +45,12 @@ public:
 	 */
 	bool TryCompleteCoopGame(int32 CurrentPlayers, int32 RequiredPlayers);
 
+	/**
+	 * 仅在比赛已经胜利时接受一次重开请求，并使用 AGameMode::RestartGame 重新加载当前 URL。
+	 * 这不会选择或自动切换到另一张玩法地图。
+	 */
+	bool RequestRestartCurrentRound(AController* RequestingController);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -57,4 +63,7 @@ private:
 
 	// 仅供没有摆放插槽的测试地图初始化；正式关卡优先使用 ResolveRequiredKeys 的统计结果。
 	int32 RequiredKeys = 4;
+
+	// 多个客户端可能同时点击重开；服务器只接受本局第一个有效请求。
+	bool bRestartRequested = false;
 };

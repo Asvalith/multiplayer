@@ -7,6 +7,7 @@
 #include "multiplayerCoopPlayerController.generated.h"
 
 class UmultiplayerVictoryPresenterComponent;
+class UmultiplayerVictoryWidget;
 
 /**
  * 承接所属客户端的本地合作 UI。
@@ -27,16 +28,43 @@ class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerControlle
 public:
 	AmultiplayerCoopPlayerController();
 
-	// 本地收到胜利状态后只触发一次；这是表现扩展点，若蓝图未实现就不会自动生成胜利界面。
+	/** 显示项目自带的胜利界面，再通知可选蓝图表现扩展。只允许本地控制器调用。 */
+	void PresentCoopVictory();
+
+	/**
+	 * 请求服务器重新加载当前合作关卡。
+	 * (*) 客户端没有改写比赛的权限，因此本地入口只负责发送 Server RPC，GameMode 会再次检查
+	 * 当前是否已经胜利以及是否已有重开请求。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Coop|Flow")
+	void RequestRestartCurrentRound();
+
+	/** 主动退出当前会话并返回项目默认主菜单；该路径会先关闭自动重连。 */
+	UFUNCTION(BlueprintCallable, Category = "Coop|Flow")
+	void LeaveCoopSession();
+
+	// 默认 C++ UI 已能完成流程；该事件只用于项目后续替换动画、音效或美术样式。
 	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Victory", meta = (DisplayName = "On Coop Game Won"))
 	void ReceiveCoopGameWon();
 
 protected:
 	// 本地进入 PlayingState 后同时确认连接成功，并重新绑定可能刚创建/替换的 GameState。
 	virtual void BeginPlayingState() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void ClientReturnToMainMenuWithTextReason_Implementation(
+		const FText& ReturnReason) override;
+
+	UFUNCTION(Server, Reliable)
+	void ServerRequestRestartCurrentRound();
 
 private:
+	void RemoveVictoryScreen();
+
 	// 仅本地使用的表现桥梁，不需要复制，也不参与服务器规则。
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Victory")
 	TObjectPtr<UmultiplayerVictoryPresenterComponent> VictoryPresenter;
+
+	// 只存在于本地视口，不复制，也不参与胜利规则。
+	UPROPERTY(Transient)
+	TObjectPtr<UmultiplayerVictoryWidget> VictoryWidget;
 };

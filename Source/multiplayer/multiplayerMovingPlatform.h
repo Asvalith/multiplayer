@@ -44,6 +44,16 @@ class MULTIPLAYER_API AmultiplayerMovingPlatform : public AActor
 public:
 	AmultiplayerMovingPlatform();
 
+	// 自动验证需要区分外部压力板与平台自身人数两种真实激活路径。
+	bool UsesPlatformOccupancy() const
+	{
+		return ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy;
+	}
+
+	FVector GetActivationCenter() const;
+	AmultiplayerPressurePlate* GetActivationPlate() const { return ActivationPlate; }
+	int32 GetRequiredOccupantCount() const { return FMath::Max(1, RequiredPlayers); }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

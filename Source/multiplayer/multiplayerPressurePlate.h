@@ -48,6 +48,9 @@ public:
 	// 返回本机当前状态：服务器为规则真相，客户端为最近一次收到的复制快照。
 	bool IsPlateActive() const { return bPlateActive; }
 
+	// 返回实际触发体中心，供关卡调试与端到端自动测试按真实碰撞路径移动玩家。
+	FVector GetActivationCenter() const;
+
 	// 门用它判断压力板是否会在玩家离开后保持激活。
 	bool IsLatchedOnceActivated() const { return bLatchOnceActivated; }
 

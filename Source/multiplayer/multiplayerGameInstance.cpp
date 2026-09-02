@@ -12,13 +12,14 @@
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 #include "TimerManager.h"
+#include "UObject/UObjectGlobals.h"
 #include "multiplayerLog.h"
 
 namespace MultiplayerSession
 {
 	const FName ServerNameKey(TEXT("SERVER_NAME"));
-	const FString GameplayMapPath(TEXT("/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo"));
 	constexpr int32 MaxReconnectAttempts = 3;
+	constexpr int32 MaxAutomationFindAttempts = 10;
 	constexpr float ReconnectDelays[] = {1.0f, 2.0f, 4.0f};
 }
 
@@ -52,6 +53,13 @@ void UmultiplayerGameInstance::Init()
 	{
 		UE_LOG(LogMultiplayer, Error, TEXT("Online session interface is unavailable."));
 	}
+
+#if !UE_BUILD_SHIPPING
+	// 主菜单可能使用自己的 PlayerController，测试入口必须放在跨地图存在的 GameInstance。
+	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(
+		this,
+		&UmultiplayerGameInstance::HandlePostLoadMap);
+#endif
 }
 
 void UmultiplayerGameInstance::Shutdown()
@@ -60,6 +68,7 @@ void UmultiplayerGameInstance::Shutdown()
 	GetTimerManager().ClearTimer(ReconnectTimerHandle);
 #if !UE_BUILD_SHIPPING
 	GetTimerManager().ClearTimer(ReconnectTestTimerHandle);
+	GetTimerManager().ClearTimer(SessionAutomationTimerHandle);
 #endif
 
 	if (GEngine != nullptr)
@@ -76,6 +85,11 @@ void UmultiplayerGameInstance::Shutdown()
 
 	NetworkFailureHandle.Reset();
 	TravelFailureHandle.Reset();
+	if (PostLoadMapHandle.IsValid())
+	{
+		FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapHandle);
+		PostLoadMapHandle.Reset();
+	}
 	ClearSessionDelegates();
 	SessionSearch.Reset();
 	SessionInterface.Reset();
@@ -88,11 +102,18 @@ void UmultiplayerGameInstance::HostGame(
 	int32 PublicConnections,
 	bool bIsLanMatch)
 {
+	bLeaveInProgress = false;
 	CancelAutomaticReconnect();
 
 	if (!SessionInterface.IsValid()
 		|| !BeginSessionOperation(EMultiplayerSessionOperation::Hosting))
 	{
+		return;
+	}
+
+	if (!EnsureCurrentWorldIsListening())
+	{
+		EndSessionOperation();
 		return;
 	}
 
@@ -104,13 +125,14 @@ void UmultiplayerGameInstance::HostGame(
 	if (SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
 	{
 		// (**) 同名会话未销毁时直接 CreateSession 通常会失败，先异步销毁再继续创建。
-		BindDestroyDelegate();
+		BindDestroyDelegate(EMultiplayerDestroyPurpose::RecreateSession);
 
 		if (!SessionInterface->DestroySession(NAME_GameSession))
 		{
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
 				DestroySessionCompleteHandle);
 			DestroySessionCompleteHandle.Reset();
+			DestroyPurpose = EMultiplayerDestroyPurpose::None;
 			EndSessionOperation();
 			UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 		}
@@ -135,9 +157,13 @@ void UmultiplayerGameInstance::CreateSession()
 	Settings.bUseLobbiesIfAvailable = !bPendingIsLanMatch;
 
 	// 地图名和服务器名作为可广播的会话元数据，搜索列表无需连接服务器就能展示摘要。
+	const UWorld* World = GetWorld();
+	const FString CurrentMap = World != nullptr
+		? World->GetOutermost()->GetName()
+		: TEXT("Unknown");
 	Settings.Set(
 		SETTING_MAPNAME,
-		MultiplayerSession::GameplayMapPath,
+		CurrentMap,
 		EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	Settings.Set(
 		MultiplayerSession::ServerNameKey,
@@ -163,6 +189,7 @@ void UmultiplayerGameInstance::CreateSession()
 
 void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 {
+	bLeaveInProgress = false;
 	CancelAutomaticReconnect();
 
 	if (!SessionInterface.IsValid()
@@ -205,6 +232,7 @@ void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 
 void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 {
+	bLeaveInProgress = false;
 	CancelAutomaticReconnect();
 
 	// 在发异步请求前验证搜索对象和下标，防止 UI 使用上一轮搜索留下的过期 ResultIndex。
@@ -222,26 +250,64 @@ void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 				this,
 				&UmultiplayerGameInstance::HandleJoinSessionComplete));
 
-	if (!SessionInterface->JoinSession(
+	bJoinCompletionReceived = false;
+	const bool bRequestAccepted = SessionInterface->JoinSession(
 		0,
 		NAME_GameSession,
-		SessionSearch->SearchResults[ResultIndex]))
+		SessionSearch->SearchResults[ResultIndex]);
+	if (!bRequestAccepted && !bJoinCompletionReceived)
 	{
-		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
-			JoinSessionCompleteHandle);
+		if (JoinSessionCompleteHandle.IsValid())
+		{
+			SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
+				JoinSessionCompleteHandle);
+		}
 		JoinSessionCompleteHandle.Reset();
 		EndSessionOperation();
 		UE_LOG(LogMultiplayer, Error, TEXT("JoinSession request was rejected."));
 	}
 }
 
-void UmultiplayerGameInstance::BindDestroyDelegate()
+bool UmultiplayerGameInstance::EnsureCurrentWorldIsListening()
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr || World->GetNetMode() == NM_Client)
+	{
+		UE_LOG(LogMultiplayer, Error, TEXT("Current world cannot become a listen server."));
+		return false;
+	}
+
+	if (World->GetNetMode() == NM_ListenServer)
+	{
+		return true;
+	}
+
+	// 原地建立监听 NetDriver，不进行 ServerTravel，因此创建房间不会隐式改变当前地图。
+	FURL ListenUrl = World->URL;
+	ListenUrl.AddOption(TEXT("listen"));
+	if (!World->Listen(ListenUrl))
+	{
+		UE_LOG(LogMultiplayer, Error, TEXT("Listen server could not start on the current map."));
+		return false;
+	}
+
+	UE_LOG(
+		LogMultiplayer,
+		Log,
+		TEXT("Listen server started on current map: %s"),
+		*World->GetOutermost()->GetName());
+	return true;
+}
+
+void UmultiplayerGameInstance::BindDestroyDelegate(
+	EMultiplayerDestroyPurpose Purpose)
 {
 	if (DestroySessionCompleteHandle.IsValid())
 	{
 		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
 			DestroySessionCompleteHandle);
 	}
+	DestroyPurpose = Purpose;
 
 	DestroySessionCompleteHandle =
 		SessionInterface->AddOnDestroySessionCompleteDelegate_Handle(
@@ -265,20 +331,14 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 		UE_LOG(LogMultiplayer, Error, TEXT("Session creation failed."));
 		return;
 	}
-
-	UWorld* World = GetWorld();
-	// 项目没有 GameInstance 蓝图配置层，玩法地图作为当前项目的固定入口集中放在本文件。
-	// (*) ?listen 让主机切图后的 World 启动监听服务器，否则客户端无法连接该地图。
-	const FString TravelUrl = MultiplayerSession::GameplayMapPath + TEXT("?listen");
-
-	if (World == nullptr || !World->ServerTravel(TravelUrl))
-	{
-		EndSessionOperation();
-		UE_LOG(LogMultiplayer, Error, TEXT("Session created, but ServerTravel failed."));
-		return;
-	}
-
 	EndSessionOperation();
+	UE_LOG(LogMultiplayer, Log, TEXT("Session created on the current map; no automatic map travel was requested."));
+#if !UE_BUILD_SHIPPING
+	if (FParse::Param(FCommandLine::Get(), TEXT("CoopTestHostSession")))
+	{
+		UE_LOG(LogMultiplayer, Log, TEXT("Session automation: host session advertised."));
+	}
+#endif
 }
 
 void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
@@ -315,12 +375,48 @@ void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
 
 	EndSessionOperation();
 	OnFindComplete.Broadcast(bWasSuccessful, Results);
+
+#if !UE_BUILD_SHIPPING
+	if (bSessionAutomationStarted
+		&& FParse::Param(FCommandLine::Get(), TEXT("CoopTestJoinSession")))
+	{
+		if (bWasSuccessful && !Results.IsEmpty())
+		{
+			UE_LOG(
+				LogMultiplayer,
+				Log,
+				TEXT("Session automation: found %d advertised session(s)."),
+				Results.Num());
+			// 主菜单蓝图也可能在 OnFindComplete 广播中立即调用 JoinGame。自动化只作回退，
+			// 不能在蓝图已经进入/完成加入后再发第二次同名 Session 请求。
+			if (!bSessionAutomationTravelStarted
+				&& CurrentOperation != EMultiplayerSessionOperation::Joining)
+			{
+				JoinGame(Results[0].ResultIndex);
+			}
+		}
+		else if (SessionAutomationFindAttempt < MultiplayerSession::MaxAutomationFindAttempts)
+		{
+			GetTimerManager().SetTimer(
+				SessionAutomationTimerHandle,
+				this,
+				&UmultiplayerGameInstance::RunSessionAutomationFind,
+				0.5f,
+				false);
+		}
+		else
+		{
+			UE_LOG(LogMultiplayer, Error, TEXT("Session automation could not discover the host."));
+		}
+	}
+#endif
 }
 
 void UmultiplayerGameInstance::HandleJoinSessionComplete(
 	FName SessionName,
 	EOnJoinSessionCompleteResult::Type Result)
 {
+	bJoinCompletionReceived = true;
 	SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
 		JoinSessionCompleteHandle);
 	JoinSessionCompleteHandle.Reset();
@@ -342,6 +438,10 @@ void UmultiplayerGameInstance::HandleJoinSessionComplete(
 	{
 		// (*) JoinSession 只加入在线会话；还要解析真实地址并由本地控制器 ClientTravel。
 		LastConnectString = ConnectString;
+#if !UE_BUILD_SHIPPING
+		bSessionAutomationTravelStarted =
+			FParse::Param(FCommandLine::Get(), TEXT("CoopTestJoinSession"));
+#endif
 		PlayerController->ClientTravel(ConnectString, TRAVEL_Absolute);
 		return;
 	}
@@ -357,7 +457,21 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 		DestroySessionCompleteHandle);
 	DestroySessionCompleteHandle.Reset();
 
-	if (bWasSuccessful)
+	const EMultiplayerDestroyPurpose CompletedPurpose = DestroyPurpose;
+	DestroyPurpose = EMultiplayerDestroyPurpose::None;
+
+	if (CompletedPurpose == EMultiplayerDestroyPurpose::LeaveGame)
+	{
+		if (!bWasSuccessful)
+		{
+			UE_LOG(LogMultiplayer, Warning, TEXT("Session destroy failed during leave; returning to menu anyway."));
+		}
+		FinishLeaveGame();
+		return;
+	}
+
+	if (bWasSuccessful
+		&& CompletedPurpose == EMultiplayerDestroyPurpose::RecreateSession)
 	{
 		CreateSession();
 		return;
@@ -367,12 +481,80 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 	UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 }
 
+void UmultiplayerGameInstance::LeaveGame()
+{
+	if (bLeaveInProgress)
+	{
+		return;
+	}
+
+	bLeaveInProgress = true;
+	CancelAutomaticReconnect();
+#if !UE_BUILD_SHIPPING
+	GetTimerManager().ClearTimer(SessionAutomationTimerHandle);
+#endif
+
+	UWorld* World = GetWorld();
+	if (World != nullptr && World->GetNetMode() == NM_ListenServer)
+	{
+		// 先让每个远端客户端主动清理自己的 Session；本地主机在下面完成相同清理。
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			APlayerController* PlayerController = It->Get();
+			if (PlayerController != nullptr && !PlayerController->IsLocalController())
+			{
+				PlayerController->ClientReturnToMainMenuWithTextReason(
+					NSLOCTEXT("Multiplayer", "HostLeftSession", "主机已退出房间"));
+			}
+		}
+	}
+
+	ClearSessionDelegates();
+	SessionSearch.Reset();
+	EndSessionOperation();
+
+	if (SessionInterface.IsValid()
+		&& SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
+	{
+		BindDestroyDelegate(EMultiplayerDestroyPurpose::LeaveGame);
+		if (SessionInterface->DestroySession(NAME_GameSession))
+		{
+			return;
+		}
+
+		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
+			DestroySessionCompleteHandle);
+		DestroySessionCompleteHandle.Reset();
+		DestroyPurpose = EMultiplayerDestroyPurpose::None;
+		UE_LOG(LogMultiplayer, Warning, TEXT("DestroySession request was rejected during leave."));
+	}
+
+	FinishLeaveGame();
+}
+
+void UmultiplayerGameInstance::FinishLeaveGame()
+{
+	DestroyPurpose = EMultiplayerDestroyPurpose::None;
+	SessionSearch.Reset();
+	LastConnectString.Reset();
+	ReconnectState = EMultiplayerReconnectState::Idle;
+	ReconnectAttempt = 0;
+
+	UE_LOG(LogMultiplayer, Log, TEXT("Local session cleaned; returning to the main menu."));
+	ReturnToMainMenu();
+}
+
 void UmultiplayerGameInstance::HandleNetworkFailure(
 	UWorld* World,
 	UNetDriver* NetDriver,
 	ENetworkFailure::Type FailureType,
 	const FString& ErrorString)
 {
+	if (bLeaveInProgress)
+	{
+		return;
+	}
+
 	if (CanRetryNetworkFailure(NetDriver, FailureType))
 	{
 		// 清掉中断中的会话回调，避免旧异步结果在重连期间继续改变状态。
@@ -400,6 +582,11 @@ void UmultiplayerGameInstance::HandleTravelFailure(
 	ETravelFailure::Type FailureType,
 	const FString& ErrorString)
 {
+	if (bLeaveInProgress)
+	{
+		return;
+	}
+
 	if (ReconnectState == EMultiplayerReconnectState::Connecting
 		&& !LastConnectString.IsEmpty())
 	{
@@ -540,6 +727,18 @@ void UmultiplayerGameInstance::TryAutomaticReconnect()
 void UmultiplayerGameInstance::NotifyClientConnected()
 {
 	UWorld* World = GetWorld();
+#if !UE_BUILD_SHIPPING
+	if (bSessionAutomationTravelStarted
+		&& !bSessionAutomationJoinConfirmed
+		&& World != nullptr
+		&& World->GetNetMode() == NM_Client)
+	{
+		bSessionAutomationJoinConfirmed = true;
+		UE_LOG(LogMultiplayer, Log, TEXT("Session automation: client joined the advertised current map."));
+	}
+	StartSessionAutomationIfRequested();
+#endif
+
 	// Listen Server 主机也会进入 PlayingState，但它不是需要重连的远端客户端，不能污染客户端地址状态。
 	if (World == nullptr || World->GetNetMode() != NM_Client)
 	{
@@ -612,6 +811,54 @@ void UmultiplayerGameInstance::SimulateConnectionLossForTesting()
 		NetDriver,
 		ENetworkFailure::ConnectionLost,
 		TEXT("Development reconnect test"));
+}
+
+void UmultiplayerGameInstance::HandlePostLoadMap(UWorld* LoadedWorld)
+{
+#if !UE_BUILD_SHIPPING
+	if (LoadedWorld == GetWorld())
+	{
+		StartSessionAutomationIfRequested();
+	}
+#endif
+}
+
+void UmultiplayerGameInstance::StartSessionAutomationIfRequested()
+{
+	if (bSessionAutomationStarted)
+	{
+		return;
+	}
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("CoopTestHostSession")))
+	{
+		bSessionAutomationStarted = true;
+		HostGame(TEXT("Coop Automation"), 2, true);
+		return;
+	}
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("CoopTestJoinSession")))
+	{
+		bSessionAutomationStarted = true;
+		GetTimerManager().SetTimer(
+			SessionAutomationTimerHandle,
+			this,
+			&UmultiplayerGameInstance::RunSessionAutomationFind,
+			0.5f,
+			false);
+	}
+}
+
+void UmultiplayerGameInstance::RunSessionAutomationFind()
+{
+	++SessionAutomationFindAttempt;
+	UE_LOG(
+		LogMultiplayer,
+		Log,
+		TEXT("Session automation: LAN search attempt %d/%d."),
+		SessionAutomationFindAttempt,
+		MultiplayerSession::MaxAutomationFindAttempts);
+	FindGames(20, true);
 }
 #endif
 

@@ -458,7 +458,7 @@ if ($PublishEvidence) {
     $EvidenceRoot = Join-Path $ProjectRoot "Tests\Evidence"
     New-Item -ItemType Directory -Force -Path $EvidenceRoot | Out-Null
     $Commit = (git -C $ProjectRoot rev-parse --short HEAD 2>$null)
-    $WorkingTreeModified = [bool](git -C $ProjectRoot status --porcelain 2>$null)
+    $SourceFilesModified = [bool](git -C $ProjectRoot status --porcelain -- Source Scripts Config "*.bat" "*.uproject" 2>$null)
     $SourceFingerprint = Get-SourceFingerprint
     $PublicResults = @($Results | ForEach-Object {
         [ordered]@{
@@ -482,7 +482,7 @@ if ($PublishEvidence) {
         SchemaVersion = 1
         GeneratedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
         GitBaseCommit = $Commit
-        WorkingTreeModifiedAtTestTime = $WorkingTreeModified
+        SourceFilesModifiedAtTestTime = $SourceFilesModified
         SourceFingerprintSha256 = $SourceFingerprint
         Engine = "Unreal Engine 5.5"
         Environment = "Two local UnrealEditor processes using OnlineSubsystemNull"

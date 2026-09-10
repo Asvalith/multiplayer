@@ -12,17 +12,24 @@
 #include "multiplayerTransporterComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
+/*
+ * 平台 Actor 负责组件装配与激活来源选择，Transporter 负责移动，Occupancy 负责人数。
+ * 这三部分各有一份职责，触发来源变化最终都转换成 SetTransportActive 的布尔目标。
+ */
+
+/** 创建平台、触发区和可视化端点，开启服务器位置复制；Actor 本身不运行 Tick。 */
 AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	bReplicates = true;
 	// (*) 平台会影响玩家站立位置，连续变换由服务器生成并通过 ActorMovement 复制。
 	SetReplicateMovement(true);
-	// 移动时最高按 30Hz 发送，稳定后允许降到 10Hz；在合作 Demo 中平衡平滑度与带宽。
-	// 这不是客户端渲染帧率，网络层仍会对收到的移动快照做平滑处理。
+	// 常规网络更新频率设为 30Hz，不保证客户端恰好每秒收到 30 次。普通 Actor 的 ReplicateMovement 不包含
+	// CharacterMovement 那套客户端预测与服务器校正，本项目也没有额外实现预测回滚。
 	SetNetUpdateFrequency(30.0f);
-	SetMinNetUpdateFrequency(10.0f);
 
+	// 平台沿关卡预设轨道做运动，不把世界阻挡作为路径规则；Scene 根提供稳定坐标系，
+	// 实际承载碰撞继续使用每个蓝图可配置的 PlatformMesh，避免固定 Box 与视觉尺寸不匹配。
 	PlatformRoot = CreateDefaultSubobject<USceneComponent>(TEXT("PlatformRoot"));
 	SetRootComponent(PlatformRoot);
 	PlatformRoot->SetMobility(EComponentMobility::Movable);
@@ -31,9 +38,11 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	PlatformMesh->SetupAttachment(PlatformRoot);
 	PlatformMesh->SetMobility(EComponentMobility::Movable);
 	PlatformMesh->SetCollisionProfileName(TEXT("BlockAll"));
+	PlatformMesh->SetGenerateOverlapEvents(false);
 	PlatformMesh->SetRelativeScale3D(FVector(2.5f, 2.5f, 0.25f));
 
 	ActivationVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("ActivationVolume"));
+	// 保持原有父级，避免改变既有蓝图中由 PlatformMesh 缩放得到的触发区世界尺寸和位置。
 	ActivationVolume->SetupAttachment(PlatformMesh);
 	ActivationVolume->bEditableWhenInherited = true;
 	ActivationVolume->SetRelativeLocation(FVector(0.0f, 0.0f, 120.0f));
@@ -70,6 +79,7 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	}
 }
 
+/** 返回平台自身区域的世界中心，供自身占用模式的自动验证放置角色。 */
 FVector AmultiplayerMovingPlatform::GetActivationCenter() const
 {
 	return ActivationVolume != nullptr
@@ -77,6 +87,14 @@ FVector AmultiplayerMovingPlatform::GetActivationCenter() const
 		: GetActorLocation();
 }
 
+/** 转发运动组件的实际位置检查；曾经开始移动不代表已经完成平台行程。 */
+bool AmultiplayerMovingPlatform::HasReachedActiveTarget(float Tolerance) const
+{
+	return Transporter != nullptr
+		&& Transporter->HasReachedActiveTarget(Tolerance);
+}
+
+/** 缓存固定端点；服务器只绑定选中的激活来源，并在绑定后读取一次当前状态。 */
 void AmultiplayerMovingPlatform::BeginPlay()
 {
 	Super::BeginPlay();
@@ -85,11 +103,6 @@ void AmultiplayerMovingPlatform::BeginPlay()
 	Transporter->ConfigureWorldTargets(
 		StartPoint->GetComponentLocation(),
 		TargetPoint->GetComponentLocation());
-
-	// 统一绑定组件事件，实际规则入口仍会检查 Authority 和 ActivationSource。
-	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
-		this,
-		&AmultiplayerMovingPlatform::HandleOccupancyChanged);
 
 	if (!HasAuthority())
 	{
@@ -101,6 +114,9 @@ void AmultiplayerMovingPlatform::BeginPlay()
 	if (ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy)
 	{
 		// 自身占用模式复用通用人数组件，由它处理多碰撞体和 Pawn 销毁。
+		PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
+			this,
+			&AmultiplayerMovingPlatform::HandleOccupancyChanged);
 		PlayerOccupancy->BindTrigger(ActivationVolume);
 	}
 	else
@@ -112,12 +128,16 @@ void AmultiplayerMovingPlatform::BeginPlay()
 			ActivationPlate->OnPlateActiveChanged.AddUniqueDynamic(
 				this,
 				&AmultiplayerMovingPlatform::HandleActivationPlateChanged);
+			ActivationPlate->OnDestroyed.AddUniqueDynamic(
+				this,
+				&AmultiplayerMovingPlatform::HandleActivationPlateDestroyed);
 		}
 	}
 
 	RefreshActivation();
 }
 
+/** 清理自身人数组件和外部压力板事件，防止已结束的机关继续接收玩法通知。 */
 void AmultiplayerMovingPlatform::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
@@ -132,11 +152,15 @@ void AmultiplayerMovingPlatform::EndPlay(
 		ActivationPlate->OnPlateActiveChanged.RemoveDynamic(
 			this,
 			&AmultiplayerMovingPlatform::HandleActivationPlateChanged);
+		ActivationPlate->OnDestroyed.RemoveDynamic(
+			this,
+			&AmultiplayerMovingPlatform::HandleActivationPlateDestroyed);
 	}
 
 	Super::EndPlay(EndPlayReason);
 }
 
+/** 仅自身占用模式消费人数变化；重新读当前人数后更新平台期望端点。 */
 void AmultiplayerMovingPlatform::HandleOccupancyChanged(int32 /*玩家数量*/)
 {
 	if (!HasAuthority()
@@ -149,6 +173,7 @@ void AmultiplayerMovingPlatform::HandleOccupancyChanged(int32 /*玩家数量*/)
 	RefreshActivation();
 }
 
+/** 外部压力板开关改变时重算激活，实际移动仍统一由 Transporter 执行。 */
 void AmultiplayerMovingPlatform::HandleActivationPlateChanged(
 	AmultiplayerPressurePlate* Plate,
 	bool bIsActive)
@@ -157,6 +182,21 @@ void AmultiplayerMovingPlatform::HandleActivationPlateChanged(
 	RefreshActivation();
 }
 
+/** 依赖压力板销毁后清空引用并取消激活；单程或往返行为由运动组件配置决定。 */
+void AmultiplayerMovingPlatform::HandleActivationPlateDestroyed(
+	AActor* DestroyedActor)
+{
+	if (DestroyedActor != ActivationPlate)
+	{
+		return;
+	}
+
+	ActivationPlate = nullptr;
+	// 外部依赖消失后立刻回到未激活规则；是否返回起点仍由 Transporter 配置决定。
+	RefreshActivation();
+}
+
+/** 服务器把互斥的两类触发来源转换成一个目标状态，避免各自重复实现移动控制。 */
 void AmultiplayerMovingPlatform::RefreshActivation()
 {
 	if (!HasAuthority())
@@ -168,6 +208,6 @@ void AmultiplayerMovingPlatform::RefreshActivation()
 	const bool bShouldActivate =
 		ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate
 			? ActivationPlate != nullptr && ActivationPlate->IsPlateActive()
-			: PlayerOccupancy->GetPlayerCount() >= RequiredPlayers;
+			: PlayerOccupancy->GetPlayerCount() >= GetRequiredOccupantCount();
 	Transporter->SetTransportActive(bShouldActivate);
 }

@@ -4,7 +4,6 @@
 
 #include "EngineUtils.h"
 #include "Engine/World.h"
-#include "multiplayerCharacter.h"
 #include "multiplayerCoopTestDriver.h"
 #include "multiplayerCoopGameState.h"
 #include "multiplayerCoopPlayerController.h"
@@ -14,12 +13,16 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 
+/*
+ * GameMode 只在服务器存在，这里指定共享 GameState、玩家控制器和默认角色类型。
+ * C++ 负责规则，角色模型和动画由派生蓝图组合；这里仍通过固定资源路径指定默认角色蓝图。
+ */
 AmultiplayerGameMode::AmultiplayerGameMode()
 {
 	GameStateClass = AmultiplayerCoopGameState::StaticClass();
 	PlayerControllerClass = AmultiplayerCoopPlayerController::StaticClass();
 
-	// 玩法逻辑放在 C++，模型、动画等资源组合放在蓝图，便于美术替换且避免硬编码资源细节。
+	// 只在这里选定角色蓝图，不在规则函数中查找网格、动画等具体资源。
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter"));
 	if (PlayerPawnBPClass.Class != nullptr)
 	{
@@ -27,12 +30,14 @@ AmultiplayerGameMode::AmultiplayerGameMode()
 	}
 }
 
+/*
+ * 服务器开局时根据关卡实际插槽生成第一份目标快照。初始化也走 GameState 的唯一写入口，
+ * 使范围修正、Listen Server 通知和后续复制保持同一条路径。
+ */
 void AmultiplayerGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// GameMode 只在服务器生成，这里创建第一份完整快照；客户端随后通过 GameState 复制得到同一配置。
-	// 初始化也走 ApplyAuthoritativeState，不直接写私有属性，确保范围修正和本地事件路径始终一致。
 	if (AmultiplayerCoopGameState* CoopState =
 		GetGameState<AmultiplayerCoopGameState>())
 	{
@@ -54,6 +59,10 @@ void AmultiplayerGameMode::BeginPlay()
 #endif
 }
 
+/*
+ * 插槽完成自身校验后调用的服务器登记入口；检查胜利状态和目标上限后，只推进一格进度。
+ * (**) 本函数不接收插槽身份，不能自行识别同一插槽的重复登记；去重依赖插槽先设置 bActivated。
+ */
 bool AmultiplayerGameMode::RegisterActivatedKey()
 {
 	// 即使当前函数通常由服务器插槽调用，仍保留 Authority 检查，防止以后新增入口时破坏写权限边界。
@@ -78,6 +87,10 @@ bool AmultiplayerGameMode::RegisterActivatedKey()
 	return true;
 }
 
+/*
+ * 胜利区域提交当前人数后，由服务器集中复核人数、钥匙目标和既有胜利状态。
+ * 成功只把 GameState 从未胜利推进到胜利一次；UI、音效等表现不在 GameMode 中直接执行。
+ */
 bool AmultiplayerGameMode::TryCompleteCoopGame(
 	int32 CurrentPlayers,
 	int32 RequiredPlayers)
@@ -104,6 +117,10 @@ bool AmultiplayerGameMode::TryCompleteCoopGame(
 	return true;
 }
 
+/*
+ * 接受玩家控制器发来的重开请求。调用者必须属于当前 World，且本局已经胜利；
+ * 成功后先设置一次性标记，再让 AGameMode 重新加载当前 URL，防止两名玩家重复发起 Travel。
+ */
 bool AmultiplayerGameMode::RequestRestartCurrentRound(
 	AController* RequestingController)
 {
@@ -126,6 +143,10 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 	return true;
 }
 
+/*
+ * 服务器在开局扫描实际摆放的插槽数量，避免“关卡有三处目标、配置却写四”导致无法完成。
+ * 没有插槽时回退到配置值；当前调用链只在开局扫描一次，不形成运行期轮询成本。
+ */
 int32 AmultiplayerGameMode::ResolveRequiredKeys() const
 {
 	// (**) 优先按关卡实际摆放数量计算，避免配置值与插槽数量不一致导致永远无法胜利。

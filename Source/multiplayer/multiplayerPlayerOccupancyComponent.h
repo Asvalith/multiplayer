@@ -21,12 +21,12 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * 避免每个机关重复实现容易出错的 Overlap 代码。
  *
  * (**) 一个 Character 通常有胶囊体、网格体等多个碰撞组件，BeginOverlap 可能触发多次。
- * 因此必须按角色记录重叠组件计数；不能只用 TSet，否则任意一个组件 EndOverlap
+ * 因此按角色记录仍在区域内的重叠项计数（包含组件及其刚体）；不能只用 TSet，否则一个 EndOverlap
  * 都可能把仍在区域内的玩家提前移除。
  * (**) 玩家断线、Pawn 被替换或关卡卸载时不保证收到成对的 EndOverlap，因此首次进入时还要
  * 绑定 Character::OnDestroyed，并在 UnbindTrigger/EndPlay 中对称解绑所有外部 Delegate。
  *
- * 该组件不复制人数。规则只在服务器运行，门、平台和胜利区域最终复制各自真正需要的结果；
+ * 该组件不复制人数。规则只在服务器运行，门、平台和 GameState 最终复制各自真正需要的结果；
  * 客户端没必要重复维护一份可能与服务器不一致的触发区成员表。
  */
 UCLASS(ClassGroup = (Coop))
@@ -40,7 +40,8 @@ public:
 	/**
 	 * 绑定一个用于规则判定的触发体。
 	 *
-	 * 重复绑定会先清理旧触发体和占用记录；非服务器端直接关闭该触发体碰撞，避免两端各算一份。
+	 * 重复绑定会先清理旧触发体，再从新触发体的当前重叠组件重建计数；
+	 * 重绑定前后最多广播一次最终人数。非服务器端直接关闭该触发体碰撞，避免两端各算一份。
 	 * @param bInRequirePlayerControlledCharacter 为 true 时排除 AI 和非玩家控制的 Character。
 	 */
 	void BindTrigger(
@@ -52,10 +53,10 @@ public:
 
 	// 返回有效弱引用的数量，不把同一角色的多个碰撞组件重复算作多个玩家。
 	int32 GetPlayerCount() const;
-	// 输出当前仍有效的不同角色，供合作门验证“不同玩家数”而非仅验证压力板数量。
+	// 追加当前仍有效的不同角色，不清空输出数组；供合作门跨压力板合并玩家集合。
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
 
-	// 只在不同玩家总数发生变化时广播；同一玩家的第二个碰撞组件进入不会产生无效通知。
+	// 普通进出在人数变化时广播；重绑定时即使人数相同，成员更换也广播，供门重算玩家集合。
 	FmultiplayerOccupancyChangedEvent OnOccupancyChanged;
 
 protected:
@@ -81,7 +82,7 @@ private:
 	UFUNCTION()
 	void HandleOccupantDestroyed(AActor* DestroyedActor);
 
-	// 统一执行类型、有效性和可选的玩家控制条件过滤。
+	// 检查 Owner 权限、Character 类型和可选的玩家控制条件；不是通用 UObject 有效性检查。
 	ACharacter* GetValidOccupant(AActor* OtherActor) const;
 	// 增加该角色的重叠组件计数，首次进入时绑定 OnDestroyed。
 	void AddOccupant(AActor* OtherActor);
@@ -89,6 +90,10 @@ private:
 	void RemoveOccupant(AActor* OtherActor);
 	// 屏蔽“组件数变化但不同玩家数不变”的噪声事件。
 	void BroadcastIfPlayerCountChanged(int32 PreviousPlayerCount);
+	// 从触发体已经维护的组件重叠表恢复计数，避免绑定前已站在区域内的玩家被漏掉。
+	void RebuildOccupantsFromCurrentOverlaps();
+	// 只做底层解绑与清表，不广播；BindTrigger 用它把重绑定合并成一次状态变化。
+	void UnbindTriggerInternal();
 	// 移除所有角色销毁回调后清空表，不能只 Reset 容器而遗留外部 Delegate。
 	void ClearOccupants();
 
@@ -96,7 +101,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UPrimitiveComponent> BoundTrigger;
 
-	// Key 是不延长角色生命周期的弱引用，Value 是该角色当前仍在区域内的碰撞组件数量。
+	// Key 是不延长角色生命周期的弱引用，Value 是该角色当前仍在区域内的重叠项数量。
 	// 弱引用本身不会主动删除 Map 条目，所以 OnDestroyed 和 GetPlayerCount 的有效性检查都不可省略。
 	TMap<TWeakObjectPtr<ACharacter>, int32> OverlapCounts;
 	bool bRequirePlayerControlledCharacter = true;

@@ -30,9 +30,10 @@ enum class EMovingPlatformActivationSource : uint8
  * 这样把通用能力拆开后，人数检测和移动逻辑都能被其他机关复用。
  *
  * (*) 平台会承载玩家，连续位置必须以服务器为准，因此选择 ReplicateMovement；
- * 门和压力板只是视觉过渡，所以只复制离散状态并在各端播放。
+ * 门和压力板只需同步开关结果，允许各端根据结果播放本地过渡。
  * (*) Transporter 只在 Authority 上改变 Actor 位置，客户端不自行插值同一条业务运动曲线，
- * 避免平台与其承载角色在不同机器上产生两套碰撞结果。
+ * 避免本地计算的路径与收到的服务器位置互相覆盖。客户端碰撞仍依赖本地收到的位置快照，
+ * 普通 Actor 位置复制不等于角色移动预测，本项目没有为平台额外实现预测回滚或快照平滑。
  * (**) StartPoint/TargetPoint 是平台子组件，BeginPlay 必须先缓存世界坐标；如果移动过程中继续
  * 读取子组件位置，目标会跟随平台一起移动，平台将永远无法到达终点。
  */
@@ -50,9 +51,14 @@ public:
 		return ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy;
 	}
 
+	// 返回自身触发区中心；外部压力板模式应通过 GetActivationPlate 找到真正触发来源。
 	FVector GetActivationCenter() const;
+	// 只读关卡引用，是否使用此压力板取决于 ActivationSource。
 	AmultiplayerPressurePlate* GetActivationPlate() const { return ActivationPlate; }
+	// 防止编辑器配置零或负数后无需玩家也满足自身占用条件。
 	int32 GetRequiredOccupantCount() const { return FMath::Max(1, RequiredPlayers); }
+	// 端到端测试必须确认真实到达活动端点，不能只把“曾移动几厘米”当作成功。
+	bool HasReachedActiveTarget(float Tolerance = 1.0f) const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -66,10 +72,14 @@ protected:
 		AmultiplayerPressurePlate* Plate,
 		bool bIsActive);
 
+	UFUNCTION()
+	void HandleActivationPlateDestroyed(AActor* DestroyedActor);
+
 private:
 	// 根据配置的激活来源计算一次目标状态，再交给 Transporter 开始或结束运动。
 	void RefreshActivation();
 
+	// 固定轨道平台不依赖根组件 Sweep；Scene 根只保存稳定的 Actor 坐标系。
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Platform")
 	TObjectPtr<USceneComponent> PlatformRoot;
 

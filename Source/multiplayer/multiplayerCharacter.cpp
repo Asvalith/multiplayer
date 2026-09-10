@@ -14,6 +14,10 @@
 #include "multiplayerCoopCarryComponent.h"
 #include "multiplayerLog.h"
 
+/*
+ * 构造阶段只搭建角色的固定组件和默认移动参数，不读取 World，也不执行任何联网规则。
+ * 这些子对象会同时存在于服务器和客户端；真正属于本地玩家的输入映射要等控制器确定后再安装。
+ */
 AmultiplayerCharacter::AmultiplayerCharacter()
 {
 	// 胶囊体负责角色移动碰撞，尺寸与默认第三人称模型匹配。
@@ -53,23 +57,41 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 	// 网格体和动画蓝图由派生角色蓝图配置，避免 C++ 直接依赖可替换的美术资源。
 }
 
+/*
+ * 控制器变更时，为“拥有 LocalPlayer 的本地控制器”安装输入映射。
+ * 服务器上的远端角色和客户端看到的其他玩家也会有 Character 实例，但没有本地输入资格。
+ * (*) 本地控制权与 Actor 是否存在是两回事，联机输入必须按 LocalPlayer 判断。
+ */
 void AmultiplayerCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
 
 	// (*) 输入映射属于本地玩家配置，因此添加到 LocalPlayer 子系统，而不是放到服务器逻辑中。
 	// (**) 服务器或非本地角色没有 LocalPlayer，必须逐层判空。
-	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	if (DefaultMappingContext != nullptr)
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
+		if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
 		{
-			Subsystem->AddMappingContext(DefaultMappingContext, 0);
+			if (ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer())
+			{
+				if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
+					ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(LocalPlayer))
+				{
+					Subsystem->AddMappingContext(DefaultMappingContext, 0);
+				}
+			}
 		}
 	}
 }
 
+/*
+ * 将 Enhanced Input 的动作绑定到角色行为。调用前提是 Pawn 已被本地控制器接管；
+ * 本函数只产生移动输入和视角输入，位置上传、预测与校正仍由 CharacterMovement 负责。
+ */
 void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
 	// Enhanced Input 把“动作”与具体按键解耦，同一套角色代码可复用不同输入方案。
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
@@ -91,6 +113,10 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 	}
 }
 
+/*
+ * 把二维移动输入转换到控制器朝向的水平坐标系，再交给 ACharacter 累积输入。
+ * 这里不直接改 Transform，否则会绕开 CharacterMovement 的碰撞、预测和服务器校正。
+ */
 void AmultiplayerCharacter::Move(const FInputActionValue& Value)
 {
 	// 二维输入分别表示左右和前后移动。
@@ -110,6 +136,9 @@ void AmultiplayerCharacter::Move(const FInputActionValue& Value)
 	}
 }
 
+/*
+ * 只修改本地控制器的观察输入；SpringArm 随控制器旋转，角色朝向仍由移动组件决定。
+ */
 void AmultiplayerCharacter::Look(const FInputActionValue& Value)
 {
 	// 二维输入分别控制水平和垂直观察。

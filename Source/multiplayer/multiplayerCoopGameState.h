@@ -45,6 +45,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FmultiplayerGameWonEvent);
  * (*) 将进度和胜利放进同一个快照复制，可避免多个属性分批到达时出现短暂的矛盾状态。
  * (**) 属性复制保证客户端最终得到服务器的最新状态，但不承诺每一个中间值都被逐次观察到；
  * 因此界面和机关表现应根据“当前快照”刷新，不能依赖收到过所有历史变化。
+ *
+ * OnObjectiveProgressChanged 与 OnGameWon 是每台机器上的本地通知，不是 RPC；服务器赋值和
+ * 客户端 RepNotify 分别触发它们，监听者只能消费结果，不能借事件绕过服务器写权限。
  */
 UCLASS()
 class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameState
@@ -82,7 +85,7 @@ public:
 	// 本机进度刷新事件：服务器写入和客户端 OnRep 都会触发，监听者无需区分数据来源。
 	FmultiplayerObjectiveProgressEvent OnObjectiveProgressChanged;
 
-	// 当前快照为胜利时广播；具体 UI 仍由本地 PlayerController 的表现组件负责。
+	// 仅本机观察到 false -> true 的胜利状态转换时广播一次；具体 UI 仍由本地 PlayerController 负责。
 	FmultiplayerGameWonEvent OnGameWon;
 
 protected:
@@ -91,10 +94,13 @@ protected:
 	void OnRep_ObjectiveState();
 
 private:
-	// 统一发布进度和胜利事件，避免服务器路径与客户端路径各写一套表现通知。
+	// 统一发布进度和胜利事件；内部先保存不可变快照，避免进度监听者同步改状态造成重入误报。
 	void HandleObjectiveStateChanged();
 
 	// GameMode 写、GameState 复制；客户端不能通过本对象提交玩法结果。
 	UPROPERTY(ReplicatedUsing = OnRep_ObjectiveState)
 	FmultiplayerCoopObjectiveState ObjectiveState;
+
+	// 记录本机上一次已经进入通知流程的胜利状态，用于只发布 false -> true 转换。
+	bool bLastNotifiedGameWon = false;
 };

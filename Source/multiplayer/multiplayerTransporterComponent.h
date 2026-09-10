@@ -15,7 +15,9 @@
  * 复用于其他由服务器驱动、但采用不同复制方式的机关。
  *
  * (*) ActorComponent 的 Tick 不会自动获得网络权威，仍要检查 Owner->HasAuthority()。
- * (**) SetTransportActive 只有目标状态真正变化时才重新启用 Tick，避免 Delegate 重复通知造成空转。
+ * (**) SetTransportActive 会忽略正在执行的同目标通知；若被外力移开或初始未对齐，则恢复移动。
+ * (**) 当前机关采用关卡设计好的固定轨道，不用 Sweep 把乘客或装饰几何当成路径阻挡；
+ * 到达判断仍读取移动后的 Actor 位置，不能拿尚未执行的计划位置判断。
  */
 UCLASS(ClassGroup = (Coop), meta = (BlueprintSpawnableComponent))
 class MULTIPLAYER_API UmultiplayerTransporterComponent : public UActorComponent
@@ -32,7 +34,7 @@ public:
 
 	/**
 	 * 设置期望端点。激活时前往 ActiveLocation；取消激活且允许返回时前往 StartLocation。
-	 * 同值调用不会重新启动已经完成的运动。
+	 * 同值调用不会重启正在进行或已经到达的运动，但会修正未位于目标点的异常位置。
 	 */
 	void SetTransportActive(bool bNewActive);
 
@@ -43,21 +45,25 @@ public:
 	 */
 	void ConfigureWorldTargets(const FVector& InStartLocation, const FVector& InActiveLocation);
 
+	// 自动测试和上层机关只读实际位置，不读取内部 bMoving 推测结果。
+	bool HasReachedActiveTarget(float Tolerance = 1.0f) const;
+
 private:
-	// 根据当前激活状态选择目标；端点均为 BeginPlay 前缓存的固定世界坐标。
+	// 根据当前激活状态选择目标；端点由平台 BeginPlay 在开始移动前缓存为固定世界坐标。
 	FVector GetTargetLocation() const;
-	// 到达容差内后精确对齐目标并关闭 Tick，消除浮点尾差和长期空转。
+	// 仅清除运动标记并关闭 Tick；移动与最终位置对齐由调用方负责。
 	void FinishMovement();
 
 	UPROPERTY(EditAnywhere, Category = "Coop|Transport", meta = (ClampMin = "1.0"))
 	float MoveSpeed = 150.0f;
 
-	// false 表示失活后停在终点，true 表示失活后返回起点。
+	// false 表示忽略取消激活，途中也继续前往终点；true 表示取消激活后返回起点。
 	UPROPERTY(EditAnywhere, Category = "Coop|Transport")
 	bool bReturnWhenInactive = true;
 
 	FVector StartLocation = FVector::ZeroVector;
 	FVector ActiveLocation = FVector::ZeroVector;
+	// 前者选择期望端点，后者记录运动 Tick 是否进行中；二者都只是服务器运行期状态。
 	bool bTransportActive = false;
 	bool bMoving = false;
 };

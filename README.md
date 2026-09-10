@@ -141,6 +141,8 @@ C++ 默认胜利界面不依赖蓝图即可工作；`ReceiveCoopGameWon` 仍保�
 
 测试脚本会启动无画面的 Listen Server 和 Client，检查客户端连接、共享目标初始化、网络参数、自动重连及错误日志，并在 `Saved/TestReports` 生成 JSON 报告。
 
+自动化通过注入 `ConnectionLost` 失败事件验证重连状态机，不等同于真实网卡断开测试；钥匙自动化验证服务器状态和重复登记保护，完整碰撞触发路径仍由双窗口手工验证。
+
 完整项目验证使用：
 
 ```powershell

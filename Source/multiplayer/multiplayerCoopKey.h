@@ -15,9 +15,10 @@ class AmultiplayerKeySocket;
 /**
  * 由服务器决定归属并复制给客户端的合作钥匙。
  *
- * 状态流转为：世界中可拾取 -> 被某个 Character 持有 -> 被插槽安装，或在携带路径中被插槽消费销毁。
- * Holder 和 bInstalled 是客户端恢复表现所需的最小状态：Holder 决定挂到哪个角色插槽，
- * bInstalled 决定钥匙是否已经离开拾取流程；自由状态下的世界位置由 ReplicateMovement 同步。
+ * 当前有两条明确流程：关卡预绑定 DestinationSocket 时，玩家触碰后钥匙直接自动归位；没有预绑定
+ * 时，钥匙先由角色携带，角色进入插槽后钥匙被消费。Holder 和 bInstalled 是客户端恢复表现所需的
+ * 最小状态：Holder 决定挂到哪个角色插槽，bInstalled 表示预绑定钥匙已经归位；自由状态下的世界
+ * 位置由 ReplicateMovement 同步，携带路径完成后 Actor 直接销毁。
  *
  * 拾取使用服务器端 Overlap，不需要客户端提交“我捡到了”的自定义 RPC。服务器根据自己的碰撞
  * 世界和当前状态作决定，对两个客户端近乎同时触碰同一把钥匙的情况按事件顺序只接受第一个。
@@ -40,9 +41,6 @@ public:
 	// 注册 Holder 与 bInstalled；自由状态的 Transform 由 Actor 的 ReplicateMovement 负责。
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
-	// 返回复制的权威持有者；可能在网络更新或销毁清理期间暂时为空。
-	ACharacter* GetHolder() const { return Holder; }
 
 	bool IsHeldBy(const ACharacter* Character) const { return Holder == Character; }
 
@@ -87,7 +85,7 @@ private:
 	void HandleHolderChanged();
 	// Installed 变化后的公共收口，负责禁用拾取并刷新 Tick。
 	void HandleInstalledChanged();
-	// 仅自由且未安装的权威钥匙需要旋转 Tick；其他状态全部停 Tick。
+	// 各端只有自由且未安装的钥匙需要旋转表现 Tick；其他状态全部停 Tick。
 	void RefreshVisualTick();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")

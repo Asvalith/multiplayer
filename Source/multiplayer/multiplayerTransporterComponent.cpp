@@ -4,6 +4,12 @@
 
 #include "GameFramework/Actor.h"
 
+/*
+ * 固定轨道运动组件只生成服务器位置：激活选终点、失活可选返回起点，到位后停 Tick。
+ * 网络发送由所属 Actor 负责；此处没有自行复制属性，也没有处理障碍绕行、挤压或客户端预测。
+ */
+
+/** 声明组件能执行 Tick，但把默认状态设为静止，等收到有效移动目标后才开启。 */
 UmultiplayerTransporterComponent::UmultiplayerTransporterComponent()
 {
 	// 组件具备 Tick 能力，但初始关闭；只有目标端点发生变化且尚未到达时才开启。
@@ -11,6 +17,10 @@ UmultiplayerTransporterComponent::UmultiplayerTransporterComponent()
 	PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
+/**
+ * 仅在权威 Owner 上按固定速度更新位置；到达容差内后贴合端点并结束本次运动。
+ * (**) 不做 Sweep，因此轨道避障由关卡布置保证，不能把网格的 BlockAll 当作平台自动防穿墙。
+ */
 void UmultiplayerTransporterComponent::TickComponent(
 	float DeltaTime,
 	ELevelTick TickType,
@@ -34,20 +44,32 @@ void UmultiplayerTransporterComponent::TickComponent(
 		DeltaTime,
 		MoveSpeed);
 
-	// Sweep 保留为 true，让平台移动时参与碰撞检测，而不是直接穿过阻挡物。
-	Owner->SetActorLocation(NewLocation, true);
-	if (NewLocation.Equals(TargetLocation, 0.5f))
+	// 这是固定轨道机关，不使用 Sweep：乘客和轨道旁装饰物都不应改变平台的权威路径。
+	// PlatformMesh 仍保留碰撞作为角色承载面；轨道是否穿过场景由关卡配置保证。
+	Owner->SetActorLocation(NewLocation, false);
+
+	if (Owner->GetActorLocation().Equals(TargetLocation, 0.5f))
 	{
-		Owner->SetActorLocation(TargetLocation, true);
+		Owner->SetActorLocation(TargetLocation, false);
 		FinishMovement();
 	}
 }
 
+/**
+ * 服务器请求切换期望端点；运动中的同目标请求直接忽略，静止时检查位置是否需要恢复。
+ * 单程配置忽略所有取消激活请求，包括尚在途中时的失活；本函数不会立即传送到新端点。
+ */
 void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 {
 	AActor* Owner = GetOwner();
 	if (Owner == nullptr || !Owner->HasAuthority())
 	{
+		return;
+	}
+
+	if (bTransportActive == bNewActive && bMoving)
+	{
+		// 已在前往同一端点时不重复重启 Tick；同值但未移动的情况仍在下面检查实际位置。
 		return;
 	}
 
@@ -61,6 +83,7 @@ void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 	bTransportActive = bNewActive;
 	if (Owner->GetActorLocation().Equals(GetTargetLocation(), 0.5f))
 	{
+		// 同值通知只有在真实位于目标点时才是空操作；未对齐时仍会恢复移动。
 		FinishMovement();
 		return;
 	}
@@ -70,6 +93,7 @@ void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 	SetComponentTickEnabled(true);
 }
 
+/** 保存两个固定世界坐标；仅设置目标数据，不立即启动移动或改变 Owner 位置。 */
 void UmultiplayerTransporterComponent::ConfigureWorldTargets(
 	const FVector& InStartLocation,
 	const FVector& InActiveLocation)
@@ -79,6 +103,17 @@ void UmultiplayerTransporterComponent::ConfigureWorldTargets(
 	ActiveLocation = InActiveLocation;
 }
 
+/** 用所属 Actor 当前坐标核对活动端点，容差至少保留一个很小正值以规避浮点比较问题。 */
+bool UmultiplayerTransporterComponent::HasReachedActiveTarget(float Tolerance) const
+{
+	const AActor* Owner = GetOwner();
+	return Owner != nullptr
+		&& Owner->GetActorLocation().Equals(
+			ActiveLocation,
+			FMath::Max(Tolerance, KINDA_SMALL_NUMBER));
+}
+
+/** 根据期望激活状态选起点或终点；不读取跟随平台移动的端点组件。 */
 FVector UmultiplayerTransporterComponent::GetTargetLocation() const
 {
 	if (!bTransportActive)
@@ -89,6 +124,7 @@ FVector UmultiplayerTransporterComponent::GetTargetLocation() const
 	return ActiveLocation;
 }
 
+/** 只结束运动调度，不修改位置；之后新的激活通知仍可重新开启 Tick。 */
 void UmultiplayerTransporterComponent::FinishMovement()
 {
 	// 关闭 Tick 是静止机关最直接的性能收益；无需每帧反复比较已经相等的位置。

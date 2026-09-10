@@ -18,6 +18,8 @@ class UStaticMeshComponent;
  * 当前存在两个兼容入口：玩家携带钥匙进入触发区时消费并销毁钥匙；旧关卡中钥匙预绑定
  * DestinationSocket 时则把钥匙安装到 KeyDisplayPoint。两条路径最终都只能经过一次
  * CommitServerActivation，再由 GameMode 增加共享进度。
+ * 预绑定路径是“触碰钥匙后自动归位到指定插槽”，不是先携带再归位；普通路径才会读取角色的
+ * 携带槽，并在角色进入本触发区后消费钥匙。
  *
  * (*) Actor 保持网络权威身份，但不再复制 bActivated；客户端只需要 GameState 中的共享目标进度。
  * 这也意味着当前实现不提供“逐个插槽的客户端激活表现”，不能把 bActivated 当成可复制 UI 数据。
@@ -32,11 +34,9 @@ class MULTIPLAYER_API AmultiplayerKeySocket : public AActor
 public:
 	AmultiplayerKeySocket();
 
-	// 仅供服务器规则或初始化检查；客户端没有该布尔值的复制保证。
-	bool IsActivated() const { return bActivated; }
-
 	/**
 	 * 兼容由钥匙直接指定插槽的旧关卡数据：安装到显示点后提交目标。
+	 * 仅服务器调用；成功会改变钥匙安装状态、锁定本插槽并推进共享进度。
 	 * @return 只有权威端、未激活且钥匙成功进入 Installed 状态时返回 true。
 	 */
 	bool StoreCollectedKey(AmultiplayerCoopKey* Key);

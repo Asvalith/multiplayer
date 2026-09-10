@@ -4,7 +4,13 @@
 
 #include "CoreMinimal.h"
 
-// 项目注释约定：
-// (*)  表示需要重点理解的 UE 原理或架构取舍，例如 GameMode/GameState 分工、RPC 与属性复制的选择。
-// (**) 表示实现时容易出错的边界条件，例如重复 Overlap、RepNotify 两端差异和 Delegate 生命周期。
-// 普通注释说明职责和“为什么这样选”，不逐行翻译代码，避免注释与实现重复后逐渐失真。
+/*
+ * 项目阅读顺序：GameInstance 管连接；GameMode 判规则；GameState 复制共享结果；
+ * Key/Socket、Plate/Gate、Platform/Transporter 负责具体机关；Controller/Presenter/Widget 负责本地表现。
+ * CoopTestDriver 是开发验证入口，其主动传送、直接登记等行为不属于普通玩家操作流程。
+ *
+ * 注释约定：
+ * (*)  表示常见面试考点和架构选择，例如 GameMode/GameState 分工、RPC 与属性复制的区别。
+ * (**) 表示实现时容易出错的边界，例如重复 Overlap、同步回调重入和外部 Delegate 生命周期。
+ * 头文件说明使用前提与职责，实现处说明状态变化和选择原因；注释应以当前代码能力为限。
+ */

@@ -4,7 +4,9 @@
 
 #include "Engine/Engine.h"
 #include "Engine/NetDriver.h"
+#include "Engine/PendingNetGame.h"
 #include "Engine/World.h"
+#include "GameMapsSettings.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -13,16 +15,94 @@
 #include "OnlineSubsystem.h"
 #include "TimerManager.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/Package.h"
 #include "multiplayerLog.h"
 
+/**
+ * 会话流程分成两层：OnlineSession 负责公布和查找房间，ClientTravel 负责连接游戏服务器。
+ * 建房使用当前地图的监听服务器；加入和退出仍会涉及客户端加载 World，但这里不负责自动选关。
+ * 本文件把入口、完成回调、失败清理和有限重试集中在 GameInstance，便于沿一条调用链排查问题。
+ */
 namespace MultiplayerSession
 {
+	// 房间名使用固定键，主机写入与客户端搜索读取必须一致；重连最多等待 1、2、4 秒后各尝试一次。
 	const FName ServerNameKey(TEXT("SERVER_NAME"));
 	constexpr int32 MaxReconnectAttempts = 3;
 	constexpr int32 MaxAutomationFindAttempts = 10;
 	constexpr float ReconnectDelays[] = {1.0f, 2.0f, 4.0f};
+
+	/**
+	 * 判断全局失败事件是否属于本实例的游戏连接。
+	 * 优先核对 World；连接尚在建立时再查 PendingNetGame。无法确认归属时忽略，避免串扰其他 PIE 窗口。
+	 */
+	bool IsFailureForGameInstance(
+		const UGameInstance* GameInstance,
+		const UWorld* FailureWorld,
+		const UNetDriver* FailureDriver)
+	{
+		if (GameInstance == nullptr)
+		{
+			return false;
+		}
+
+		if (FailureWorld != nullptr)
+		{
+			if (FailureWorld->GetGameInstance() != GameInstance)
+			{
+				return false;
+			}
+
+			// NetDriverCreateFailure 可能在驱动尚未创建时传入 nullptr；只要 World
+			// 明确属于本实例，就仍应让该实例结束 Connecting/会话忙碌状态。
+			if (FailureDriver == nullptr
+				|| FailureWorld->GetNetDriver() == FailureDriver)
+			{
+				return true;
+			}
+		}
+
+		// PendingConnectionFailure 是 UE5.5 中明确会以空 World 广播的路径。
+		// 其余情况通过本 GameInstance 的 WorldContext 找回归属，并且只接受 PendingNetGame
+		// 或 GameNetDriver；Beacon、Demo 等辅助驱动失败不能清理主游戏会话。
+		// World 和 Driver 都为空时无法安全区分同进程中的多个 GameInstance。
+		if (FailureDriver == nullptr || GEngine == nullptr)
+		{
+			return false;
+		}
+
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.OwningGameInstance != GameInstance)
+			{
+				continue;
+			}
+			if (FailureWorld != nullptr && Context.World() != FailureWorld)
+			{
+				continue;
+			}
+
+			if (Context.PendingNetGame != nullptr
+				&& Context.PendingNetGame->GetNetDriver() == FailureDriver)
+			{
+				return true;
+			}
+
+			for (const FNamedNetDriver& NamedDriver : Context.ActiveNetDrivers)
+			{
+				if (NamedDriver.NetDriver == FailureDriver
+					&& NamedDriver.NetDriverDef != nullptr
+					&& NamedDriver.NetDriverDef->DefName == NAME_GameNetDriver)
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
 }
 
+/** 初始化共享会话接口和引擎事件订阅；接口不可用时记录日志，后续公开入口各自检查可用性。 */
 void UmultiplayerGameInstance::Init()
 {
 	Super::Init();
@@ -54,14 +134,13 @@ void UmultiplayerGameInstance::Init()
 		UE_LOG(LogMultiplayer, Error, TEXT("Online session interface is unavailable."));
 	}
 
-#if !UE_BUILD_SHIPPING
-	// 主菜单可能使用自己的 PlayerController，测试入口必须放在跨地图存在的 GameInstance。
+	// 退出互斥必须等新 World 就绪后释放；开发构建也复用同一回调启动自动化。
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(
 		this,
 		&UmultiplayerGameInstance::HandlePostLoadMap);
-#endif
 }
 
+/** 结束本实例持有的定时任务和订阅，再释放搜索结果与接口；这里只做对象退出清理，不发起新的 Travel。 */
 void UmultiplayerGameInstance::Shutdown()
 {
 	// 先停计时器再解绑回调，避免 Shutdown 过程中新的重连尝试或测试事件重新进入本对象。
@@ -97,19 +176,25 @@ void UmultiplayerGameInstance::Shutdown()
 	Super::Shutdown();
 }
 
+/**
+ * 接受建房请求后锁住会话操作，保存参数，并在当前 World 开启监听。
+ * 若已有同名 Session，销毁完成回调负责继续 CreateSession；任一提交失败分支负责释放操作状态。
+ * 监听驱动和 Session 是两份状态，本函数的建房失败分支目前不会自动拆除已启动的监听驱动。
+ */
 void UmultiplayerGameInstance::HostGame(
 	const FString& ServerName,
 	int32 PublicConnections,
 	bool bIsLanMatch)
 {
-	bLeaveInProgress = false;
-	CancelAutomaticReconnect();
-
 	if (!SessionInterface.IsValid()
 		|| !BeginSessionOperation(EMultiplayerSessionOperation::Hosting))
 	{
 		return;
 	}
+
+	// 只有请求通过会话互斥检查后，才允许它终止旧重连。
+	// 被退出流程拒绝的按钮点击不能反向撤销 bLeaveInProgress，也不能清掉可重连地址。
+	CancelAutomaticReconnect();
 
 	if (!EnsureCurrentWorldIsListening())
 	{
@@ -127,7 +212,8 @@ void UmultiplayerGameInstance::HostGame(
 		// (**) 同名会话未销毁时直接 CreateSession 通常会失败，先异步销毁再继续创建。
 		BindDestroyDelegate(EMultiplayerDestroyPurpose::RecreateSession);
 
-		if (!SessionInterface->DestroySession(NAME_GameSession))
+		const bool bRequestAccepted = SessionInterface->DestroySession(NAME_GameSession);
+		if (!bRequestAccepted && DestroySessionCompleteHandle.IsValid())
 		{
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
 				DestroySessionCompleteHandle);
@@ -142,6 +228,10 @@ void UmultiplayerGameInstance::HostGame(
 	CreateSession();
 }
 
+/**
+ * 使用 HostGame 保存的参数公布房间；调用前由建房流程保证 SessionInterface 有效且占用 Hosting。
+ * (**) 返回值表示请求是否受理，完成事件表示结果；Null 可能同步触发事件，必须防止失败收尾做两遍。
+ */
 void UmultiplayerGameInstance::CreateSession()
 {
 	// SessionSettings 描述的是会话如何被发现和加入，不会替代真正的 NetDriver 连接与地图 Travel。
@@ -177,7 +267,12 @@ void UmultiplayerGameInstance::CreateSession()
 				this,
 				&UmultiplayerGameInstance::HandleCreateSessionComplete));
 
-	if (!SessionInterface->CreateSession(0, NAME_GameSession, Settings))
+	const bool bRequestAccepted = SessionInterface->CreateSession(
+		0,
+		NAME_GameSession,
+		Settings);
+	// Null 子系统可能在函数返回前同步执行完成回调。句柄失效表示回调已经收口，不能再处理一次。
+	if (!bRequestAccepted && CreateSessionCompleteHandle.IsValid())
 	{
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(
 			CreateSessionCompleteHandle);
@@ -187,17 +282,25 @@ void UmultiplayerGameInstance::CreateSession()
 	}
 }
 
+/**
+ * 创建本轮查询对象并启动搜索。成功取得操作权才替换旧结果、取消旧重连，拒绝的请求不修改原流程。
+ * 菜单拿到的是结果摘要；真正加入仍使用 SessionSearch 保存的原始结果。
+ */
 void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 {
-	bLeaveInProgress = false;
-	CancelAutomaticReconnect();
-
-	if (!SessionInterface.IsValid()
-		|| !BeginSessionOperation(EMultiplayerSessionOperation::Finding))
+	if (!SessionInterface.IsValid())
 	{
 		OnFindComplete.Broadcast(false, {});
 		return;
 	}
+	if (!BeginSessionOperation(EMultiplayerSessionOperation::Finding))
+	{
+		// 互斥拒绝不代表本轮搜索失败；原操作仍会通过自己的回调结束。
+		return;
+	}
+
+	// 与 Host/Join 保持相同顺序：先取得操作权，再修改重连状态。
+	CancelAutomaticReconnect();
 
 	// 新对象同时承载查询参数和真实搜索结果；菜单中的 ResultIndex 只在这份对象存活期间有效。
 	SessionSearch = MakeShared<FOnlineSessionSearch>();
@@ -219,7 +322,10 @@ void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 				this,
 				&UmultiplayerGameInstance::HandleFindSessionsComplete));
 
-	if (!SessionInterface->FindSessions(0, SessionSearch.ToSharedRef()))
+	const bool bRequestAccepted = SessionInterface->FindSessions(
+		0,
+		SessionSearch.ToSharedRef());
+	if (!bRequestAccepted && FindSessionsCompleteHandle.IsValid())
 	{
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(
 			FindSessionsCompleteHandle);
@@ -230,19 +336,27 @@ void UmultiplayerGameInstance::FindGames(int32 MaxResults, bool bIsLanQuery)
 	}
 }
 
+/**
+ * 按当前结果下标提交加入请求；有效请求会清除旧连接地址，等待回调提供新地址。
+ * 下标检查只能防止越界，不能识别“旧列表中的同一个数字”；菜单必须使用最近一次搜索提供的结果。
+ */
 void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 {
-	bLeaveInProgress = false;
-	CancelAutomaticReconnect();
-
-	// 在发异步请求前验证搜索对象和下标，防止 UI 使用上一轮搜索留下的过期 ResultIndex。
+	// 先验证当前搜索对象和下标，避免无效请求取消原重连；结果是否来自最新列表由调用方保证。
 	if (!SessionInterface.IsValid()
 		|| !SessionSearch.IsValid()
-		|| !SessionSearch->SearchResults.IsValidIndex(ResultIndex)
-		|| !BeginSessionOperation(EMultiplayerSessionOperation::Joining))
+		|| !SessionSearch->SearchResults.IsValidIndex(ResultIndex))
 	{
 		return;
 	}
+
+	if (!BeginSessionOperation(EMultiplayerSessionOperation::Joining))
+	{
+		return;
+	}
+
+	// 非法下标或重叠请求在上面已经返回，不会破坏正在等待的自动重连。
+	CancelAutomaticReconnect();
 
 	JoinSessionCompleteHandle =
 		SessionInterface->AddOnJoinSessionCompleteDelegate_Handle(
@@ -250,24 +364,22 @@ void UmultiplayerGameInstance::JoinGame(int32 ResultIndex)
 				this,
 				&UmultiplayerGameInstance::HandleJoinSessionComplete));
 
-	bJoinCompletionReceived = false;
 	const bool bRequestAccepted = SessionInterface->JoinSession(
 		0,
 		NAME_GameSession,
 		SessionSearch->SearchResults[ResultIndex]);
-	if (!bRequestAccepted && !bJoinCompletionReceived)
+	if (!bRequestAccepted && JoinSessionCompleteHandle.IsValid())
 	{
-		if (JoinSessionCompleteHandle.IsValid())
-		{
-			SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
-				JoinSessionCompleteHandle);
-		}
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
+			JoinSessionCompleteHandle);
 		JoinSessionCompleteHandle.Reset();
+		RemoveFailedLocalSession();
 		EndSessionOperation();
 		UE_LOG(LogMultiplayer, Error, TEXT("JoinSession request was rejected."));
 	}
 }
 
+/** 当前 World 已监听则复用；独立游戏尝试原地启动 NetDriver，客户端和空 World 直接拒绝。 */
 bool UmultiplayerGameInstance::EnsureCurrentWorldIsListening()
 {
 	UWorld* World = GetWorld();
@@ -299,6 +411,7 @@ bool UmultiplayerGameInstance::EnsureCurrentWorldIsListening()
 	return true;
 }
 
+/** 销毁前先记录用途并替换旧订阅；即使 DestroySession 同步完成，回调也能决定建房还是返回菜单。 */
 void UmultiplayerGameInstance::BindDestroyDelegate(
 	EMultiplayerDestroyPurpose Purpose)
 {
@@ -316,6 +429,7 @@ void UmultiplayerGameInstance::BindDestroyDelegate(
 				&UmultiplayerGameInstance::HandleDestroySessionComplete));
 }
 
+/** 创建结果只结束会话公布阶段并解锁菜单；主机此前已经监听当前地图，此处无需额外切图。 */
 void UmultiplayerGameInstance::HandleCreateSessionComplete(
 	FName SessionName,
 	bool bWasSuccessful)
@@ -341,6 +455,10 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 #endif
 }
 
+/**
+ * 先释放本次搜索订阅，再把原始结果转换成蓝图可读值。
+ * 广播结果前结束 Finding，使菜单能在回调中直接调用 JoinGame；开发测试复用同一入口补充自动加入。
+ */
 void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
 {
 	SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(
@@ -369,9 +487,37 @@ void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
 			Info.CurrentPlayers = FMath::Max(
 				0,
 				Info.MaxPlayers - SearchResult.Session.NumOpenPublicConnections);
+			// 摘要之后不再使用，移动进数组即可；其中的 ResultIndex 始终指向原始 SearchResults。
 			Results.Add(MoveTemp(Info));
 		}
 	}
+
+#if !UE_BUILD_SHIPPING
+	if (bSessionAutomationStarted && !SessionAutomationToken.IsEmpty())
+	{
+		// 同进程或同局域网可能同时存在别的 Null Session。把本轮唯一标记对应的结果放在首位，
+		// 这样 OnFindComplete 的蓝图消费者与下面的 C++ 自动化回退都会选择同一个房间。
+		bool bFoundMatchingAutomationSession = false;
+		for (int32 Index = 0; Index < Results.Num(); ++Index)
+		{
+			if (Results[Index].ServerName == SessionAutomationToken)
+			{
+				bFoundMatchingAutomationSession = true;
+				if (Index != 0)
+				{
+					Results.Swap(0, Index);
+				}
+				break;
+			}
+		}
+
+		if (!bFoundMatchingAutomationSession)
+		{
+			// 尚未找到本轮 Host 时不把别人的 Session 暴露给菜单蓝图，下一次计时器搜索再重试。
+			Results.Reset();
+		}
+	}
+#endif
 
 	EndSessionOperation();
 	OnFindComplete.Broadcast(bWasSuccessful, Results);
@@ -380,6 +526,7 @@ void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
 	if (bSessionAutomationStarted
 		&& FParse::Param(FCommandLine::Get(), TEXT("CoopTestJoinSession")))
 	{
+		// 上面的测试 token 过滤已经把唯一匹配项移到首位，未匹配时则清空结果。
 		if (bWasSuccessful && !Results.IsEmpty())
 		{
 			UE_LOG(
@@ -412,11 +559,14 @@ void UmultiplayerGameInstance::HandleFindSessionsComplete(bool bWasSuccessful)
 #endif
 }
 
+/**
+ * 会话加入成功后解析地址并发起 ClientTravel，Joining 继续保持到本地控制器进入 PlayingState。
+ * 无可用地址或控制器时清掉本地同名 Session 再解锁，避免下一次加入被残留记录阻塞。
+ */
 void UmultiplayerGameInstance::HandleJoinSessionComplete(
 	FName SessionName,
 	EOnJoinSessionCompleteResult::Type Result)
 {
-	bJoinCompletionReceived = true;
 	SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
 		JoinSessionCompleteHandle);
 	JoinSessionCompleteHandle.Reset();
@@ -432,7 +582,6 @@ void UmultiplayerGameInstance::HandleJoinSessionComplete(
 
 	// ClientTravel 必须由本地 PlayerController 发起；没有本地控制器时不能假装加入成功。
 	const bool bCanTravel = bResolved && PlayerController != nullptr;
-	EndSessionOperation();
 
 	if (bCanTravel)
 	{
@@ -446,9 +595,16 @@ void UmultiplayerGameInstance::HandleJoinSessionComplete(
 		return;
 	}
 
+	// 先移除失败的本地会话，再开放菜单操作，避免紧接着加入时撞上同名残留。
+	RemoveFailedLocalSession();
+	EndSessionOperation();
 	UE_LOG(LogMultiplayer, Error, TEXT("Session join completed without a usable connection address."));
 }
 
+/**
+ * 先取出并清空本次销毁用途，再进入后续流程，避免嵌套调用继续使用上一次用途。
+ * 重新建房要求销毁成功；主动退出即使销毁失败也继续返回菜单，失败信息保留在日志中。
+ */
 void UmultiplayerGameInstance::HandleDestroySessionComplete(
 	FName SessionName,
 	bool bWasSuccessful)
@@ -481,6 +637,10 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 	UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 }
 
+/**
+ * 退出优先于当前菜单操作：取消连接与重试，解绑完成事件，再尝试销毁本地 Session。
+ * bLeaveInProgress 跨越销毁和返回菜单两个阶段；重复退出直接返回，直到新 World 就绪才接受新操作。
+ */
 void UmultiplayerGameInstance::LeaveGame()
 {
 	if (bLeaveInProgress)
@@ -495,6 +655,11 @@ void UmultiplayerGameInstance::LeaveGame()
 #endif
 
 	UWorld* World = GetWorld();
+	if (GEngine != nullptr && World != nullptr)
+	{
+		// Leave 明确取代正在进行的连接；先关闭 PendingNetGame，避免旧 ClientTravel 稍后覆盖回菜单请求。
+		GEngine->CancelPending(World);
+	}
 	if (World != nullptr && World->GetNetMode() == NM_ListenServer)
 	{
 		// 先让每个远端客户端主动清理自己的 Session；本地主机在下面完成相同清理。
@@ -509,7 +674,14 @@ void UmultiplayerGameInstance::LeaveGame()
 		}
 	}
 
+	const bool bWasFinding =
+		CurrentOperation == EMultiplayerSessionOperation::Finding;
 	ClearSessionDelegates();
+	if (bWasFinding && SessionInterface.IsValid())
+	{
+		// 解绑完成回调后再取消底层搜索，避免 CancelFindSessions 的同步完成通知重新进入离开流程。
+		SessionInterface->CancelFindSessions();
+	}
 	SessionSearch.Reset();
 	EndSessionOperation();
 
@@ -517,7 +689,8 @@ void UmultiplayerGameInstance::LeaveGame()
 		&& SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
 	{
 		BindDestroyDelegate(EMultiplayerDestroyPurpose::LeaveGame);
-		if (SessionInterface->DestroySession(NAME_GameSession))
+		const bool bRequestAccepted = SessionInterface->DestroySession(NAME_GameSession);
+		if (bRequestAccepted || !DestroySessionCompleteHandle.IsValid())
 		{
 			return;
 		}
@@ -532,6 +705,7 @@ void UmultiplayerGameInstance::LeaveGame()
 	FinishLeaveGame();
 }
 
+/** 清空房间搜索与重连资料并调用引擎返回菜单；保留退出标记，交给加载完成或加载失败事件释放。 */
 void UmultiplayerGameInstance::FinishLeaveGame()
 {
 	DestroyPurpose = EMultiplayerDestroyPurpose::None;
@@ -541,17 +715,30 @@ void UmultiplayerGameInstance::FinishLeaveGame()
 	ReconnectAttempt = 0;
 
 	UE_LOG(LogMultiplayer, Log, TEXT("Local session cleaned; returning to the main menu."));
+	// Session 清理完成后仍会经历 NetDriver 拆除和主菜单加载；退出互斥保持到新 World 就绪。
 	ReturnToMainMenu();
 }
 
+/**
+ * 只处理本实例的游戏网络错误；主动退出引起的断开无需重试。
+ * 有旧地址且属于允许重试的客户端错误时安排重连，其余错误进入统一清理与日志路径。
+ */
 void UmultiplayerGameInstance::HandleNetworkFailure(
 	UWorld* World,
 	UNetDriver* NetDriver,
 	ENetworkFailure::Type FailureType,
 	const FString& ErrorString)
 {
+	// GEngine 的失败事件会广播给同进程中的所有 GameInstance（例如多窗口 PIE）。
+	// 只处理属于本实例 WorldContext 的错误，不能让另一个客户端清理本实例的会话或重连状态。
+	if (!MultiplayerSession::IsFailureForGameInstance(this, World, NetDriver))
+	{
+		return;
+	}
+
 	if (bLeaveInProgress)
 	{
+		// 主动退出本来就会拆除 GameNetDriver；等待新 World 的 PostLoadMap 再释放退出互斥。
 		return;
 	}
 
@@ -577,13 +764,29 @@ void UmultiplayerGameInstance::HandleNetworkFailure(
 		ErrorString);
 }
 
+/**
+ * 区分返回菜单失败、重连加载失败和普通加入失败。
+ * 返回菜单失败需解除退出限制；重连阶段沿用剩余次数；其余情况清空连接资料并恢复菜单操作。
+ */
 void UmultiplayerGameInstance::HandleTravelFailure(
 	UWorld* World,
 	ETravelFailure::Type FailureType,
 	const FString& ErrorString)
 {
+	// TravelFailure 同样是引擎全局事件，必须先按 World/GameInstance 隔离多 PIE 实例。
+	if (World == nullptr || World->GetGameInstance() != this)
+	{
+		return;
+	}
+
 	if (bLeaveInProgress)
 	{
+		// 主菜单 Travel 失败时必须释放退出互斥，否则当前 World 中所有后续会话请求都会永久被拒。
+		bLeaveInProgress = false;
+		RecordConnectionFailure(
+			TEXT("LeaveTravel"),
+			ETravelFailure::ToString(FailureType),
+			ErrorString);
 		return;
 	}
 
@@ -606,6 +809,7 @@ void UmultiplayerGameInstance::HandleTravelFailure(
 		ErrorString);
 }
 
+/** 结束本地会话请求与重试并记录错误；此函数不恢复旧 Pawn，也不负责弹出蓝图错误窗口。 */
 void UmultiplayerGameInstance::RecordConnectionFailure(
 	const TCHAR* FailureSource,
 	const FString& FailureType,
@@ -614,15 +818,12 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 	// 不可恢复失败统一收口所有异步状态，避免菜单仍显示忙碌或旧回调在稍后覆盖失败结果。
 	ClearSessionDelegates();
 	SessionSearch.Reset();
-	EndSessionOperation();
 	GetTimerManager().ClearTimer(ReconnectTimerHandle);
-
-	if (ReconnectState == EMultiplayerReconnectState::Waiting
-		|| ReconnectState == EMultiplayerReconnectState::Connecting)
-	{
-		ReconnectState = EMultiplayerReconnectState::Failed;
-	}
+	ReconnectState = EMultiplayerReconnectState::Idle;
+	ReconnectAttempt = 0;
 	LastConnectString.Reset();
+	RemoveFailedLocalSession();
+	EndSessionOperation();
 
 	UE_LOG(
 		LogMultiplayer,
@@ -633,12 +834,15 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 		*ErrorString);
 }
 
+/**
+ * 只分类，不修改状态：客户端有已知地址时可重试断开和超时。
+ * PendingConnectionFailure 仅在已开始的重连中继续重试，初次 Join 失败不会在此自动开启新一轮重连。
+ */
 bool UmultiplayerGameInstance::CanRetryNetworkFailure(
 	UNetDriver* NetDriver,
 	ENetworkFailure::Type FailureType) const
 {
-	if (ReconnectState == EMultiplayerReconnectState::Failed
-		|| LastConnectString.IsEmpty()
+	if (LastConnectString.IsEmpty()
 		|| NetDriver == nullptr
 		|| NetDriver->GetNetMode() != NM_Client)
 	{
@@ -656,6 +860,10 @@ bool UmultiplayerGameInstance::CanRetryNetworkFailure(
 		&& FailureType == ENetworkFailure::PendingConnectionFailure;
 }
 
+/**
+ * 安排一次性等待，Waiting 状态下的重复错误不会叠加定时器。
+ * 三次连接尝试耗尽后清除地址与本地会话记录；等待时间之外，连接本身仍遵循引擎的超时设置。
+ */
 void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 {
 	if (ReconnectState == EMultiplayerReconnectState::Waiting)
@@ -665,13 +873,15 @@ void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 
 	if (ReconnectAttempt >= MultiplayerSession::MaxReconnectAttempts)
 	{
-		ReconnectState = EMultiplayerReconnectState::Failed;
+		ReconnectState = EMultiplayerReconnectState::Idle;
+		RemoveFailedLocalSession();
 		LastConnectString.Reset();
 		UE_LOG(
 			LogMultiplayer,
 			Error,
 			TEXT("Automatic reconnect failed after %d attempts."),
 			ReconnectAttempt);
+		ReconnectAttempt = 0;
 		return;
 	}
 
@@ -695,6 +905,10 @@ void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 		Delay);
 }
 
+/**
+ * 等待到期后按缓存地址直连原主机，不重新搜索房间，也不恢复上次的私人游戏进度。
+ * 每次进入都计作一次尝试，包括暂时找不到本地控制器的情况，使失败路径也能有限结束。
+ */
 void UmultiplayerGameInstance::TryAutomaticReconnect()
 {
 	UWorld* World = GetWorld();
@@ -724,6 +938,10 @@ void UmultiplayerGameInstance::TryAutomaticReconnect()
 	PlayerController->ClientTravel(LastConnectString, TRAVEL_Absolute);
 }
 
+/**
+ * 由本地 PlayerController::BeginPlayingState 通知，作为本项目结束 Joining/重连等待的时机。
+ * 该时机确认控制器进入游玩状态，不保证所有 Actor 的复制数据和界面绑定都已准备好。
+ */
 void UmultiplayerGameInstance::NotifyClientConnected()
 {
 	UWorld* World = GetWorld();
@@ -754,13 +972,19 @@ void UmultiplayerGameInstance::NotifyClientConnected()
 	}
 
 	GetTimerManager().ClearTimer(ReconnectTimerHandle);
+	if (CurrentOperation == EMultiplayerSessionOperation::Joining)
+	{
+		// JoinSession 回调只完成会话层；进入 PlayingState 后才真正结束 Joining。
+		EndSessionOperation();
+		UE_LOG(LogMultiplayer, Log, TEXT("Session connection established."));
+	}
 
 	if (ReconnectState == EMultiplayerReconnectState::Connecting
 		|| ReconnectState == EMultiplayerReconnectState::Waiting)
 	{
-		// (*) PlayingState 表示服务器已经接受玩家并创建控制器，比“发出连接请求”更可靠。
+		// (*) 由本地控制器进入 PlayingState 确认这次连接；其他复制对象的就绪由各自组件处理。
 		const int32 SuccessfulAttempt = ReconnectAttempt;
-		ReconnectState = EMultiplayerReconnectState::Succeeded;
+		ReconnectState = EMultiplayerReconnectState::Idle;
 		ReconnectAttempt = 0;
 		UE_LOG(
 			LogMultiplayer,
@@ -777,13 +1001,14 @@ void UmultiplayerGameInstance::NotifyClientConnected()
 		GetTimerManager().SetTimer(
 			ReconnectTestTimerHandle,
 			this,
-			&UmultiplayerGameInstance::SimulateConnectionLossForTesting,
+			&UmultiplayerGameInstance::InjectNetworkFailureForTesting,
 			2.0f,
 			false);
 	}
 #endif
 }
 
+/** 清除等待定时器、次数和地址；用于接受新的菜单请求或退出，不负责取消已发出的 PendingNetGame。 */
 void UmultiplayerGameInstance::CancelAutomaticReconnect()
 {
 	GetTimerManager().ClearTimer(ReconnectTimerHandle);
@@ -793,7 +1018,11 @@ void UmultiplayerGameInstance::CancelAutomaticReconnect()
 }
 
 #if !UE_BUILD_SHIPPING
-void UmultiplayerGameInstance::SimulateConnectionLossForTesting()
+/**
+ * 开发测试向正常失败处理入口注入一次 ConnectionLost；不切断网卡，也不模拟物理链路中断。
+ * 它验证有限重试和再次进入 PlayingState 的代码路径，真实断网后的超时行为仍需单独测试。
+ */
+void UmultiplayerGameInstance::InjectNetworkFailureForTesting()
 {
 	UWorld* World = GetWorld();
 	UNetDriver* NetDriver = World != nullptr ? World->GetNetDriver() : nullptr;
@@ -805,16 +1034,53 @@ void UmultiplayerGameInstance::SimulateConnectionLossForTesting()
 		return;
 	}
 
-	UE_LOG(LogMultiplayer, Log, TEXT("Reconnect test: simulating connection loss."));
+	UE_LOG(LogMultiplayer, Log, TEXT("Reconnect test: injecting a network failure event."));
 	GEngine->BroadcastNetworkFailure(
 		World,
 		NetDriver,
 		ENetworkFailure::ConnectionLost,
 		TEXT("Development reconnect test"));
 }
+#endif
 
+/**
+ * 核对加载事件属于本实例；退出时再核对实际目的地确为默认菜单，随后释放退出限制。
+ * 开发自动化借用已有的加载完成通知启动测试，不为正常玩法添加定时轮询。
+ */
 void UmultiplayerGameInstance::HandlePostLoadMap(UWorld* LoadedWorld)
 {
+	if (LoadedWorld == nullptr || LoadedWorld->GetGameInstance() != this)
+	{
+		return;
+	}
+
+	if (bLeaveInProgress)
+	{
+		const FString LoadedPackage = LoadedWorld->GetOutermost()->GetName();
+		const FString ExpectedMenuPackage = FPackageName::ObjectPathToPackageName(
+			UGameMapsSettings::GetGameDefaultMap());
+		if (LoadedPackage != ExpectedMenuPackage)
+		{
+			bLeaveInProgress = false;
+			RecordConnectionFailure(
+				TEXT("LeaveTravel"),
+				TEXT("UnexpectedDestination"),
+				FString::Printf(
+					TEXT("Expected %s but loaded %s."),
+					*ExpectedMenuPackage,
+					*LoadedPackage));
+			return;
+		}
+
+		// 到这里旧 NetDriver 已经拆除、新 World 已可用，后续菜单请求才可以重新取得操作权。
+		bLeaveInProgress = false;
+		UE_LOG(
+			LogMultiplayer,
+			Log,
+			TEXT("Leave transition completed in the main menu: %s"),
+			*LoadedPackage);
+	}
+
 #if !UE_BUILD_SHIPPING
 	if (LoadedWorld == GetWorld())
 	{
@@ -823,6 +1089,8 @@ void UmultiplayerGameInstance::HandlePostLoadMap(UWorld* LoadedWorld)
 #endif
 }
 
+#if !UE_BUILD_SHIPPING
+/** 仅在命令行指定测试角色时启动一次建房或搜索；测试 token 用来隔离同一局域网中的并行运行。 */
 void UmultiplayerGameInstance::StartSessionAutomationIfRequested()
 {
 	if (bSessionAutomationStarted)
@@ -830,10 +1098,20 @@ void UmultiplayerGameInstance::StartSessionAutomationIfRequested()
 		return;
 	}
 
+	FParse::Value(
+		FCommandLine::Get(),
+		TEXT("CoopTestToken="),
+		SessionAutomationToken);
+
 	if (FParse::Param(FCommandLine::Get(), TEXT("CoopTestHostSession")))
 	{
 		bSessionAutomationStarted = true;
-		HostGame(TEXT("Coop Automation"), 2, true);
+		HostGame(
+			SessionAutomationToken.IsEmpty()
+				? TEXT("Coop Automation")
+				: SessionAutomationToken,
+			2,
+			true);
 		return;
 	}
 
@@ -849,6 +1127,7 @@ void UmultiplayerGameInstance::StartSessionAutomationIfRequested()
 	}
 }
 
+/** 单次测试搜索入口；完成回调决定是否短暂等待后再搜，重试上限防止找不到主机时无限运行。 */
 void UmultiplayerGameInstance::RunSessionAutomationFind()
 {
 	++SessionAutomationFindAttempt;
@@ -862,9 +1141,34 @@ void UmultiplayerGameInstance::RunSessionAutomationFind()
 }
 #endif
 
+/**
+ * 在游戏线程上的入口之间限制重复操作，不是跨线程锁。
+ * 退出、重连正在连接或已有菜单请求时拒绝；重连仍在 Waiting 时允许新的有效菜单请求接管并取消等待。
+ */
 bool UmultiplayerGameInstance::BeginSessionOperation(
 	EMultiplayerSessionOperation NewOperation)
 {
+	if (bLeaveInProgress)
+	{
+		UE_LOG(
+			LogMultiplayer,
+			Warning,
+			TEXT("Ignored session operation while leaving. Requested=%s"),
+			*UEnum::GetValueAsString(NewOperation));
+		return false;
+	}
+
+	if (ReconnectState == EMultiplayerReconnectState::Connecting)
+	{
+		// ClientTravel 已经发出时不能再开启会话操作，否则旧 PendingNetGame 仍可能稍后完成并覆盖新请求。
+		UE_LOG(
+			LogMultiplayer,
+			Warning,
+			TEXT("Ignored session operation while reconnect travel is in flight. Requested=%s"),
+			*UEnum::GetValueAsString(NewOperation));
+		return false;
+	}
+
 	// (**) 异步状态机拒绝建房、搜索、加入互相覆盖，保证每个回调只结束自己的操作。
 	if (CurrentOperation != EMultiplayerSessionOperation::None)
 	{
@@ -882,6 +1186,7 @@ bool UmultiplayerGameInstance::BeginSessionOperation(
 	return true;
 }
 
+/** 仅在状态实际变化时广播 None，减少重复解锁通知；退出和重连的限制仍由各自状态决定。 */
 void UmultiplayerGameInstance::EndSessionOperation()
 {
 	if (CurrentOperation == EMultiplayerSessionOperation::None)
@@ -893,37 +1198,55 @@ void UmultiplayerGameInstance::EndSessionOperation()
 	OnSessionOperationChanged.Broadcast(CurrentOperation);
 }
 
+/**
+ * 当前 Null/LAN 失败路径只移除本进程保存的同名 Session，避免额外增加一次异步销毁流程。
+ * RemoveNamedSession 不等于通知远端退出或关闭 NetDriver；替换在线服务时需要重新核对其清理要求。
+ */
+void UmultiplayerGameInstance::RemoveFailedLocalSession()
+{
+	if (SessionInterface.IsValid()
+		&& SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
+	{
+		// 当前项目使用 Null/LAN。连接已经失败时只需移除客户端本地记录，
+		// 不再引入一套额外的异步销毁状态。
+		SessionInterface->RemoveNamedSession(NAME_GameSession);
+	}
+}
+
+/**
+ * 失败、退出和 Shutdown 共用的订阅清理；接口存在时解绑，接口失效也要重置本地句柄。
+ * 这里只取消接收回调，不自动取消子系统里的原始操作；例如搜索还需由 LeaveGame 调用 CancelFindSessions。
+ */
 void UmultiplayerGameInstance::ClearSessionDelegates()
 {
-	if (!SessionInterface.IsValid())
+	if (SessionInterface.IsValid())
 	{
-		return;
-	}
-
-	if (CreateSessionCompleteHandle.IsValid())
-	{
-		// (**) OnlineSubsystem 不会替对象管理这些句柄；退出或失败时必须逐个解绑。
-		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(
-			CreateSessionCompleteHandle);
-	}
-	if (FindSessionsCompleteHandle.IsValid())
-	{
-		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(
-			FindSessionsCompleteHandle);
-	}
-	if (JoinSessionCompleteHandle.IsValid())
-	{
-		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
-			JoinSessionCompleteHandle);
-	}
-	if (DestroySessionCompleteHandle.IsValid())
-	{
-		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
-			DestroySessionCompleteHandle);
+		if (CreateSessionCompleteHandle.IsValid())
+		{
+			// (**) CreateUObject 能避免对已销毁对象直接调用，但活着的 GameInstance 仍需主动解绑过期订阅。
+			SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(
+				CreateSessionCompleteHandle);
+		}
+		if (FindSessionsCompleteHandle.IsValid())
+		{
+			SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(
+				FindSessionsCompleteHandle);
+		}
+		if (JoinSessionCompleteHandle.IsValid())
+		{
+			SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(
+				JoinSessionCompleteHandle);
+		}
+		if (DestroySessionCompleteHandle.IsValid())
+		{
+			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(
+				DestroySessionCompleteHandle);
+		}
 	}
 
 	CreateSessionCompleteHandle.Reset();
 	FindSessionsCompleteHandle.Reset();
 	JoinSessionCompleteHandle.Reset();
 	DestroySessionCompleteHandle.Reset();
+	DestroyPurpose = EMultiplayerDestroyPurpose::None;
 }

@@ -12,19 +12,19 @@
 /**
  * 菜单层可观察的会话异步操作。
  *
- * WBPmainmenu 使用该状态禁用重复按钮请求。它表示“当前等待哪类 OnlineSubsystem 回调”，
- * 不是网络连接状态，也不表示玩家已经进入服务器。
+ * WBPmainmenu 使用该状态禁用重复按钮请求。Hosting/Finding 等待 OnlineSubsystem 回调；
+ * Joining 还会覆盖后续 ClientTravel，直到客户端真正进入服务器或收到失败事件。
  */
 UENUM(BlueprintType)
 enum class EMultiplayerSessionOperation : uint8
 {
-	// 当前没有等待中的建房、搜索或加入回调。
+	// 当前没有建房、搜索或加入流程；退出和重连还会由各自状态单独限制请求。
 	None,
 	// 正在销毁旧会话或创建新会话；二者属于同一次建房流程。
 	Hosting,
 	// 正在等待局域网搜索结果。
 	Finding,
-	// 正在加入选中的搜索结果并解析连接地址。
+	// 正在加入选中的搜索结果，直到客户端真正进入服务器。
 	Joining
 };
 
@@ -41,11 +41,7 @@ enum class EMultiplayerReconnectState : uint8
 	// 已安排有限退避定时器，尚未发起下一次连接。
 	Waiting,
 	// 已调用 ClientTravel，等待本地 PlayerController 进入 PlayingState。
-	Connecting,
-	// 客户端已经重新进入可操作状态。
-	Succeeded,
-	// 地址不可用、错误不可重试或重试次数耗尽。
-	Failed
+	Connecting
 };
 
 /** 同一个 DestroySession 回调可能服务于重新建房或主动退出，必须显式区分后续动作。 */
@@ -102,8 +98,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * (*) 选择 GameInstance 是因为它不会随地图切换销毁，适合保存会话接口、连接地址和重试状态。
  * (*) OnlineSession 负责发现和加入会话，真正建立游戏网络连接还需要解析 ConnectString 并执行
  * ClientTravel；“JoinSession 成功”和“玩家已经进入 PlayingState”是两个不同阶段。
- * (**) OnlineSubsystem 的操作是异步的；必须限制同一时间只有一个操作，并在完成或退出时
- * 清理 DelegateHandle，否则容易发生重复回调或访问已经失效的对象。
+ * (**) OnlineSubsystem 使用完成回调报告结果，Null 的部分路径会在请求函数返回前同步回调。
+ * 因此先绑定再请求，回调先清自己的句柄；返回失败且句柄仍有效时，入口才补做失败清理。
+ * 同一时间只允许一条菜单会话流程，避免旧回调覆盖新操作；这属于流程限制，不是多线程锁。
  *
  * 当前默认使用 OnlineSubsystemNull，面向同一局域网的发现与连接；它不是带账号、邀请、匹配
  * 和云端大厅的完整线上服务。自动重连也只尝试回到仍存活且地址未变化的原服务器。
@@ -149,7 +146,7 @@ public:
 
 	/**
 	 * 本地 PlayerController 进入可操作状态后调用。
-	 * (**) 发出 ClientTravel 不等于连接成功，进入 PlayingState 才说明玩家已真正加入游戏。
+	 * (**) 本项目用客户端进入 PlayingState 结束 Joining；这不保证所有 Actor 属性和 UI 都已就绪。
 	 */
 	void NotifyClientConnected();
 
@@ -170,26 +167,34 @@ private:
 	void BindDestroyDelegate(EMultiplayerDestroyPurpose Purpose);
 	// Session 销毁完成或无需销毁时，统一返回默认主菜单。
 	void FinishLeaveGame();
-	// 统一解绑所有会话 DelegateHandle；OnlineSubsystem 不替业务对象管理这些句柄。
+	// 统一解绑会话回调并重置句柄及销毁用途。
 	void ClearSessionDelegates();
 	// 获取异步操作占用权；已有操作时拒绝新请求并保持原回调链不变。
 	bool BeginSessionOperation(EMultiplayerSessionOperation NewOperation);
 	// 释放异步操作占用权并通知菜单恢复交互。
 	void EndSessionOperation();
+	// 连接失败时移除客户端本地会话记录，避免后续 JoinSession 被同名记录阻塞。
+	void RemoveFailedLocalSession();
 	// 发起新连接前停止旧重试，并清空旧地址，避免过期定时器把玩家带回旧服务器。
 	void CancelAutomaticReconnect();
 
-	// 以下四个回调分别收口对应的 OnlineSubsystem 异步操作，并负责释放自己的 DelegateHandle。
+	// 完成回调先释放自己的 DelegateHandle；Create 只公布当前地图的房间，不再发起地图迁移。
 	void HandleCreateSessionComplete(FName SessionName, bool bWasSuccessful);
+	// 转换结果后先结束 Finding 再广播，允许菜单在结果回调里直接发起加入。
 	void HandleFindSessionsComplete(bool bWasSuccessful);
+	// 成功后解析地址并发起 ClientTravel；Joining 保持到 NotifyClientConnected 或连接失败。
 	void HandleJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
+	// 按 DestroyPurpose 分别续接重新建房或返回菜单，不将两种后续行为混用。
 	void HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful);
+	// 退出后核对默认菜单已加载并解除限制；开发构建还用此通知启动命令行自动化。
 	void HandlePostLoadMap(UWorld* LoadedWorld);
+	// 引擎全局事件必须先核对 World/Driver 归属，再决定有限重连还是清理失败状态。
 	void HandleNetworkFailure(
 		UWorld* World,
 		UNetDriver* NetDriver,
 		ENetworkFailure::Type FailureType,
 		const FString& ErrorString);
+	// 加载失败分别处理退出、重连和普通加入；这是错误回收入口，不代表实现了自动选关。
 	void HandleTravelFailure(
 		UWorld* World,
 		ETravelFailure::Type FailureType,
@@ -209,8 +214,11 @@ private:
 	void TryAutomaticReconnect();
 
 #if !UE_BUILD_SHIPPING
-	void SimulateConnectionLossForTesting();
+	// 注入引擎失败事件以覆盖重连分支；不会真正中断物理网络。
+	void InjectNetworkFailureForTesting();
+	// 按命令行 Host/Join 角色启动一次开发测试，正常游玩不触发。
 	void StartSessionAutomationIfRequested();
+	// 提交一轮测试搜索，是否重试由搜索完成回调判断。
 	void RunSessionAutomationFind();
 #endif
 
@@ -218,7 +226,7 @@ private:
 	IOnlineSessionPtr SessionInterface;
 	TSharedPtr<FOnlineSessionSearch> SessionSearch;
 
-	// 每类异步操作各自保存句柄，便于精确解绑，不能用 RemoveAll 代替明确的生命周期管理。
+	// 句柄是订阅凭据，不拥有 GameInstance；按类型精确解绑，避免影响同一接口的其他订阅者。
 	FDelegateHandle CreateSessionCompleteHandle;
 	FDelegateHandle FindSessionsCompleteHandle;
 	FDelegateHandle JoinSessionCompleteHandle;
@@ -243,12 +251,11 @@ private:
 	EMultiplayerReconnectState ReconnectState = EMultiplayerReconnectState::Idle;
 	FTimerHandle ReconnectTimerHandle;
 	int32 ReconnectAttempt = 0;
+	// 会话操作 None 不代表菜单已经可用：退出还需等默认地图加载完成。
 	bool bLeaveInProgress = false;
-	// 部分子系统可能在 JoinSession 返回前同步执行完成回调，用它区分真实拒绝与回调重入。
-	bool bJoinCompletionReceived = false;
 
 #if !UE_BUILD_SHIPPING
-	// 开发包专用的断线模拟入口，Shipping 构建不包含测试行为。
+	// 开发包专用的失败事件注入入口；它验证重连逻辑，不等同于真实断网测试。
 	FTimerHandle ReconnectTestTimerHandle;
 	FTimerHandle SessionAutomationTimerHandle;
 	bool bReconnectTestTriggered = false;
@@ -256,5 +263,7 @@ private:
 	bool bSessionAutomationTravelStarted = false;
 	bool bSessionAutomationJoinConfirmed = false;
 	int32 SessionAutomationFindAttempt = 0;
+	// 每次双进程测试独有；客户端只加入同一 token 的主机会话，避免并发测试串房。
+	FString SessionAutomationToken;
 #endif
 };

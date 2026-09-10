@@ -25,6 +25,9 @@ struct FInputActionValue;
  * 无需再手写角色位置同步。
  * (**) “本机存在这个 Character”不等于“本地拥有它”。输入映射只应安装到持有 LocalPlayer 的
  * 本地控制器；服务器上的远端 Pawn 和客户端看到的其他玩家都不能绑定本地输入。
+ *
+ * 职责边界：本类不判断钥匙进度、机关条件或胜利结果；这些状态由服务器玩法 Actor 和
+ * GameMode 维护，角色只提供移动能力以及服务器可查询的携带组件。
  */
 UCLASS(config = Game)
 class AmultiplayerCharacter : public ACharacter
@@ -33,13 +36,6 @@ class AmultiplayerCharacter : public ACharacter
 
 public:
 	AmultiplayerCharacter();
-
-	// 摄像机组件只负责本地观察，不参与服务器玩法判定和网络同步。
-	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
-	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
-
-	// 供服务器钥匙/插槽逻辑快速访问该角色的单钥匙携带槽。
-	UmultiplayerCoopCarryComponent* GetCarryComponent() const { return CarryComponent; }
 
 protected:
 	// 控制器发生变化时重新判断本地所有权，并为本地玩家安装输入映射上下文。

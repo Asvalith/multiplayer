@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet("Normal", "Moderate", "Harsh", "All")]
     [string]$Profile = "Normal",
@@ -75,6 +75,20 @@ function Read-Log {
     }
 }
 
+function Get-FileSha256 {
+    param([string]$Path)
+
+    $Sha256 = [Security.Cryptography.SHA256]::Create()
+    $Stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString($Sha256.ComputeHash($Stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $Stream.Dispose()
+        $Sha256.Dispose()
+    }
+}
+
 function Get-SourceFingerprint {
     $Files = @()
     foreach ($Directory in @("Source", "Scripts", "Config")) {
@@ -88,7 +102,7 @@ function Get-SourceFingerprint {
 
     $ManifestLines = @($Files | Sort-Object FullName | ForEach-Object {
         $RelativePath = $_.FullName.Substring($ProjectRoot.Length).TrimStart("\", "/")
-        $FileHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        $FileHash = Get-FileSha256 -Path $_.FullName
         "$RelativePath`t$FileHash"
     })
     $ManifestBytes = [Text.Encoding]::UTF8.GetBytes(($ManifestLines -join "`n"))
@@ -118,6 +132,12 @@ function Wait-ForLog {
         }
 
         $Text = Read-Log -Path $Path
+        $RuntimeFailure = [regex]::Match(
+            $Text,
+            "(?im)(Coop automation failed:|Fatal error:|Ensure condition failed|LogMultiplayer:\s+Error:)")
+        if ($RuntimeFailure.Success) {
+            throw "$Description failed early because '$($RuntimeFailure.Value)' appeared in $Path."
+        }
         if ([regex]::Matches($Text, $Pattern).Count -ge $ExpectedCount) {
             return
         }
@@ -136,11 +156,28 @@ function Stop-Game {
         return
     }
 
-    $Process.Refresh()
-    if (-not $Process.HasExited) {
-        Stop-Process -Id $Process.Id -Force
-        Wait-Process -Id $Process.Id -Timeout 10 -ErrorAction SilentlyContinue | Out-Null
+    [int]$ProcessId = $Process.Id
+    if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+        return
     }
+
+    # Windows PowerShell 5 的 Process.Kill() 对 UnrealEditor 偶尔不生效；taskkill 直接按 PID
+    # 终止目标实例。这里不使用 /T，避免误伤该 UE 实例启动的共享 DDC/Trace 服务。
+    $TaskKillPath = Join-Path $env:SystemRoot "System32\taskkill.exe"
+    & $TaskKillPath /PID $ProcessId /F 2>$null | Out-Null
+    [int]$TaskKillExitCode = $LASTEXITCODE
+
+    [int]$StopAttempt = 0
+    while ($StopAttempt -lt 100) {
+        if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+            return
+        }
+
+        Start-Sleep -Milliseconds 100
+        $StopAttempt += 1
+    }
+
+    throw "Test process $ProcessId did not exit within 10 seconds after taskkill (exit code $TaskKillExitCode)."
 }
 
 function Get-NetworkArguments {
@@ -189,9 +226,14 @@ function Assert-Logs {
     param(
         [string[]]$Paths,
         [pscustomobject]$NetworkProfile,
-        [string]$ReconnectClientLog = ""
+        [string]$ReconnectClientLog = "",
+        [bool]$ValidateGameplayFlow = $false
     )
 
+    $CleanupMarker = "Local session cleaned; returning to the main menu."
+    $MenuArrivalMarker = "Leave transition completed in the main menu:"
+    [int]$CleanupIndex = -1
+    [int]$MenuArrivalIndex = -1
     foreach ($Path in $Paths) {
         $Text = Read-Log -Path $Path
         if ($Path -eq $ReconnectClientLog) {
@@ -200,26 +242,36 @@ function Assert-Logs {
                 "(?im)^.*Development reconnect test.*(?:\r?\n)?",
                 "")
         }
-        if ($TestRestartAndLeave) {
-            # 只忽略“本地 Session 已清理”之后的预期关服日志；更早发生的 ConnectionLost 仍会判失败。
-            $CleanupMarker = "Local session cleaned; returning to the main menu."
-            $CleanupIndex = $Text.IndexOf($CleanupMarker, [StringComparison]::Ordinal)
-            if ($CleanupIndex -ge 0) {
-                $BeforeCleanup = $Text.Substring(0, $CleanupIndex)
-                $AfterCleanup = $Text.Substring($CleanupIndex)
-                $AfterCleanup = [regex]::Replace(
-                    $AfterCleanup,
-                    "(?im)^.*(?:BroadcastNetworkFailure: FailureType = ConnectionLost|NetworkFailure: ConnectionLost).*(?:\r?\n)?",
+        $FailureScanText = $Text
+        $CleanupIndex = $Text.IndexOf($CleanupMarker, [StringComparison]::Ordinal)
+        $MenuArrivalIndex = $Text.IndexOf($MenuArrivalMarker, [StringComparison]::Ordinal)
+        if ($CleanupIndex -ge 0 -and $MenuArrivalIndex -gt $CleanupIndex) {
+            # 主动退出拆网会产生三种固定的 LogNet ConnectionLost 行；只删除这些预期行。
+            # cleanup 之后的 Fatal、Ensure 或项目错误仍保留，不能截断整段日志造成假通过。
+            $ExpectedLeaveDisconnectPattern =
+                "(?im)^.*LogNet:\s+(?:Error:\s+UEngine::BroadcastNetworkFailure:\s+FailureType\s*=\s*ConnectionLost|Warning:\s+Network Failure:\s+GameNetDriver\[ConnectionLost\]|NetworkFailure:\s+ConnectionLost).*(?:\r?\n|$)"
+            $FailureScanText =
+                $Text.Substring(0, $CleanupIndex) +
+                [regex]::Replace(
+                    $Text.Substring($CleanupIndex),
+                    $ExpectedLeaveDisconnectPattern,
                     "")
-                $Text = $BeforeCleanup + $AfterCleanup
-            }
         }
 
         $FailurePattern =
-            "(?im)(Fatal error:|Ensure condition failed|LogMultiplayer:\s+Error:|LogNet:\s+Error:|NetworkFailure:|TravelFailure:)"
-        $Failure = [regex]::Match($Text, $FailurePattern)
+            "(?im)(Fatal error:|Ensure condition failed|LogMultiplayer:\s+Error:|LogNet:\s+Error:|LogPlayerController:\s+Error:|NetworkFailure:|TravelFailure:)"
+        $Failure = [regex]::Match($FailureScanText, $FailurePattern)
         if ($Failure.Success) {
             throw "Runtime failure marker '$($Failure.Value)' was found in $Path."
+        }
+
+        if ($ValidateGameplayFlow) {
+            $VictoryTransitionCount = [regex]::Matches(
+                $Text,
+                "Coop objective: victory transition broadcast\.").Count
+            if ($VictoryTransitionCount -ne 1) {
+                throw "Expected exactly one victory transition in $Path, found $VictoryTransitionCount."
+            }
         }
 
         if ($NetworkProfile.LagMs -gt 0) {
@@ -253,7 +305,10 @@ function Invoke-NetworkTest {
     try {
         Write-Host "[$($NetworkProfile.Name)] Starting listen server on port $TestPort..."
         $HostArguments = @()
-        if ($TestSession) { $HostArguments += "-CoopTestHostSession" }
+        if ($TestSession) {
+            $HostArguments += "-CoopTestHostSession"
+            $HostArguments += "-CoopTestToken=$RunId"
+        }
         if ($TestGameplayFlow) { $HostArguments += "-CoopTestGameplayFlow" }
         if ($TestRestartAndLeave) { $HostArguments += "-CoopTestRestart" }
         if ($TestBandwidthProfile -ne "None") {
@@ -272,7 +327,10 @@ function Invoke-NetworkTest {
         Write-Host "[$($NetworkProfile.Name)] Starting client..."
         $ClientArguments = @()
         if ($TestReconnect) { $ClientArguments += "-CoopTestReconnect" }
-        if ($TestSession) { $ClientArguments += "-CoopTestJoinSession" }
+        if ($TestSession) {
+            $ClientArguments += "-CoopTestJoinSession"
+            $ClientArguments += "-CoopTestToken=$RunId"
+        }
         $ClientAddress = if ($TestSession) { "/Game/UI/mainmenu" } else { "127.0.0.1:$TestPort" }
         $ClientProcess = Start-Game -Address $ClientAddress -LogPath $ClientLog -NetworkProfile $NetworkProfile -TestPort $TestPort -ExtraArguments $ClientArguments
         $Processes += $ClientProcess
@@ -296,7 +354,7 @@ function Invoke-NetworkTest {
             Write-Host "[$($NetworkProfile.Name)] Waiting for the same client process to reconnect..."
             Wait-ForLog -Path $ClientLog -Pattern "Automatic reconnect succeeded after" -ExpectedCount 1 -Process $ClientProcess -Description "Automatic reconnect"
             Wait-ForLog -Path $HostLog -Pattern "Join succeeded:" -ExpectedCount 2 -Process $HostProcess -Description "Server reconnect acknowledgement"
-            $Evidence += "The same client process automatically reconnected after a simulated connection loss"
+            $Evidence += "The same client process automatically reconnected after an injected ConnectionLost failure event"
         }
 
         if ($TestGameplayFlow) {
@@ -305,7 +363,7 @@ function Invoke-NetworkTest {
             Wait-ForLog -Path $HostLog -Pattern "Coop automation: server-driven moving platform flow passed\." -ExpectedCount 1 -Process $HostProcess -Description "Moving platform flow"
             Wait-ForLog -Path $HostLog -Pattern "Coop automation: FULL GAMEPLAY FLOW PASS\." -ExpectedCount 1 -Process $HostProcess -Description "Authoritative victory flow"
             Wait-ForLog -Path $ClientLog -Pattern "Victory UI displayed with restart and leave actions\." -ExpectedCount 1 -Process $ClientProcess -Description "Client victory UI"
-            $Evidence += "Real server actors completed key/socket, plate, gate, platform, win-area and client victory UI paths"
+            $Evidence += "Server actors completed key/socket state and duplicate guards, plate, gate, platform endpoint, win-area and client victory UI paths"
 
             if ($TestBandwidthProfile -ne "None") {
                 Wait-ForLog -Path $HostLog -Pattern "Coop bandwidth sample: Profile=$TestBandwidthProfile" -ExpectedCount 1 -Process $HostProcess -Description "Bandwidth sample"
@@ -334,11 +392,19 @@ function Invoke-NetworkTest {
             Wait-ForLog -Path $HostLog -Pattern "Coop automation: initiating complete session leave\." -ExpectedCount 1 -Process $HostProcess -Description "Host leave"
             Wait-ForLog -Path $HostLog -Pattern "Local session cleaned; returning to the main menu\." -ExpectedCount 1 -Process $HostProcess -Description "Host session cleanup"
             Wait-ForLog -Path $ClientLog -Pattern "Local session cleaned; returning to the main menu\." -ExpectedCount 1 -Process $ClientProcess -Description "Client session cleanup"
+            Wait-ForLog -Path $HostLog -Pattern "Leave transition completed in the main menu: /Game/UI/mainmenu" -ExpectedCount 1 -Process $HostProcess -Description "Host menu arrival"
+            Wait-ForLog -Path $ClientLog -Pattern "Leave transition completed in the main menu: /Game/UI/mainmenu" -ExpectedCount 1 -Process $ClientProcess -Description "Client menu arrival"
             $Evidence += "Server reloaded only the current map, then host and client cleaned their sessions and returned to the menu"
         }
 
+        # 最终状态已经由上面的明确日志标记确认。先按客户端到主机的逆序停止进程，
+        # 冻结日志后再做全量错误扫描，避免 UE 仍在追加拆网消息时产生不一致快照。
+        Stop-Game -Process $ClientProcess
+        Stop-Game -Process $HostProcess
+        $Processes = @()
+
         $ExpectedDisconnectLog = if ($TestReconnect) { $ClientLog } else { "" }
-        Assert-Logs -Paths $Logs -NetworkProfile $NetworkProfile -ReconnectClientLog $ExpectedDisconnectLog
+        Assert-Logs -Paths $Logs -NetworkProfile $NetworkProfile -ReconnectClientLog $ExpectedDisconnectLog -ValidateGameplayFlow ([bool]$TestGameplayFlow)
         $Success = $true
     }
     catch {
@@ -346,7 +412,20 @@ function Invoke-NetworkTest {
     }
     finally {
         foreach ($Process in $Processes) {
-            Stop-Game -Process $Process
+            try {
+                Stop-Game -Process $Process
+            }
+            catch {
+                # 一个实例清理失败时仍继续终止其余 PID，并把清理错误写入本组测试结果。
+                $Success = $false
+                $CleanupError = $_.Exception.Message
+                if ([string]::IsNullOrWhiteSpace($ErrorMessage)) {
+                    $ErrorMessage = $CleanupError
+                }
+                else {
+                    $ErrorMessage += " | Cleanup: $CleanupError"
+                }
+            }
         }
     }
 
@@ -389,6 +468,12 @@ if ($TestRestartAndLeave -and -not $TestGameplayFlow) {
 }
 if ($CompareBandwidth -and -not $TestGameplayFlow) {
     throw "CompareBandwidth requires TestGameplayFlow."
+}
+if ($CompareBandwidth -and $Profile -eq "All") {
+    throw "CompareBandwidth accepts one network profile at a time; choose Normal, Moderate, or Harsh."
+}
+if ($CompareBandwidth -and $BandwidthProfile -ne "None") {
+    throw "Do not combine CompareBandwidth with BandwidthProfile; comparison already runs Baseline and Optimized."
 }
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null

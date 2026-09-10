@@ -16,6 +16,9 @@
  * (*) GameMode 与 GameState 的分工：前者负责规则和写入权限，后者负责向所有连接复制共享状态。
  * (**) 服务器权威不等于“调用者一定可信”。即使调用来自服务器 Actor，也要再次检查当前进度和
  * 胜利状态，防止重复 Overlap、重复 Delegate 或同一帧的多个事件造成重复结算。
+ *
+ * 所有公开函数只提交服务器规则结果，不直接创建客户端界面；客户端可见状态统一写入
+ * CoopGameState，再由属性复制分发。
  */
 UCLASS(minimalapi)
 class AmultiplayerGameMode : public AGameMode

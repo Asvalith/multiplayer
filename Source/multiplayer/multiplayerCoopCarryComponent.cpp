@@ -5,6 +5,10 @@
 #include "GameFramework/Actor.h"
 #include "multiplayerCoopKey.h"
 
+/*
+ * 该组件是服务器侧的单槽规则缓存，不 Tick、不复制。它让插槽能直接查询角色当前钥匙，
+ * 但不会成为第二份网络状态；客户端表现始终以 Key::Holder 为准。
+ */
 UmultiplayerCoopCarryComponent::UmultiplayerCoopCarryComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
@@ -12,6 +16,11 @@ UmultiplayerCoopCarryComponent::UmultiplayerCoopCarryComponent()
 	SetIsReplicatedByDefault(false);
 }
 
+/*
+ * 仅服务器在确认拾取候选后调用。成功会占用角色的唯一携带槽；如果槽中已经是同一把钥匙，
+ * 重复调用仍返回成功，但绝不会覆盖另一把钥匙。
+ * (**) 先占槽再写 Key::Holder，才能拦住同一角色短时间内收到的多次重叠事件。
+ */
 bool UmultiplayerCoopCarryComponent::TryCarryKey(AmultiplayerCoopKey* Key)
 {
 	// 这是服务器内部规则缓存，不接受客户端直接写入；真正复制给客户端的是 Key::Holder。
@@ -38,6 +47,10 @@ bool UmultiplayerCoopCarryComponent::TryCarryKey(AmultiplayerCoopKey* Key)
 	return true;
 }
 
+/*
+ * 由钥匙安装、销毁或持有者销毁的收口路径调用。只有当前值仍等于 ExpectedKey 才清空，
+ * 因此旧钥匙的迟到清理不会误伤随后拾取的新钥匙。
+ */
 void UmultiplayerCoopCarryComponent::ClearCarriedKey(
 	const AmultiplayerCoopKey* ExpectedKey)
 {

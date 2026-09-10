@@ -12,6 +12,12 @@
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
+/*
+ * 压力板把碰撞统计委托给 Occupancy，自己只组合规则和播放状态表现。
+ * 占用变化与开关变化是两类事件：玩家进出可能不改变开关，但仍会影响合作门的不同玩家计数。
+ */
+
+/** 创建互相独立的触发区域和可移动网格；网格压下不会带动触发区改变人数检测范围。 */
 AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 {
 	// 逻辑通过事件驱动，Tick 只服务于压下/弹起的短暂视觉过渡。
@@ -20,9 +26,8 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 	bReplicates = true;
 	// 压力板不承载权威位移，只复制激活状态并在各端播放相同的按压表现。
 	SetReplicateMovement(false);
-	// bPlateActive 低频变化，保持较低网络频率；状态改变时 ForceNetUpdate 提升发送时效。
+	// bPlateActive 低频变化，限制网络更新频率；状态改变时 ForceNetUpdate 提升发送时效。
 	SetNetUpdateFrequency(5.0f);
-	SetMinNetUpdateFrequency(2.0f);
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -56,6 +61,7 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 	}
 }
 
+/** 缓存关卡摆放位置、绑定人数变化；服务器按配置追加目标监听并补算初始激活状态。 */
 void AmultiplayerPressurePlate::BeginPlay()
 {
 	Super::BeginPlay();
@@ -91,10 +97,11 @@ void AmultiplayerPressurePlate::BeginPlay()
 	EvaluatePlateState();
 }
 
+/** 撤销人数和目标监听；先取消本 Actor 的监听，再清空人数，避免清理时触发自身规则。 */
 void AmultiplayerPressurePlate::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
-	// 对称解绑组件和外部 GameState；仅依赖 UObject 自动销毁不能移除对方保存的动态 Delegate。
+	// 对称解绑组件和外部 GameState，明确终止事件关系，不把弱委托的失效检查当成日常清理。
 	PlayerOccupancy->OnOccupancyChanged.RemoveDynamic(
 		this,
 		&AmultiplayerPressurePlate::HandleOccupancyChanged);
@@ -109,6 +116,7 @@ void AmultiplayerPressurePlate::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
+/** 按当前开关匀速压下或弹起；到达后停 Tick，静止状态无需逐帧重算。 */
 void AmultiplayerPressurePlate::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -132,6 +140,7 @@ void AmultiplayerPressurePlate::Tick(float DeltaSeconds)
 	}
 }
 
+/** 只注册激活布尔值，人数表和压下过程不作为网络属性发送。 */
 void AmultiplayerPressurePlate::GetLifetimeReplicatedProps(
 	TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -140,12 +149,14 @@ void AmultiplayerPressurePlate::GetLifetimeReplicatedProps(
 	DOREPLIFETIME(AmultiplayerPressurePlate, bPlateActive);
 }
 
+/** 向输出数组追加有效不同角色；服务器合作门用它合并多个压力板的玩家集合。 */
 void AmultiplayerPressurePlate::GetOccupyingCharacters(
 	TArray<ACharacter*>& OutCharacters) const
 {
 	PlayerOccupancy->GetOccupyingCharacters(OutCharacters);
 }
 
+/** 提供实际触发区中心给关卡调试和测试，避免把网格位置误当成检测区域。 */
 FVector AmultiplayerPressurePlate::GetActivationCenter() const
 {
 	return ActivationTrigger != nullptr
@@ -153,12 +164,19 @@ FVector AmultiplayerPressurePlate::GetActivationCenter() const
 		: GetActorLocation();
 }
 
+/** 先更新本板开关，再通知上层占用改变，使监听者读取到相互一致的最新状态。 */
 void AmultiplayerPressurePlate::HandleOccupancyChanged(int32 PlayerCount)
 {
-	// 事件参数只表示触发原因；统一从 PlayerOccupancy 和 GameState 读取同一时刻的完整条件。
+	// 先更新压力板状态，再发布完整的占用变化。这样门收到事件时能同时读取最新激活状态和玩家集合。
 	EvaluatePlateState();
+	if (HasAuthority())
+	{
+		// (**) 激活状态可能仍为 true，但不同玩家集合已经改变；不能用 ActiveChanged 代替该事件。
+		OnPlateOccupancyChanged.Broadcast(this, PlayerCount);
+	}
 }
 
+/** 玩家已在板上等待时，目标完成也要触发判定；不要求玩家重新进入触发区。 */
 void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
 	int32 ActivatedKeys,
 	int32 RequiredKeys)
@@ -167,6 +185,10 @@ void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
 	EvaluatePlateState();
 }
 
+/**
+ * 服务器根据区域是否有人和可选目标条件判定激活；锁存模式在首次激活后保持开启。
+ * (**) 这里仅跳过相同开关的通知，占用事件仍由调用方发送，不能一并丢弃。
+ */
 void AmultiplayerPressurePlate::EvaluatePlateState()
 {
 	if (!HasAuthority())
@@ -203,12 +225,14 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 	ForceNetUpdate();
 }
 
+/** 消费服务器复制结果；远端不使用本地碰撞重算开关。 */
 void AmultiplayerPressurePlate::OnRep_PlateActive()
 {
 	// 客户端只消费服务器结果并更新表现，不在这里重新读取本地碰撞人数。
 	HandlePlateActiveChanged();
 }
 
+/** 开启网格过渡并广播本机事件；蓝图扩展入口适合音效、材质等表现。 */
 void AmultiplayerPressurePlate::HandlePlateActiveChanged()
 {
 	// 服务器直接写入和客户端 RepNotify 都经过同一出口，Listen Server 与远端客户端表现一致。
@@ -217,6 +241,7 @@ void AmultiplayerPressurePlate::HandlePlateActiveChanged()
 	ReceivePlateVisualStateChanged(bPlateActive);
 }
 
+/** 初次加载直接贴合当前状态；后续变更启用 Tick，从当前网格位置继续过渡。 */
 void AmultiplayerPressurePlate::ApplyPlateState(bool bSnapToTarget)
 {
 	const FVector TargetLocation =

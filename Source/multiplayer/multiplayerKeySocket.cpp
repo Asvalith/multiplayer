@@ -10,6 +10,10 @@
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Character.h"
 
+/*
+ * 构造阶段搭建插槽外观、归位显示点和玩家触发区。插槽保留网络 Actor 身份，
+ * 但不复制自己的本地门闩；两名玩家真正共享的是 GameState 中的总进度。
+ */
 AmultiplayerKeySocket::AmultiplayerKeySocket()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -35,6 +39,10 @@ AmultiplayerKeySocket::AmultiplayerKeySocket()
 	ActivationTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 }
 
+/*
+ * 只有服务器绑定玩家进入事件，客户端关闭触发体并等待权威进度同步。
+ * 这样角色携带钥匙进入插槽时，不会在每台机器上各自消费一次。
+ */
 void AmultiplayerKeySocket::BeginPlay()
 {
 	Super::BeginPlay();
@@ -52,6 +60,7 @@ void AmultiplayerKeySocket::BeginPlay()
 	}
 }
 
+/* 关卡卸载或插槽销毁时解除碰撞回调，避免外部组件继续调用即将结束生命周期的 Actor。 */
 void AmultiplayerKeySocket::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ActivationTrigger->OnComponentBeginOverlap.RemoveDynamic(
@@ -60,6 +69,10 @@ void AmultiplayerKeySocket::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
+/*
+ * 供钥匙预绑定路径和自动测试调用的服务器入口。它要求钥匙先成功归位到显示点，
+ * 再锁定插槽并登记进度，避免出现“进度增加了但钥匙没有归位”的半完成状态。
+ */
 bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 {
 	// InstallAtSocket 成功后钥匙已经进入终态；只有这时才允许提交共享进度，保持表现和规则一致。
@@ -72,6 +85,10 @@ bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 
 	return true;
 }
+/*
+ * 普通携带路径的服务器入口。角色进入区域后，同时核对角色携带槽和 Key::Holder；
+ * 只有两边仍指向同一关系时才消费钥匙并登记进度。
+ */
 void AmultiplayerKeySocket::HandleSocketOverlap(
 	UPrimitiveComponent* OverlappedComponent,
 	AActor* OtherActor,
@@ -101,6 +118,10 @@ void AmultiplayerKeySocket::HandleSocketOverlap(
 	CommitServerActivation();
 }
 
+/*
+ * 两条钥匙路径共用的一次性提交点。先关闭触发区和设置本地门闩，再通知 GameMode；
+ * (**) 这个顺序能挡住重复 Overlap，以及 GameMode 通知链中可能同步发生的再次调用。
+ */
 void AmultiplayerKeySocket::CommitServerActivation()
 {
 	if (!HasAuthority() || bActivated)
@@ -120,6 +141,10 @@ void AmultiplayerKeySocket::CommitServerActivation()
 	}
 }
 
+/*
+ * 服务器只读查询角色当前携带物，并交叉验证钥匙的反向 Holder。
+ * 双向检查不是两份网络真相，而是用服务器缓存发现迟到清理或失效引用。
+ */
 AmultiplayerCoopKey* AmultiplayerKeySocket::FindCarriedKey(
 	ACharacter* Character) const
 {

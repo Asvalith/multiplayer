@@ -19,12 +19,13 @@ class UStaticMeshComponent;
  * 再通过 RequiredPlates 建立引用，避免门和具体触发区域绑死。
  *
  * 服务器监听每块压力板以及可选的目标进度变化，重新计算 bGateOpen；客户端只收到开关状态，
- * 使用相同的 ClosedPoint/OpenPoint 插值门网格。门的碰撞随网格移动，不由客户端决定能否通过。
+ * 使用相同的 ClosedPoint/OpenPoint 插值门网格。各端碰撞随本地门网格移动，角色最终位置仍以服务器为准。
+ * 这里没有同步动画起始时间，也没有预测或回滚；网络延迟下，两端门的过渡进度可能暂时不同。
  *
  * (*) 门只复制开关状态，各端根据相同端点播放表现；相比持续复制门的位置，网络开销更小。
  * (**) 判定时同时检查激活压力板数量和不同玩家数量，防止一个玩家同时压住多块板绕过双人条件。
- * (**) RequiredPlates 是关卡实例引用，必须在 EndPlay 对每个外部 Delegate 对称解绑；否则重新加载
- * 关卡或销毁机关后，压力板仍可能回调失效对象。
+ * (**) RequiredPlates 是关卡实例引用，EndPlay 对每个外部 Delegate 对称解绑，明确结束依赖关系；
+ * 不把 UObject 委托的失效对象保护当作日常清理流程。
  */
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerCoopGate : public AActor
@@ -40,10 +41,10 @@ public:
 	// 服务器返回权威状态，客户端返回最近一次复制状态；不应用网格当前位置反推逻辑状态。
 	bool IsGateOpen() const { return bGateOpen; }
 
-	// 对配置值和实际引用数量取安全范围，避免要求数量超过已配置压力板。
+	// 返回关卡配置要求；运行时有效且去重后的压力板数量不足时保持失败关闭，不能偷偷降低门槛。
 	int32 GetRequiredPlateCount() const;
 
-	// 输出有效的关卡引用，供调试和端到端测试按门的真实依赖关系放置玩家。
+	// 输出服务器规则使用的有效去重集合，供端到端测试读取。
 	void GetRequiredPlates(TArray<AmultiplayerPressurePlate*>& OutPlates) const;
 
 protected:
@@ -54,12 +55,20 @@ protected:
 	void HandleRequiredPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive);
 
 	UFUNCTION()
+	void HandleRequiredPlateOccupancyChanged(AmultiplayerPressurePlate* Plate, int32 PlayerCount);
+
+	UFUNCTION()
+	void HandleRequiredPlateDestroyed(AActor* DestroyedActor);
+
+	UFUNCTION()
 	void HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys);
 
 	UFUNCTION()
 	void OnRep_GateOpen();
 
 private:
+	// 从关卡配置生成有效且不重复的运行时依赖集合；之后所有绑定和计数都只使用该集合。
+	void RebuildRuntimeRequiredPlates();
 	// 仅服务器绑定外部压力板，客户端不重复执行规则组合。
 	void BindRequiredPlates();
 	// 与 BindRequiredPlates 对称，处理关卡卸载和 Actor 销毁。
@@ -87,6 +96,10 @@ private:
 	// 关卡实例显式配置依赖关系，比运行时按类型查找更可控，也支持一个关卡中多组独立机关。
 	UPROPERTY(EditInstanceOnly, Category = "Coop Gate|Rules")
 	TArray<TObjectPtr<AmultiplayerPressurePlate>> RequiredPlates;
+
+	// 服务器在 BeginPlay 从 RequiredPlates 生成，避免空引用或重复引用改变规则含义。
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<AmultiplayerPressurePlate>> RuntimeRequiredPlates;
 
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules", meta = (ClampMin = "1"))
 	int32 RequiredActivePlateCount = 1;

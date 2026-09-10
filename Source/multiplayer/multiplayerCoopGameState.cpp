@@ -2,8 +2,13 @@
 
 #include "multiplayerCoopGameState.h"
 
+#include "multiplayerLog.h"
 #include "Net/UnrealNetwork.h"
 
+/*
+ * 把完整目标快照注册到 UE 属性复制系统。GameState 在服务器和所有客户端都存在，
+ * 因而适合发布共享结果；它不接受客户端写入，真正的修改入口仍由服务器 GameMode 调用。
+ */
 void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
 	TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -11,6 +16,11 @@ void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
 	// UPROPERTY(ReplicatedUsing) 只描述通知方式，DOREPLIFETIME 才真正把属性注册进网络复制列表。
 	DOREPLIFETIME(AmultiplayerCoopGameState, ObjectiveState);
 }
+/*
+ * 服务器唯一写入口。提交前统一修正字段关系，相同快照直接忽略；成功提交会立即通知
+ * Listen Server 本地监听者，并请求尽快复制给远端客户端。
+ * (*) RepNotify 只会因接收复制在客户端触发，服务器本地赋值需要主动走共用通知路径。
+ */
 void AmultiplayerCoopGameState::ApplyAuthoritativeState(
 	const FmultiplayerCoopObjectiveState& NewObjectiveState)
 {
@@ -20,7 +30,7 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(
 	}
 
 	FmultiplayerCoopObjectiveState SanitizedState = NewObjectiveState;
-	// (**) 在唯一写入口维护状态不变量，客户端永远不会看到负数、超量进度或零目标胜利。
+	// (**) 提交前修正负数和超量进度；没有目标时也不允许提交胜利状态。
 	SanitizedState.RequiredKeys = FMath::Max(0, SanitizedState.RequiredKeys);
 	SanitizedState.ActivatedKeys = FMath::Clamp(
 		SanitizedState.ActivatedKeys,
@@ -40,26 +50,37 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(
 	}
 
 	ObjectiveState = SanitizedState;
-	// (*) RepNotify 不会因服务器本地赋值而自动执行，服务器要主动调用共用处理函数。
 	HandleObjectiveStateChanged();
-	// ForceNetUpdate 只提高进入下一次网络更新的优先级，并不是“此行后所有客户端立刻收到”的同步屏障。
+	// ForceNetUpdate 请求尽快进行网络更新，并不是“此行后所有客户端立刻收到”的同步屏障。
 	ForceNetUpdate();
 }
 
+/* 客户端收到服务器快照后的入口，只发布本地观察事件，不反向修改权威状态。 */
 void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 {
 	HandleObjectiveStateChanged();
 }
 
+/*
+ * 服务器本地写入和客户端 RepNotify 的共同通知出口。先复制当前快照并记录本次胜利转换，
+ * 再广播进度，是为了防止监听者在广播过程中同步提交下一份状态。
+ * (**) Delegate 可以同步重入；若广播后再读成员，外层调用可能把内层产生的胜利重复广播。
+ */
 void AmultiplayerCoopGameState::HandleObjectiveStateChanged()
 {
-	// 监听者根据完整当前值刷新，不依赖每一个中间快照都被网络逐次送达。
-	OnObjectiveProgressChanged.Broadcast(
-		ObjectiveState.ActivatedKeys,
-		ObjectiveState.RequiredKeys);
+	const FmultiplayerCoopObjectiveState StateSnapshot = ObjectiveState;
+	const bool bBecameGameWon =
+		!bLastNotifiedGameWon && StateSnapshot.bGameWon;
+	bLastNotifiedGameWon = StateSnapshot.bGameWon;
 
-	if (ObjectiveState.bGameWon)
+	// 监听者根据本次完整快照刷新，不依赖每一个中间快照都被网络逐次送达。
+	OnObjectiveProgressChanged.Broadcast(
+		StateSnapshot.ActivatedKeys,
+		StateSnapshot.RequiredKeys);
+
+	if (bBecameGameWon)
 	{
+		UE_LOG(LogMultiplayer, Log, TEXT("Coop objective: victory transition broadcast."));
 		OnGameWon.Broadcast();
 	}
 }

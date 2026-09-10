@@ -21,6 +21,13 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	bool,
 	bIsActive);
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FOnPressurePlateOccupancyChanged,
+	AmultiplayerPressurePlate*,
+	Plate,
+	int32,
+	PlayerCount);
+
 /**
  * 由服务器判定激活状态的压力板。
  *
@@ -28,7 +35,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
  * 服务器写 bPlateActive -> RepNotify 让各客户端根据同一个离散状态播放压下/弹起表现。
  * 人数统计交给 PlayerOccupancy，本 Actor 只负责激活规则、状态复制和压下表现。
  * (*) 仅复制 bPlateActive，客户端根据状态插值网格位置，减少持续同步位置的开销。
- * 这种策略适合“最终位置确定、过程只影响视觉”的机关；承载玩家的平台不能照搬该方案。
+ * 这种策略适合只需同步开关结果、过渡时序要求较低的机关；本地网格仍有碰撞，
+ * 但服务器不根据客户端的压下进度判定激活。持续承载玩家的平台采用位置复制。
  * (**) Tick 只在视觉过渡期间开启，到达目标后立即关闭，避免静止机关长期空转。
  * (**) 玩家进入和钥匙目标完成的先后顺序不固定，所以人数变化和目标变化都要重新求值，
  * 不能假设一定先完成目标再踩板。
@@ -51,14 +59,14 @@ public:
 	// 返回实际触发体中心，供关卡调试与端到端自动测试按真实碰撞路径移动玩家。
 	FVector GetActivationCenter() const;
 
-	// 门用它判断压力板是否会在玩家离开后保持激活。
-	bool IsLatchedOnceActivated() const { return bLatchOnceActivated; }
-
 	// 从共享 Occupancy 组件取得不同角色列表，供门进一步验证“不同玩家”数量。
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
 
 	// 状态变化的本机事件。依赖权威结果的机关只在服务器绑定，客户端可用于非规则表现。
 	FOnPressurePlateActiveChanged OnPlateActiveChanged;
+
+	// 服务器占用人数变化事件。人数改变但激活布尔值不变时，门仍需重新统计不同玩家。
+	FOnPressurePlateOccupancyChanged OnPlateOccupancyChanged;
 
 protected:
 	virtual void BeginPlay() override;

@@ -44,6 +44,38 @@
 
 ## 代码结构
 
+源码按功能分为五个目录，同一个类的 `.h` 和 `.cpp` 放在一起，仍属于同一个 `multiplayer` 模块。宝物和插槽与其他机关统一放在 `Mechanisms` 中。
+
+下方目录树中的类文件省略 `.h` / `.cpp` 后缀，每项对应一对头文件和实现文件。
+
+```text
+Source/multiplayer/
+├── Core/         GameMode、GameState、公共日志
+│   ├── multiplayerGameMode
+│   ├── multiplayerCoopGameState
+│   └── multiplayerLog
+├── Network/      会话创建、搜索、加入、退出和重连
+│   └── multiplayerGameInstance
+├── Player/       角色输入、玩家控制器
+│   ├── multiplayerCharacter
+│   └── multiplayerCoopPlayerController
+├── Mechanisms/   宝物、插槽、携带组件、压力板、门、平台及区域判定
+│   ├── multiplayerCoopKey
+│   ├── multiplayerKeySocket
+│   ├── multiplayerCoopCarryComponent
+│   ├── multiplayerPressurePlate
+│   ├── multiplayerCoopGate
+│   ├── multiplayerMovingPlatform
+│   ├── multiplayerTransporterComponent
+│   ├── multiplayerPlayerOccupancyComponent
+│   └── multiplayerWinArea
+├── UI/           胜利状态展示、胜利界面
+│   ├── multiplayerVictoryPresenterComponent
+│   └── multiplayerVictoryWidget
+├── multiplayer.Build.cs
+└── multiplayer.h / multiplayer.cpp
+```
+
 | 模块 | 主要职责 |
 | --- | --- |
 | `multiplayerGameInstance` | 会话异步流程、连接地址、网络失败处理和自动重连 |
@@ -53,7 +85,6 @@
 | `multiplayerPlayerOccupancyComponent` | 统一处理区域内玩家筛选、去重和销毁清理 |
 | `multiplayerTransporterComponent` | 只负责服务器上的平台位移 |
 | Key / Socket / Plate / Gate / Platform / WinArea | 各自负责单一机关规则，并把最终判定交给服务器规则层 |
-| `multiplayerCoopTestDriver` | 开发构建中的双实例端到端驱动，按真实机关关系验证完整玩法 |
 
 核心源码位于 [Source/multiplayer](Source/multiplayer)，蓝图和关卡资源位于 [Content](Content)。
 
@@ -123,35 +154,13 @@ C++ 默认胜利界面不依赖蓝图即可工作；`ReceiveCoopGameWon` 仍保�
 
 脚本会从项目目录定位 `multiplayer.uproject`，并启动两个窗口进入主菜单。房间创建、搜索和加入需要在两个窗口中手动操作验证。
 
-### 自动网络回归
+### 手工双实例验证
 
-```powershell
-# 正常网络，并测试一次自动重连
-.\TestTwoPlayers.bat
+1. 在第一个窗口创建局域网房间，在第二个窗口搜索并加入。
+2. 依次检查钥匙自动归位、压力板与门、移动平台，以及两名玩家进入胜利区域后的界面。
+3. 分别检查当前关卡重开、客户端退出和主机退出是否能回到主菜单。
 
-# 100ms 延迟、20ms 波动、2% 丢包
-.\TestTwoPlayers.bat -Profile Moderate
-
-# 200ms 延迟、50ms 波动、5% 丢包
-.\TestTwoPlayers.bat -Profile Harsh
-
-# 运行全部网络配置
-.\TestTwoPlayers.bat -Profile All
-```
-
-测试脚本会启动无画面的 Listen Server 和 Client，检查客户端连接、共享目标初始化、网络参数、自动重连及错误日志，并在 `Saved/TestReports` 生成 JSON 报告。
-
-自动化通过注入 `ConnectionLost` 失败事件验证重连状态机，不等同于真实网卡断开测试；钥匙自动化验证服务器状态和重复登记保护，完整碰撞触发路径仍由双窗口手工验证。
-
-完整项目验证使用：
-
-```powershell
-.\ValidateProject.bat
-```
-
-该入口会先运行三档网络环境下的直连与自动重连，再运行 Session 创建/搜索/加入、钥匙与插槽、全部压力板/门/移动平台、胜利区域、默认胜利 UI、当前关卡重开和双方退出。去除本地绝对路径后的结果保存在 [Tests/Evidence](Tests/Evidence)，可以直接随仓库查看。
-
-带宽数据来自相同确定性玩法流程的受控 A/B：对照组将移动平台网络更新上限设为 100Hz，当前配置保持 30Hz，读取服务器 `UNetDriver::OutTotalBytes`。它用于说明当前参数选择的相对效果，不作为历史版本性能数据。
+这些步骤是建议的人工检查顺序，不代表仓库随附自动测试结果。
 
 ## 当前边界
 

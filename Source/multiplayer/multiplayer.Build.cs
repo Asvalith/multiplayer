@@ -12,6 +12,9 @@ public class multiplayer : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// 按功能目录组织头文件和实现，模块内 include 统一从模块根目录开始查找。
+		PrivateIncludePaths.Add(ModuleDirectory);
+
 		// 反射与引擎对象、增强输入、会话接口和本地 UI 是当前玩法实际使用的模块。
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

@@ -7,6 +7,7 @@
 #include "Engine/EngineBaseTypes.h"
 #include "Engine/TimerHandle.h"
 #include "Interfaces/OnlineSessionInterface.h"
+#include "Core/multiplayerGameplayConfig.h"
 #include "multiplayerGameInstance.generated.h"
 
 /**
@@ -116,9 +117,13 @@ public:
 	// 清理计时器、会话回调和全局失败事件，避免 GameInstance 退出后仍收到异步通知。
 	virtual void Shutdown() override;
 
+	// 每个 GameInstance 启动时读取一次，只向玩法提供经过校验的只读配置。
+	const FmultiplayerGameplayConfig& GetGameplayConfig() const { return GameplayConfig; }
+
 	/**
 	 * 发起主机流程。参数先保存为 Pending 配置；若已有同名会话则先异步销毁，再创建新会话。
 	 * 当前 World 若尚未监听则原地开启 Listen Server；创建成功不会自动切换地图。
+	 * PublicConnections 保留以兼容已有蓝图节点，实际房间容量统一由 Gameplay.json 决定。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Network|Session")
 	void HostGame(const FString& ServerName, int32 PublicConnections, bool bIsLanMatch);
@@ -159,10 +164,14 @@ public:
 	FmultiplayerSessionOperationChanged OnSessionOperationChanged;
 
 private:
+	FmultiplayerGameplayConfig GameplayConfig;
+
 	// 使用 Pending 配置真正调用 OnlineSubsystem::CreateSession。
 	void CreateSession();
 	// 确保当前 World 具备监听连接的 NetDriver；只原地监听，不执行地图切换。
 	bool EnsureCurrentWorldIsListening();
+	// 建房失败只回收本次操作新建的监听，既有 Listen Server 不属于本次回滚范围。
+	void RollbackHostListener();
 	// 为销毁旧会话注册一次回调，并记录完成后是重新建房还是退出。
 	void BindDestroyDelegate(EMultiplayerDestroyPurpose Purpose);
 	// Session 销毁完成或无需销毁时，统一返回默认主菜单。
@@ -208,7 +217,7 @@ private:
 	bool CanRetryNetworkFailure(
 		UNetDriver* NetDriver,
 		ENetworkFailure::Type FailureType) const;
-	// 按 1/2/4 秒有限退避安排下一次尝试，避免断线后无上限高频重连。
+	// 按配置表的有限间隔安排下一次尝试；空数组表示关闭自动重连。
 	void ScheduleAutomaticReconnect();
 	// 使用最近一次 ConnectString 再次 ClientTravel；成功由 NotifyClientConnected 最终确认。
 	void TryAutomaticReconnect();
@@ -228,13 +237,17 @@ private:
 
 	// HostGame 先写入以下 Pending 配置，销毁旧会话完成后 CreateSession 再读取。
 	FString PendingServerName = TEXT("Coop Session");
+	TWeakObjectPtr<UWorld> HostStartedListeningWorld;
+	TWeakObjectPtr<UNetDriver> HostStartedNetDriver;
+#if !UE_BUILD_SHIPPING
+	bool bHostFailureInjected = false;
+#endif
 	/**
 	 * 最近一次可用的直连地址。
 	 * (**) 当前重连只适用于服务器仍存活且地址未改变的短暂掉线；它不会恢复旧 Pawn，
 	 * 也不是跨服务器的账号级断线续玩，共享目标状态由服务器现有 GameState 继续提供。
 	 */
 	FString LastConnectString;
-	int32 PendingPublicConnections = 4;
 	bool bPendingIsLanMatch = true;
 	// 菜单异步操作与网络重连使用两套状态，避免把会话回调和连接恢复混为一谈。
 	EMultiplayerSessionOperation CurrentOperation = EMultiplayerSessionOperation::None;

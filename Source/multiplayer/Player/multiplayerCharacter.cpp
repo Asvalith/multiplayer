@@ -18,7 +18,8 @@
  * 构造阶段只搭建角色的固定组件和默认移动参数，不读取 World，也不执行任何联网规则。
  * 这些子对象会同时存在于服务器和客户端；真正属于本地玩家的输入映射要等控制器确定后再安装。
  */
-AmultiplayerCharacter::AmultiplayerCharacter()
+AmultiplayerCharacter::AmultiplayerCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
 {
 	// 胶囊体负责角色移动碰撞，尺寸与默认第三人称模型匹配。
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
@@ -38,7 +39,9 @@ AmultiplayerCharacter::AmultiplayerCharacter()
 	GetCharacterMovement()->MaxWalkSpeed = 500.f;
 	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
 	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
-	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
+	// (**) 平台起跳会继承基座水平速度；空中无输入时强制刹车会很快抵消这份惯性，
+	// 即使网络完全正常也会落在平台后方。保留惯性，方向调整仍由 AirControl 处理。
+	GetCharacterMovement()->BrakingDecelerationFalling = 0.0f;
 
 	// 弹簧臂会在遮挡时自动收缩，比直接把摄像机挂到角色上更适合第三人称视角。
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));

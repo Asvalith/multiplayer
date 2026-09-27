@@ -181,7 +181,6 @@ bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
 	// 安装前先清理角色携带槽和 OnDestroyed 绑定，保持 bInstalled => Holder == nullptr 的状态约束。
 	ReleaseHolder();
 	bInstalled = true;
-	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	SetOwner(SocketPoint->GetOwner());
 	AttachToComponent(
 		SocketPoint,
@@ -220,32 +219,31 @@ void AmultiplayerCoopKey::HandleHolderDestroyed(AActor* DestroyedActor)
 	}
 
 	ReleaseHolder();
+	// 只有掉落需要恢复自由状态。安装和消费不能先开启拾取碰撞，否则可能同步触发新的拾取。
+	HandleHolderChanged();
+	ForceNetUpdate();
 }
 
 /*
- * 持有关系的唯一清理出口：解绑 OnDestroyed、清角色携带槽、解除附件和网络 Owner，
- * 最后刷新碰撞与 Tick。集中收口可避免安装、消费和断线清理各漏掉一部分状态。
+ * 只清理持有关系，不提前恢复自由状态或发送中间状态。
+ * 安装随后直接挂到插槽，消费随后销毁；只有玩家销毁后的掉落路径才恢复碰撞、附件和 Tick。
  */
 void AmultiplayerCoopKey::ReleaseHolder()
 {
-	if (Holder != nullptr)
+	if (Holder == nullptr)
 	{
-		// 外部对象的 Delegate 必须在解绑或销毁前移除，避免失效回调。
-		Holder->OnDestroyed.RemoveDynamic(this, &AmultiplayerCoopKey::HandleHolderDestroyed);
-		if (UmultiplayerCoopCarryComponent* CarryComponent =
-			Holder->FindComponentByClass<UmultiplayerCoopCarryComponent>())
-		{
-			CarryComponent->ClearCarriedKey(this);
-		}
+		return;
 	}
 
-	// 先解除附着再清 Holder，使服务器保留当前世界位置；随后复制的 Transform 才是有效掉落位置。
-	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	Holder->OnDestroyed.RemoveDynamic(this, &AmultiplayerCoopKey::HandleHolderDestroyed);
+	if (UmultiplayerCoopCarryComponent* CarryComponent =
+		Holder->FindComponentByClass<UmultiplayerCoopCarryComponent>())
+	{
+		CarryComponent->ClearCarriedKey(this);
+	}
+
 	Holder = nullptr;
 	SetOwner(nullptr);
-	ApplyHeldState();
-	RefreshVisualTick();
-	ForceNetUpdate();
 }
 
 /* 客户端收到 Holder 后只恢复附件和外观，不重新执行服务器拾取规则。 */

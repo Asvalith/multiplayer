@@ -1,0 +1,10 @@
+{
+  "SchemaVersion": 1,
+  "SessionMaxPlayers": 2,
+  "WinRequiredPlayers": 2,
+  "PlatformRequiredPlayers": 1,
+  "PlatformMoveSpeed": 150,
+  "DoorMoveSpeed": 250,
+  "PlateMoveSpeed": 80,
+  "ReconnectDelaysSeconds": [1, 2, 4]
+}

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Mechanisms/multiplayerMovingPlatform.h"
+#include "Core/multiplayerGameplayConfig.h"
 
 #include "Components/ArrowComponent.h"
 #include "Components/BoxComponent.h"
@@ -79,6 +80,14 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	}
 }
 
+/** 接收同一份运动复制中的速度，保持客户端起跳时读取的基座数据完整。 */
+void AmultiplayerMovingPlatform::PostNetReceiveVelocity(const FVector& NewVelocity)
+{
+	Super::PostNetReceiveVelocity(NewVelocity);
+	// 运动复制已带有 LinearVelocity，不新增逐帧 RPC。网格速度为零时 CMC 会回退读取 Actor 根速度。
+	if (PlatformRoot) PlatformRoot->ComponentVelocity = NewVelocity;
+}
+
 /** 缓存固定端点；服务器只绑定选中的激活来源，并在绑定后读取一次当前状态。 */
 void AmultiplayerMovingPlatform::BeginPlay()
 {
@@ -96,6 +105,7 @@ void AmultiplayerMovingPlatform::BeginPlay()
 		return;
 	}
 
+	RequiredPlayers = FmultiplayerGameplayConfig::Get(this).PlatformRequiredPlayers;
 	if (ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy)
 	{
 		// 自身占用模式复用通用人数组件，由它处理多碰撞体和 Pawn 销毁。

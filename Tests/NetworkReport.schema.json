@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:multiplayer:network-report:1",
+  "title": "Co-op network validation evidence, version 1",
+  "type": "object",
+  "required": ["schemaVersion", "runId", "generatedAtUtc", "status", "planOnly", "environment", "provenance", "scope", "cases", "summaries"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "generatedAtUtc": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["running", "planned", "passed", "failed"] },
+    "planOnly": { "type": "boolean" },
+    "environment": {
+      "type": "object",
+      "required": ["engineAssociation", "executable", "buildKind", "nullRhi", "topology", "visualValidation"],
+      "properties": { "visualValidation": { "const": false }, "nullRhi": { "type": "boolean" }, "buildKind": { "enum": ["editor-game", "development-game"] } }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["gitCommit", "dirty", "gitStatus", "sourceFingerprintSha256", "sourceManifest", "gameplayConfigSha256", "gameplayConfigText"],
+      "properties": { "dirty": { "type": "boolean" }, "sourceFingerprintSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "sourceManifest": { "type": "array", "items": { "type": "object", "required": ["path", "sha256"] } } }
+    },
+    "scope": { "type": "array", "items": { "type": "string" } },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "mode", "profile", "iteration", "status", "commands", "requiredAssertions", "events", "errors", "metrics"],
+        "properties": {
+          "mode": { "enum": ["Flow", "LateJoin", "Reconnect", "SessionRetry", "Ride", "RideMotion", "Scale"] },
+          "profile": { "enum": ["Normal", "Moderate", "Harsh"] },
+          "status": { "enum": ["planned", "passed", "failed", "unsupported"] },
+          "iteration": { "type": "integer", "minimum": 1 },
+          "commands": { "type": "array", "items": { "type": "object", "required": ["role", "executable", "arguments", "rendered"] } },
+          "requiredAssertions": { "type": "array", "items": { "type": "string" } },
+          "events": { "type": "array", "items": { "type": "object", "required": ["status"] } },
+          "errors": { "type": "array", "items": { "type": "string" } },
+          "metrics": { "type": ["object", "null"] },
+          "motionMetrics": { "type": "array", "items": { "type": "object", "required": ["role", "metrics"] } }
+        }
+      }
+    },
+    "summaries": { "type": "array", "items": { "type": "object", "required": ["group", "attempted", "passed", "measuredSamples", "minimumThreeMeasuredSamples", "medianBytesPerSecond"] } }
+  }
+}

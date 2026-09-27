@@ -7,6 +7,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Core/multiplayerCoopGameState.h"
+#include "Core/multiplayerGameplayConfig.h"
 #include "Core/multiplayerLog.h"
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -28,6 +29,9 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 	SetReplicateMovement(false);
 	// bPlateActive 低频变化，限制网络更新频率；状态改变时 ForceNetUpdate 提升发送时效。
 	SetNetUpdateFrequency(5.0f);
+	// 停止 Tick 不等于停止网络检查。离散机关平时休眠，修改复制状态前刷新休眠。
+	// 使用 DormantAll 而非 Initial，也支持动态生成的机关。
+	NetDormancy = DORM_DormantAll;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -65,6 +69,15 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 void AmultiplayerPressurePlate::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		// 初始速度也是复制数据，不能在休眠期间静默改写。
+		FlushNetDormancy();
+		RuntimePressMoveSpeed = FmultiplayerGameplayConfig::Get(this).PlateMoveSpeed;
+	}
+	UE_LOG(LogMultiplayer, Verbose, TEXT("PressurePlate %s: Authority=%d PressMoveSpeed=%.1f"),
+		*GetName(), HasAuthority(), RuntimePressMoveSpeed);
 
 	// 用关卡实例中的实际摆放位置作为弹起基准，蓝图调整网格后不需要同步修改 C++ 常量。
 	ReleasedRelativeLocation = PlateMesh->GetRelativeLocation();
@@ -120,6 +133,10 @@ void AmultiplayerPressurePlate::EndPlay(
 void AmultiplayerPressurePlate::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (RuntimePressMoveSpeed <= 0.0f)
+	{
+		return;
+	}
 
 	const FVector TargetLocation =
 		ReleasedRelativeLocation
@@ -129,7 +146,7 @@ void AmultiplayerPressurePlate::Tick(float DeltaSeconds)
 		PlateMesh->GetRelativeLocation(),
 		TargetLocation,
 		DeltaSeconds,
-		PressMoveSpeed);
+		RuntimePressMoveSpeed);
 
 	PlateMesh->SetRelativeLocation(NewLocation);
 	if (NewLocation.Equals(TargetLocation, 0.25f))
@@ -140,13 +157,14 @@ void AmultiplayerPressurePlate::Tick(float DeltaSeconds)
 	}
 }
 
-/** 只注册激活布尔值，人数表和压下过程不作为网络属性发送。 */
+/** 运行中只同步激活状态，速度仅初始同步；人数表和压下位置不持续发送。 */
 void AmultiplayerPressurePlate::GetLifetimeReplicatedProps(
 	TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	// 压力板只发送离散逻辑状态，客户端网格位置由 OnRep 后的本地插值恢复。
 	DOREPLIFETIME(AmultiplayerPressurePlate, bPlateActive);
+	DOREPLIFETIME_CONDITION(AmultiplayerPressurePlate, RuntimePressMoveSpeed, COND_InitialOnly);
 }
 
 /** 向输出数组追加有效不同角色；服务器合作门用它合并多个压力板的玩家集合。 */
@@ -191,18 +209,18 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 	const bool bObjectiveReady =
 		!bRequireObjectiveComplete
 		|| (CoopGameState != nullptr && CoopGameState->IsObjectiveComplete());
-	const bool bHasOccupants = PlayerOccupancy->GetPlayerCount() > 0;
+	const int32 PlayerCount = PlayerOccupancy->GetPlayerCount();
 	const bool bNewPlateActive =
 		// 锁存模式一旦激活就保持为真；普通模式则随目标和区域人数实时变化。
 		(bLatchOnceActivated && bPlateActive)
-		|| (bObjectiveReady && bHasOccupants);
+		|| (bObjectiveReady && PlayerCount > 0);
 
 	UE_LOG(
 		LogMultiplayer,
 		Verbose,
 		TEXT("PressurePlate[%s] Players=%d ObjectiveReady=%s Active=%s"),
 		*GetName(),
-		PlayerOccupancy->GetPlayerCount(),
+		PlayerCount,
 		bObjectiveReady ? TEXT("true") : TEXT("false"),
 		bNewPlateActive ? TEXT("true") : TEXT("false"));
 
@@ -212,6 +230,8 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 		return;
 	}
 
+	// (**) 先刷新休眠再写属性，不能只依赖赋值后的 ForceNetUpdate。
+	FlushNetDormancy();
 	bPlateActive = bNewPlateActive;
 	HandlePlateActiveChanged();
 	ForceNetUpdate();

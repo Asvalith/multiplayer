@@ -77,7 +77,7 @@ protected:
 private:
 	// 服务器拾取事务：先占用角色携带槽，再写 Holder、网络 Owner 和本地表现。
 	void PickupBy(ACharacter* Character);
-	// 对称清理 Delegate、携带槽、网络 Owner 与附着关系；可被安装、消费和玩家销毁复用。
+	// 只清理 Delegate、携带槽、Holder 和网络 Owner；安装、销毁、掉落各自提交最终表现。
 	void ReleaseHolder();
 	// 根据当前 Holder 重建附着/分离状态，使服务器直接写入与客户端 OnRep 走同一表现路径。
 	void ApplyHeldState();

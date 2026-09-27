@@ -244,6 +244,13 @@ void UmultiplayerPlayerOccupancyComponent::AddOccupant(AActor* OtherActor)
 	}
 
 	const int32 PreviousPlayerCount = GetPlayerCount();
+	RecordOccupantOverlap(Character);
+	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
+}
+
+/** 首次重叠时绑定销毁回调；批量重建由调用方最后统一通知，不发布中间人数。 */
+void UmultiplayerPlayerOccupancyComponent::RecordOccupantOverlap(ACharacter* Character)
+{
 	int32& OverlapCount = OverlapCounts.FindOrAdd(Character);
 	// 一个 Begin 贡献一个重叠项；角色可能有多个组件或刚体，但对外人数始终只算一人。
 	++OverlapCount;
@@ -253,7 +260,6 @@ void UmultiplayerPlayerOccupancyComponent::AddOccupant(AActor* OtherActor)
 			this,
 			&UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
 	}
-	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
 }
 
 /** 减少已有角色的一条重叠记录；移除最后一项时同步解除销毁监听，未知角色直接忽略。 */
@@ -324,14 +330,7 @@ void UmultiplayerPlayerOccupancyComponent::RebuildOccupantsFromCurrentOverlaps()
 			continue;
 		}
 
-		int32& OverlapCount = OverlapCounts.FindOrAdd(Character);
-		++OverlapCount;
-		if (OverlapCount == 1)
-		{
-			Character->OnDestroyed.AddUniqueDynamic(
-				this,
-				&UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
-		}
+		RecordOccupantOverlap(Character);
 	}
 }
 

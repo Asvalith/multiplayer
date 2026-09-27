@@ -8,6 +8,7 @@
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Character.h"
 #include "Core/multiplayerCoopGameState.h"
+#include "Core/multiplayerGameplayConfig.h"
 #include "Core/multiplayerLog.h"
 #include "Mechanisms/multiplayerPressurePlate.h"
 #include "Net/UnrealNetwork.h"
@@ -29,6 +30,8 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 	SetReplicateMovement(false);
 	// 布尔状态偶发变化，常规网络更新频率设为 5Hz；真正改变时用 ForceNetUpdate 请求尽快发送。
 	SetNetUpdateFrequency(5.0f);
+	// 本地网格过渡 Tick 与网络休眠独立；开关不变时不持续比较复制属性。
+	NetDormancy = DORM_DormantAll;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -66,6 +69,14 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 void AmultiplayerCoopGate::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		FlushNetDormancy();
+		RuntimeDoorMoveSpeed = FmultiplayerGameplayConfig::Get(this).DoorMoveSpeed;
+	}
+	UE_LOG(LogMultiplayer, Verbose, TEXT("Gate %s: Authority=%d DoorMoveSpeed=%.1f"),
+		*GetName(), HasAuthority(), RuntimeDoorMoveSpeed);
 
 	// 客户端和服务器都先按本机已有状态复原网格；规则依赖只由服务器维护。
 	ApplyGateState(true);
@@ -108,6 +119,11 @@ void AmultiplayerCoopGate::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AmultiplayerCoopGate::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	// 配置尚未随初始复制到达时暂不运动，避免把 0 速度误当成直接到达目标。
+	if (RuntimeDoorMoveSpeed <= 0.0f)
+	{
+		return;
+	}
 
 	const FVector TargetLocation = bGateOpen
 		? OpenPoint->GetComponentLocation()
@@ -117,7 +133,7 @@ void AmultiplayerCoopGate::Tick(float DeltaSeconds)
 		DoorMesh->GetComponentLocation(),
 		TargetLocation,
 		DeltaSeconds,
-		DoorMoveSpeed);
+		RuntimeDoorMoveSpeed);
 
 	DoorMesh->SetWorldLocation(NewLocation);
 
@@ -136,6 +152,7 @@ void AmultiplayerCoopGate::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 
 	// 不复制 DoorMesh 位置，只复制决定位置的最小逻辑状态。
 	DOREPLIFETIME(AmultiplayerCoopGate, bGateOpen);
+	DOREPLIFETIME_CONDITION(AmultiplayerCoopGate, RuntimeDoorMoveSpeed, COND_InitialOnly);
 }
 
 /** 返回至少为一的配置门槛；不根据当前有效板数降低要求，避免错误配置变成更容易开门。 */
@@ -199,15 +216,18 @@ void AmultiplayerCoopGate::UnbindRequiredPlates()
 	{
 		if (IsValid(Plate))
 		{
-			Plate->OnPlateActiveChanged.RemoveDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateChanged);
-			Plate->OnPlateOccupancyChanged.RemoveDynamic(
-				this,
-				&AmultiplayerCoopGate::HandleRequiredPlateOccupancyChanged);
-			Plate->OnDestroyed.RemoveDynamic(
-				this,
-				&AmultiplayerCoopGate::HandleRequiredPlateDestroyed);
+			UnbindRequiredPlate(Plate);
 		}
 	}
+}
+
+/** 每块板的三个订阅成组解除，避免销毁路径和普通清理路径维护不同的解绑列表。 */
+void AmultiplayerCoopGate::UnbindRequiredPlate(AmultiplayerPressurePlate* Plate)
+{
+	Plate->OnPlateActiveChanged.RemoveDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateChanged);
+	Plate->OnPlateOccupancyChanged.RemoveDynamic(
+		this, &AmultiplayerCoopGate::HandleRequiredPlateOccupancyChanged);
+	Plate->OnDestroyed.RemoveDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateDestroyed);
 }
 
 /** 某块板开关改变后重算完整规则；单个事件的布尔值不能代表整组压力板。 */
@@ -236,15 +256,7 @@ void AmultiplayerCoopGate::HandleRequiredPlateDestroyed(AActor* DestroyedActor)
 		return;
 	}
 
-	DestroyedPlate->OnPlateActiveChanged.RemoveDynamic(
-		this,
-		&AmultiplayerCoopGate::HandleRequiredPlateChanged);
-	DestroyedPlate->OnPlateOccupancyChanged.RemoveDynamic(
-		this,
-		&AmultiplayerCoopGate::HandleRequiredPlateOccupancyChanged);
-	DestroyedPlate->OnDestroyed.RemoveDynamic(
-		this,
-		&AmultiplayerCoopGate::HandleRequiredPlateDestroyed);
+	UnbindRequiredPlate(DestroyedPlate);
 	RuntimeRequiredPlates.Remove(DestroyedPlate);
 
 	UE_LOG(
@@ -277,6 +289,7 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	int32 ActivePlateCount = 0;
 	// (**) 除了板数还要统计不同角色，防止同一角色同时覆盖两块板。
 	TSet<ACharacter*> DistinctPlayers;
+	TArray<ACharacter*> PlateOccupants;
 	for (const AmultiplayerPressurePlate* Plate : RuntimeRequiredPlates)
 	{
 		if (!IsValid(Plate) || !Plate->IsPlateActive())
@@ -286,14 +299,14 @@ void AmultiplayerCoopGate::EvaluateGateState()
 
 		++ActivePlateCount;
 
-		TArray<ACharacter*> PlateOccupants;
 		Plate->GetOccupyingCharacters(PlateOccupants);
-		for (ACharacter* Occupant : PlateOccupants)
+	}
+	// 人数组件采用追加语义，共用一个临时数组收集后去重，不为每块板分别分配数组。
+	for (ACharacter* Occupant : PlateOccupants)
+	{
+		if (Occupant != nullptr)
 		{
-			if (Occupant != nullptr)
-			{
-				DistinctPlayers.Add(Occupant);
-			}
+			DistinctPlayers.Add(Occupant);
 		}
 	}
 
@@ -325,6 +338,8 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	if (bGateOpen != bNewGateOpen)
 	{
 		// 相同状态不广播、不启 Tick、不强制网络更新，避免多个来源重复求值带来无效工作。
+		// 先刷新休眠，再提交状态；晚加入通过初始复制获取当前值。
+		FlushNetDormancy();
 		bGateOpen = bNewGateOpen;
 		HandleGateStateChanged();
 		ForceNetUpdate();

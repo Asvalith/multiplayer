@@ -51,6 +51,8 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	// 非物理 Scene 根不会由 AActor 默认接收函数写速度；补上供 CMC 离开平台时继承。
+	virtual void PostNetReceiveVelocity(const FVector& NewVelocity) override;
 
 	UFUNCTION()
 	void HandleOccupancyChanged(int32 PlayerCount);
@@ -98,8 +100,8 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Coop|Platform|Activation", meta = (EditCondition = "ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate", EditConditionHides))
 	TObjectPtr<AmultiplayerPressurePlate> ActivationPlate;
 
-	// 自身占用模式要求的不同玩家数，而不是碰撞组件数量。
-	UPROPERTY(EditAnywhere, Category = "Coop|Platform|Activation", meta = (ClampMin = "1", EditCondition = "ActivationSource == EMovingPlatformActivationSource::PlatformOccupancy", EditConditionHides))
+	// 自身占用模式要求的不同玩家数，从 JSON 取得；外部压力板模式不使用这个人数。
+	UPROPERTY(VisibleInstanceOnly, Category = "Coop|Platform|Activation")
 	int32 RequiredPlayers = 1;
 
 };

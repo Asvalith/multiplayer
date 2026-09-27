@@ -8,6 +8,9 @@
 #include "Engine/World.h"
 #include "GameMapsSettings.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/GameSession.h"
+#include "Misc/Paths.h"
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
@@ -15,6 +18,11 @@
 #include "UObject/UObjectGlobals.h"
 #include "UObject/Package.h"
 #include "Core/multiplayerLog.h"
+#include "Core/multiplayerGameMode.h"
+#if !UE_BUILD_SHIPPING
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#endif
 
 /**
  * 会话流程分成两层：OnlineSession 负责公布和查找房间，ClientTravel 负责连接游戏服务器。
@@ -23,10 +31,8 @@
  */
 namespace MultiplayerSession
 {
-	// 房间名使用固定键，主机写入与客户端搜索读取必须一致；重连最多等待 1、2、4 秒后各尝试一次。
+	// 房间名使用固定键，主机写入与客户端搜索读取必须一致。
 	const FName ServerNameKey(TEXT("SERVER_NAME"));
-	constexpr int32 MaxReconnectAttempts = 3;
-	constexpr float ReconnectDelays[] = {1.0f, 2.0f, 4.0f};
 
 	/**
 	 * 判断全局失败事件是否属于本实例的游戏连接。
@@ -104,6 +110,9 @@ void UmultiplayerGameInstance::Init()
 {
 	Super::Init();
 
+	// 不在 Actor 构造或 Tick 中读磁盘；跨关卡复用同一份启动配置，改表后需重启游戏实例。
+	GameplayConfig.LoadFromFile(FPaths::Combine(FPaths::ProjectContentDir(), TEXT("Config/Gameplay.json")));
+
 	// 网络失败和 Travel 失败是引擎级事件，不属于某个临时 World；绑定在跨地图存活的 GameInstance 上。
 	if (GEngine != nullptr)
 	{
@@ -172,7 +181,7 @@ void UmultiplayerGameInstance::Shutdown()
 /**
  * 接受建房请求后锁住会话操作，保存参数，并在当前 World 开启监听。
  * 若已有同名 Session，销毁完成回调负责继续 CreateSession；任一提交失败分支负责释放操作状态。
- * 监听驱动和 Session 是两份状态，本函数的建房失败分支目前不会自动拆除已启动的监听驱动。
+ * 监听驱动和 Session 是两份状态；失败时只回滚本次新建的监听，不拆除已有主机连接。
  */
 void UmultiplayerGameInstance::HostGame(
 	const FString& ServerName,
@@ -189,6 +198,8 @@ void UmultiplayerGameInstance::HostGame(
 	// 被退出流程拒绝的按钮点击不能反向撤销 bLeaveInProgress，也不能清掉可重连地址。
 	CancelAutomaticReconnect();
 
+	HostStartedListeningWorld.Reset();
+	HostStartedNetDriver.Reset();
 	if (!EnsureCurrentWorldIsListening())
 	{
 		EndSessionOperation();
@@ -197,7 +208,19 @@ void UmultiplayerGameInstance::HostGame(
 
 	// 参数要跨越“销毁旧会话”的异步间隔，因此先保存到 GameInstance，而不是捕获临时局部变量。
 	PendingServerName = ServerName.IsEmpty() ? TEXT("Coop Session") : ServerName;
-	PendingPublicConnections = FMath::Max(2, PublicConnections);
+	if (PublicConnections != GameplayConfig.SessionMaxPlayers)
+	{
+		UE_LOG(LogMultiplayer, Log, TEXT("Session capacity uses Gameplay.json: %d (legacy menu value: %d)."),
+			GameplayConfig.SessionMaxPlayers, PublicConnections);
+	}
+	// 当前地图已经开始运行，建房是原地开启监听；同步设置实际入场检查，不能只改会话广告人数。
+	if (AGameModeBase* GameMode = GetWorld()->GetAuthGameMode())
+	{
+		if (GameMode->GameSession != nullptr)
+		{
+			GameMode->GameSession->MaxPlayers = GameplayConfig.SessionMaxPlayers;
+		}
+	}
 	bPendingIsLanMatch = bIsLanMatch;
 
 	if (SessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
@@ -212,6 +235,7 @@ void UmultiplayerGameInstance::HostGame(
 				DestroySessionCompleteHandle);
 			DestroySessionCompleteHandle.Reset();
 			DestroyPurpose = EMultiplayerDestroyPurpose::None;
+			RollbackHostListener();
 			EndSessionOperation();
 			UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 		}
@@ -230,7 +254,7 @@ void UmultiplayerGameInstance::CreateSession()
 	// SessionSettings 描述的是会话如何被发现和加入，不会替代真正的 NetDriver 连接与地图 Travel。
 	FOnlineSessionSettings Settings;
 	Settings.bIsLANMatch = bPendingIsLanMatch;
-	Settings.NumPublicConnections = PendingPublicConnections;
+	Settings.NumPublicConnections = GameplayConfig.SessionMaxPlayers;
 	Settings.NumPrivateConnections = 0;
 	Settings.bShouldAdvertise = true;
 	Settings.bAllowJoinInProgress = true;
@@ -260,6 +284,17 @@ void UmultiplayerGameInstance::CreateSession()
 				this,
 				&UmultiplayerGameInstance::HandleCreateSessionComplete));
 
+#if !UE_BUILD_SHIPPING
+	// 仅注入一次完成失败，走与真实创建失败相同的回滚入口；自动驾驶由独立测试驱动负责。
+	if (!bHostFailureInjected && FParse::Param(FCommandLine::Get(), TEXT("CoopTestFailHostSessionOnce")))
+	{
+		bHostFailureInjected = true;
+		UE_LOG(LogMultiplayer, Warning, TEXT("CoopTest SyntheticSessionCreateFailure injected once."));
+		HandleCreateSessionComplete(NAME_GameSession, false);
+		return;
+	}
+#endif
+
 	const bool bRequestAccepted = SessionInterface->CreateSession(
 		0,
 		NAME_GameSession,
@@ -270,6 +305,7 @@ void UmultiplayerGameInstance::CreateSession()
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(
 			CreateSessionCompleteHandle);
 		CreateSessionCompleteHandle.Reset();
+		RollbackHostListener();
 		EndSessionOperation();
 		UE_LOG(LogMultiplayer, Error, TEXT("CreateSession request was rejected."));
 	}
@@ -396,12 +432,34 @@ bool UmultiplayerGameInstance::EnsureCurrentWorldIsListening()
 		return false;
 	}
 
+	HostStartedListeningWorld = World;
+	HostStartedNetDriver = World->GetNetDriver();
 	UE_LOG(
 		LogMultiplayer,
 		Log,
 		TEXT("Listen server started on current map: %s"),
 		*World->GetOutermost()->GetName());
 	return true;
+}
+
+void UmultiplayerGameInstance::RollbackHostListener()
+{
+	UWorld* StartedWorld = HostStartedListeningWorld.Get();
+	UNetDriver* StartedDriver = HostStartedNetDriver.Get();
+	// 先释放所有权记录，避免驱动销毁引起的嵌套通知再次执行回滚。
+	HostStartedListeningWorld.Reset();
+	HostStartedNetDriver.Reset();
+	if (GEngine == nullptr || StartedWorld == nullptr || StartedDriver == nullptr
+		|| StartedWorld != GetWorld() || StartedWorld->GetGameInstance() != this
+		|| StartedWorld->GetNetDriver() != StartedDriver)
+	{
+		return;
+	}
+
+	// 精确销毁这一条驱动；引擎会同时清理 World 与 LevelCollection 中的引用。
+	GEngine->DestroyNamedNetDriver(StartedWorld, StartedDriver->NetDriverName);
+	UE_LOG(LogMultiplayer, Log, TEXT("Host rollback removed the newly created listen driver; NetMode=%d."),
+		static_cast<int32>(StartedWorld->GetNetMode()));
 }
 
 /** 销毁前先记录用途并替换旧订阅；即使 DestroySession 同步完成，回调也能决定建房还是返回菜单。 */
@@ -434,10 +492,14 @@ void UmultiplayerGameInstance::HandleCreateSessionComplete(
 
 	if (!bWasSuccessful)
 	{
+		RollbackHostListener();
 		EndSessionOperation();
 		UE_LOG(LogMultiplayer, Error, TEXT("Session creation failed."));
 		return;
 	}
+	// 创建成功后，监听成为房间长期资源，不再属于本次失败回滚。
+	HostStartedListeningWorld.Reset();
+	HostStartedNetDriver.Reset();
 	EndSessionOperation();
 	UE_LOG(LogMultiplayer, Log, TEXT("Session created on the current map; no automatic map travel was requested."));
 }
@@ -553,6 +615,7 @@ void UmultiplayerGameInstance::HandleDestroySessionComplete(
 		return;
 	}
 
+	RollbackHostListener();
 	EndSessionOperation();
 	UE_LOG(LogMultiplayer, Error, TEXT("Existing session could not be destroyed before hosting."));
 }
@@ -627,9 +690,7 @@ void UmultiplayerGameInstance::FinishLeaveGame()
 {
 	DestroyPurpose = EMultiplayerDestroyPurpose::None;
 	SessionSearch.Reset();
-	LastConnectString.Reset();
-	ReconnectState = EMultiplayerReconnectState::Idle;
-	ReconnectAttempt = 0;
+	CancelAutomaticReconnect();
 
 	UE_LOG(LogMultiplayer, Log, TEXT("Local session cleaned; returning to the main menu."));
 	// Session 清理完成后仍会经历 NetDriver 拆除和主菜单加载；退出互斥保持到新 World 就绪。
@@ -638,7 +699,7 @@ void UmultiplayerGameInstance::FinishLeaveGame()
 
 /**
  * 只处理本实例的游戏网络错误；主动退出引起的断开无需重试。
- * 有旧地址且属于允许重试的客户端错误时安排重连，其余错误进入统一清理与日志路径。
+ * 服务器的单个远端断开不销毁房间；允许重试的客户端错误安排重连，其余错误统一清理。
  */
 void UmultiplayerGameInstance::HandleNetworkFailure(
 	UWorld* World,
@@ -656,6 +717,17 @@ void UmultiplayerGameInstance::HandleNetworkFailure(
 	if (bLeaveInProgress)
 	{
 		// 主动退出本来就会拆除 GameNetDriver；等待新 World 的 PostLoadMap 再释放退出互斥。
+		return;
+	}
+
+	if (NetDriver != nullptr
+		&& (FailureType == ENetworkFailure::ConnectionLost || FailureType == ENetworkFailure::ConnectionTimeout)
+		&& (NetDriver->GetNetMode() == NM_ListenServer || NetDriver->GetNetMode() == NM_DedicatedServer))
+	{
+		// (**) 引擎也会向服务器报告单个客户端超时；监听仍正常，不能走全局失败清理删除房间广告。
+		// 保留主机会话和正在进行的菜单操作，远端连接与 Pawn 的移除继续交给引擎处理。
+		UE_LOG(LogMultiplayer, Warning, TEXT("Remote connection [%s]: %s. Host session retained."),
+			ENetworkFailure::ToString(FailureType), *ErrorString);
 		return;
 	}
 
@@ -707,6 +779,15 @@ void UmultiplayerGameInstance::HandleTravelFailure(
 		return;
 	}
 
+	if (AmultiplayerGameMode* CoopGameMode = World->GetAuthGameMode<AmultiplayerGameMode>())
+	{
+		// 旧 World 仍存活时，重开失败只恢复本次请求，不清除仍有效的主机会话。
+		if (CoopGameMode->RecoverFailedRestart(ErrorString))
+		{
+			return;
+		}
+	}
+
 	if (ReconnectState == EMultiplayerReconnectState::Connecting
 		&& !LastConnectString.IsEmpty())
 	{
@@ -735,10 +816,8 @@ void UmultiplayerGameInstance::RecordConnectionFailure(
 	// 不可恢复失败统一收口所有异步状态，避免菜单仍显示忙碌或旧回调在稍后覆盖失败结果。
 	ClearSessionDelegates();
 	SessionSearch.Reset();
-	GetTimerManager().ClearTimer(ReconnectTimerHandle);
-	ReconnectState = EMultiplayerReconnectState::Idle;
-	ReconnectAttempt = 0;
-	LastConnectString.Reset();
+	CancelAutomaticReconnect();
+	RollbackHostListener();
 	RemoveFailedLocalSession();
 	EndSessionOperation();
 
@@ -759,7 +838,8 @@ bool UmultiplayerGameInstance::CanRetryNetworkFailure(
 	UNetDriver* NetDriver,
 	ENetworkFailure::Type FailureType) const
 {
-	if (LastConnectString.IsEmpty()
+	if (GameplayConfig.ReconnectDelaysSeconds.IsEmpty()
+		|| LastConnectString.IsEmpty()
 		|| NetDriver == nullptr
 		|| NetDriver->GetNetMode() != NM_Client)
 	{
@@ -779,7 +859,7 @@ bool UmultiplayerGameInstance::CanRetryNetworkFailure(
 
 /**
  * 安排一次性等待，Waiting 状态下的重复错误不会叠加定时器。
- * 三次连接尝试耗尽后清除地址与本地会话记录；等待时间之外，连接本身仍遵循引擎的超时设置。
+ * 配置的连接尝试耗尽后清除地址与本地会话记录；等待时间之外，连接本身仍遵循引擎的超时设置。
  */
 void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 {
@@ -788,7 +868,7 @@ void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 		return;
 	}
 
-	if (ReconnectAttempt >= MultiplayerSession::MaxReconnectAttempts)
+	if (ReconnectAttempt >= GameplayConfig.ReconnectDelaysSeconds.Num())
 	{
 		ReconnectState = EMultiplayerReconnectState::Idle;
 		RemoveFailedLocalSession();
@@ -803,8 +883,8 @@ void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 	}
 
 	ReconnectState = EMultiplayerReconnectState::Waiting;
-	// (*) 采用 1/2/4 秒的有限退避，既给网络恢复时间，也避免无上限高频请求服务器。
-	const float Delay = MultiplayerSession::ReconnectDelays[ReconnectAttempt];
+	// (*) 尝试次数直接等于间隔数量，避免“次数”和“数组长度”两份配置不一致导致越界。
+	const float Delay = GameplayConfig.ReconnectDelaysSeconds[ReconnectAttempt];
 	// 使用 GameInstance 的定时器，因为断线和地图切换期间旧 World 可能被销毁。
 	GetTimerManager().SetTimer(
 		ReconnectTimerHandle,
@@ -818,7 +898,7 @@ void UmultiplayerGameInstance::ScheduleAutomaticReconnect()
 		Log,
 		TEXT("Automatic reconnect attempt %d/%d scheduled in %.0f second(s)."),
 		ReconnectAttempt + 1,
-		MultiplayerSession::MaxReconnectAttempts,
+		GameplayConfig.ReconnectDelaysSeconds.Num(),
 		Delay);
 }
 
@@ -851,7 +931,7 @@ void UmultiplayerGameInstance::TryAutomaticReconnect()
 		Log,
 		TEXT("Automatic reconnect attempt %d/%d started."),
 		ReconnectAttempt,
-		MultiplayerSession::MaxReconnectAttempts);
+		GameplayConfig.ReconnectDelaysSeconds.Num());
 	PlayerController->ClientTravel(LastConnectString, TRAVEL_Absolute);
 }
 

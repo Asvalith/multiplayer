@@ -1,0 +1,818 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "sanitized-network-validation-excerpt",
+  "description": "自动脱敏摘录，不是原始完整报告；状态和指标直接来自原报告，未补写通过结果。",
+  "extractedAtUtc": "2026-09-27T02:40:08.1028818Z",
+  "sourceReport": {
+    "fileName": "report.json",
+    "sha256": "4b21747b3261ceb3281370cd37905176b67f56d05c73e2a15137a2c5ca57774e",
+    "runId": "20260927-023739-2cb4f207",
+    "generatedAtUtc": "2026-09-27T02:39:20.5213199Z",
+    "status": "passed",
+    "omitted": [
+      "机器名、本机绝对路径",
+      "启动命令与原始日志",
+      "gitStatus 与源码文件清单（含工具缓存路径）",
+      "STAGE/READY/RECEIPT 等过程事件"
+    ]
+  },
+  "environment": {
+    "engineAssociation": "5.5",
+    "executableVersion": "5.5.4",
+    "executableSha256": "e004d62aa0b58d12b4c938b421a2ac3e48498948ffed7744b70730574cb6c883",
+    "buildKind": "development-game",
+    "map": "/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo",
+    "nullRhi": true,
+    "topology": "One local listen host and one separate local client process",
+    "visualValidation": false,
+    "runtimeGameplayConfig": {
+      "sha256": "97b67b8238706e2f2765446c93b512dbcb39153a3e32676bc7c5b9316f8c0ce0",
+      "matchesSource": true,
+      "resolution": "packaged-loose-file-derived-from-game-binary",
+      "loadedByRuntimeVerified": false
+    }
+  },
+  "provenance": {
+    "gitCommit": "05b7cf1077b708367a90f63fe152e467abb6e7b5",
+    "dirty": true,
+    "sourceFingerprintSha256": "782d209298fd1972da86b7917ba3449cb1df4fc971f67592ea7f26181ed28138",
+    "gameplayConfigSha256": "97b67b8238706e2f2765446c93b512dbcb39153a3e32676bc7c5b9316f8c0ce0"
+  },
+  "measurementInterpretation": {
+    "bandwidth": "OutTotalBytes/OutTotalPackets 是引擎发送计数。UE 5.5 字节计数由发送缓冲字节数加配置的 PacketOverhead 累计，非网卡抓包、非物理链路流量，也非已成功到达客户端的字节数。B/s 为该计数差除以采样秒数。",
+    "frameTiming": "derivedFrameTiming 仅在原服务器 CSV 的 SHA-256 校验通过后计算；estimatedFPS=1000/FrameTime均值，不把 60 FPS 上限当成实际帧率。",
+    "gameThread": "GameThreadTime 全零表示该运行配置下计数不可用于 CPU 成本结论；原始零值和摘要保留作追溯，不代表 CPU 开销为零。",
+    "errata": [
+      "部分旧二进制 metrics.counterSource 中的 wire packets, not pre-compression bytes 描述过强；摘录保留原标签和计数，解释以本节为准。"
+    ]
+  },
+  "scope": [
+    "Assertions represent the driver checks, not manual visual acceptance.",
+    "PktLag values are emulator parameters applied to both peers, not measured RTT.",
+    "Scale tests use synthetic actors and two processes, not player-capacity certification.",
+    "Historical 22.17% bandwidth data is not a result of this run.",
+    "Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.",
+    "案例通过仅指原报告中的具体自动断言，不表示人工完整通关、全部蓝图配置或画面验收。",
+    "Flow 使用真实 Overlap，但角色由测试放置，并包含合成机关；ClientRide 不证明视觉平滑，VictoryWidget 入 Viewport 不证明按钮点击和像素正确。",
+    "SessionRetry 和首次重开失败使用开发注入；Reconnect 使用进程内真实断包和缩短的连接超时，不是物理网络故障穷举。",
+    "同机双进程会竞争 CPU；NullRHI 不测渲染。合成对象数量不等于玩家容量，100 Hz 设置不等于实测发送频率。",
+    "带宽是服务器总出站；CPU 缺失或全零需保留限制。正式对照每组至少三次，单次成功不等于正式性能结论。",
+    "runtimeGameplayConfig.loadedByRuntimeVerified=false 时只证明磁盘文件指纹，不能据此声称运行时已加载该配置。"
+  ],
+  "cases": [
+    {
+      "id": "001-Scale-Normal-500-0-Baseline-1",
+      "mode": "Scale",
+      "matrix": "Static",
+      "profile": "Normal",
+      "iteration": 1,
+      "staticCount": 500,
+      "movingCount": 0,
+      "optimization": "Baseline",
+      "warmupSeconds": 2,
+      "sampleSeconds": 8,
+      "outageSeconds": 25,
+      "startedAtUtc": "2026-09-27T02:37:40.0568385Z",
+      "durationSeconds": 26.732,
+      "status": "passed",
+      "requiredAssertions": [
+        "ScaleCount",
+        "ScaleClientLoad",
+        "SampleCompleted"
+      ],
+      "errors": [],
+      "metrics": {
+        "outBytes": 14883,
+        "outPackets": 343,
+        "sampleSeconds": 8.03299630060792,
+        "bytesPerSecond": 1852.7333317548878,
+        "connections": 1,
+        "actorCount": 2764,
+        "syntheticStaticCount": 500,
+        "syntheticMovingCount": 0,
+        "expectedStaticCount": 500,
+        "expectedMovingCount": 0,
+        "optimization": "Baseline",
+        "matrix": "Static",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes"
+      },
+      "cpuMetrics": {
+        "serverReplicateActors": {
+          "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+          "unit": "ms",
+          "sampleCount": 368,
+          "nonZeroSampleCount": 368,
+          "allZero": false,
+          "mean": 1.205394,
+          "p95": 3.2383,
+          "p95Method": "nearest-rank",
+          "max": 5.0788
+        },
+        "gameThread": {
+          "sourceColumn": "GameThreadTime",
+          "unit": "ms",
+          "sampleCount": 368,
+          "nonZeroSampleCount": 0,
+          "allZero": true,
+          "mean": 0.0,
+          "p95": 0.0,
+          "p95Method": "nearest-rank",
+          "max": 0.0
+        },
+        "fullyDormantActors": {
+          "sourceColumn": "Replication/NumberOfFullyDormantActors",
+          "unit": "actors",
+          "sampleCount": 368,
+          "nonZeroSampleCount": 368,
+          "allZero": false,
+          "mean": 7.0,
+          "p95": 7.0,
+          "p95Method": "nearest-rank",
+          "max": 7.0
+        },
+        "replicateCallsPerConnection": {
+          "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+          "unit": "calls/connection",
+          "sampleCount": 368,
+          "nonZeroSampleCount": 368,
+          "allZero": false,
+          "mean": 212.603261,
+          "p95": 500.0,
+          "p95Method": "nearest-rank",
+          "max": 517.0
+        }
+      },
+      "csvSha256": "de380f01e450e5b6ab31ab5eaab6f69bb7d89129af9e827cd82806b88bc283d0",
+      "measurementWarnings": [
+        "GameThreadTime contains only raw zeros; do not interpret this as zero CPU cost. The engine counter may be unavailable in this configuration."
+      ],
+      "events": [
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Real remote PlayerController with possessed character",
+          "elapsed": 9.81202970072627
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "ScaleCount",
+          "passed": true,
+          "detail": "Observed static=500/500 moving=0/0; validUniqueReferences=true; platformsMovedAtLeast5cm=0/0",
+          "elapsed": 9.860257901251316
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "SampleEnd",
+          "assertion": "SampleCompleted",
+          "passed": true,
+          "detail": "Both real network drivers sampled and CSV writes finished",
+          "elapsed": 20.221476402133703
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "DONE",
+          "phase": "Completing",
+          "passed": true,
+          "detail": "",
+          "elapsed": 20.453253101557493
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Remote-owned replicated test probe received after Find/Join",
+          "elapsed": 6.780261501669884
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Warmup",
+          "assertion": "ScaleClientLoad",
+          "passed": true,
+          "detail": "Observed static=500/500 moving=0/0; validUniqueReferences=true; platformsMovedAtLeast5cm=0/0",
+          "elapsed": 7.01297790184617
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "DONE",
+          "phase": "Sample",
+          "passed": true,
+          "detail": "",
+          "elapsed": 17.169924702495337
+        }
+      ],
+      "derivedFrameTiming": {
+        "sourceCsvSha256": "de380f01e450e5b6ab31ab5eaab6f69bb7d89129af9e827cd82806b88bc283d0",
+        "sourceColumn": "FrameTime",
+        "unit": "ms",
+        "sampleCount": 368,
+        "meanMs": 21.82116,
+        "p95Ms": 33.1455,
+        "p95Method": "nearest-rank",
+        "estimatedFPS": 45.827078,
+        "interpretation": "由服务器 CSV 的有限正数 FrameTime 派生；FPS=1000/meanMs，不代表游戏线程纯计算耗时，也不把 60 FPS 上限视为实测帧率。"
+      },
+      "derivedFrameTimingWarning": null
+    },
+    {
+      "id": "002-Scale-Normal-500-0-Dormancy-1",
+      "mode": "Scale",
+      "matrix": "Static",
+      "profile": "Normal",
+      "iteration": 1,
+      "staticCount": 500,
+      "movingCount": 0,
+      "optimization": "Dormancy",
+      "warmupSeconds": 2,
+      "sampleSeconds": 8,
+      "outageSeconds": 25,
+      "startedAtUtc": "2026-09-27T02:38:07.0006945Z",
+      "durationSeconds": 25.219,
+      "status": "passed",
+      "requiredAssertions": [
+        "ScaleCount",
+        "ScaleClientLoad",
+        "SampleCompleted"
+      ],
+      "errors": [],
+      "metrics": {
+        "outBytes": 15290,
+        "outPackets": 354,
+        "sampleSeconds": 8.084453899413347,
+        "bytesPerSecond": 1891.2842092042267,
+        "connections": 1,
+        "actorCount": 2764,
+        "syntheticStaticCount": 500,
+        "syntheticMovingCount": 0,
+        "expectedStaticCount": 500,
+        "expectedMovingCount": 0,
+        "optimization": "Dormancy",
+        "matrix": "Static",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes"
+      },
+      "cpuMetrics": {
+        "serverReplicateActors": {
+          "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+          "unit": "ms",
+          "sampleCount": 369,
+          "nonZeroSampleCount": 369,
+          "allZero": false,
+          "mean": 0.126237,
+          "p95": 0.2748,
+          "p95Method": "nearest-rank",
+          "max": 0.7137
+        },
+        "gameThread": {
+          "sourceColumn": "GameThreadTime",
+          "unit": "ms",
+          "sampleCount": 369,
+          "nonZeroSampleCount": 0,
+          "allZero": true,
+          "mean": 0.0,
+          "p95": 0.0,
+          "p95Method": "nearest-rank",
+          "max": 0.0
+        },
+        "fullyDormantActors": {
+          "sourceColumn": "Replication/NumberOfFullyDormantActors",
+          "unit": "actors",
+          "sampleCount": 369,
+          "nonZeroSampleCount": 369,
+          "allZero": false,
+          "mean": 507.0,
+          "p95": 507.0,
+          "p95Method": "nearest-rank",
+          "max": 507.0
+        },
+        "replicateCallsPerConnection": {
+          "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+          "unit": "calls/connection",
+          "sampleCount": 369,
+          "nonZeroSampleCount": 369,
+          "allZero": false,
+          "mean": 11.162602,
+          "p95": 17.0,
+          "p95Method": "nearest-rank",
+          "max": 19.0
+        }
+      },
+      "csvSha256": "6da916f87324911457b852f1f1810f13900d2a300cd118359c3df25c884cb66b",
+      "measurementWarnings": [
+        "GameThreadTime contains only raw zeros; do not interpret this as zero CPU cost. The engine counter may be unavailable in this configuration."
+      ],
+      "events": [
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Real remote PlayerController with possessed character",
+          "elapsed": 9.637908801436424
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "ScaleCount",
+          "passed": true,
+          "detail": "Observed static=500/500 moving=0/0; validUniqueReferences=true; platformsMovedAtLeast5cm=0/0",
+          "elapsed": 9.68594030290842
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "SampleEnd",
+          "assertion": "SampleCompleted",
+          "passed": true,
+          "detail": "Both real network drivers sampled and CSV writes finished",
+          "elapsed": 20.28931749984622
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "DONE",
+          "phase": "Completing",
+          "passed": true,
+          "detail": "",
+          "elapsed": 20.51724410057068
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Remote-owned replicated test probe received after Find/Join",
+          "elapsed": 6.7732120007276535
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Warmup",
+          "assertion": "ScaleClientLoad",
+          "passed": true,
+          "detail": "Observed static=500/500 moving=0/0; validUniqueReferences=true; platformsMovedAtLeast5cm=0/0",
+          "elapsed": 6.974084701389074
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "DONE",
+          "phase": "Sample",
+          "passed": true,
+          "detail": "",
+          "elapsed": 17.388236600905657
+        }
+      ],
+      "derivedFrameTiming": {
+        "sourceCsvSha256": "6da916f87324911457b852f1f1810f13900d2a300cd118359c3df25c884cb66b",
+        "sourceColumn": "FrameTime",
+        "unit": "ms",
+        "sampleCount": 369,
+        "meanMs": 21.906993,
+        "p95Ms": 31.141,
+        "p95Method": "nearest-rank",
+        "estimatedFPS": 45.647523,
+        "interpretation": "由服务器 CSV 的有限正数 FrameTime 派生；FPS=1000/meanMs，不代表游戏线程纯计算耗时，也不把 60 FPS 上限视为实测帧率。"
+      },
+      "derivedFrameTimingWarning": null
+    },
+    {
+      "id": "003-Scale-Normal-0-20-Baseline-1",
+      "mode": "Scale",
+      "matrix": "Moving",
+      "profile": "Normal",
+      "iteration": 1,
+      "staticCount": 0,
+      "movingCount": 20,
+      "optimization": "Baseline",
+      "warmupSeconds": 2,
+      "sampleSeconds": 8,
+      "outageSeconds": 25,
+      "startedAtUtc": "2026-09-27T02:38:32.3502475Z",
+      "durationSeconds": 23.331,
+      "status": "passed",
+      "requiredAssertions": [
+        "ScaleCount",
+        "ScaleClientLoad",
+        "SampleCompleted"
+      ],
+      "errors": [],
+      "metrics": {
+        "outBytes": 98657,
+        "outPackets": 370,
+        "sampleSeconds": 8.063214801251888,
+        "bytesPerSecond": 12235.442367811234,
+        "connections": 1,
+        "actorCount": 2284,
+        "syntheticStaticCount": 0,
+        "syntheticMovingCount": 20,
+        "expectedStaticCount": 0,
+        "expectedMovingCount": 20,
+        "optimization": "Baseline",
+        "matrix": "Moving",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes"
+      },
+      "cpuMetrics": {
+        "serverReplicateActors": {
+          "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+          "unit": "ms",
+          "sampleCount": 370,
+          "nonZeroSampleCount": 370,
+          "allZero": false,
+          "mean": 0.22253,
+          "p95": 0.5579,
+          "p95Method": "nearest-rank",
+          "max": 0.8109
+        },
+        "gameThread": {
+          "sourceColumn": "GameThreadTime",
+          "unit": "ms",
+          "sampleCount": 370,
+          "nonZeroSampleCount": 0,
+          "allZero": true,
+          "mean": 0.0,
+          "p95": 0.0,
+          "p95Method": "nearest-rank",
+          "max": 0.0
+        },
+        "fullyDormantActors": {
+          "sourceColumn": "Replication/NumberOfFullyDormantActors",
+          "unit": "actors",
+          "sampleCount": 370,
+          "nonZeroSampleCount": 370,
+          "allZero": false,
+          "mean": 7.0,
+          "p95": 7.0,
+          "p95Method": "nearest-rank",
+          "max": 7.0
+        },
+        "replicateCallsPerConnection": {
+          "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+          "unit": "calls/connection",
+          "sampleCount": 370,
+          "nonZeroSampleCount": 370,
+          "allZero": false,
+          "mean": 25.259459,
+          "p95": 37.0,
+          "p95Method": "nearest-rank",
+          "max": 39.0
+        }
+      },
+      "csvSha256": "9046f714b9da01d51d1861b2fa635c46293d92bee02699550ddc9abb4da7e866",
+      "measurementWarnings": [
+        "GameThreadTime contains only raw zeros; do not interpret this as zero CPU cost. The engine counter may be unavailable in this configuration."
+      ],
+      "events": [
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Real remote PlayerController with possessed character",
+          "elapsed": 9.89204690232873
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "ScaleCount",
+          "passed": true,
+          "detail": "Observed static=0/0 moving=20/20; validUniqueReferences=true; platformsMovedAtLeast5cm=0/20",
+          "elapsed": 9.893989201635122
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "SampleEnd",
+          "assertion": "SampleCompleted",
+          "passed": true,
+          "detail": "Both real network drivers sampled and CSV writes finished",
+          "elapsed": 20.33175430074334
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "DONE",
+          "phase": "Completing",
+          "passed": true,
+          "detail": "",
+          "elapsed": 20.457373902201653
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Remote-owned replicated test probe received after Find/Join",
+          "elapsed": 6.766115099191666
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Warmup",
+          "assertion": "ScaleClientLoad",
+          "passed": true,
+          "detail": "Observed static=0/0 moving=20/20; validUniqueReferences=true; platformsMovedAtLeast5cm=20/20",
+          "elapsed": 6.8882944993674755
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "DONE",
+          "phase": "Sample",
+          "passed": true,
+          "detail": "",
+          "elapsed": 17.11370950192213
+        }
+      ],
+      "derivedFrameTiming": {
+        "sourceCsvSha256": "9046f714b9da01d51d1861b2fa635c46293d92bee02699550ddc9abb4da7e866",
+        "sourceColumn": "FrameTime",
+        "unit": "ms",
+        "sampleCount": 370,
+        "meanMs": 21.790444,
+        "p95Ms": 30.7542,
+        "p95Method": "nearest-rank",
+        "estimatedFPS": 45.891677,
+        "interpretation": "由服务器 CSV 的有限正数 FrameTime 派生；FPS=1000/meanMs，不代表游戏线程纯计算耗时，也不把 60 FPS 上限视为实测帧率。"
+      },
+      "derivedFrameTimingWarning": null
+    },
+    {
+      "id": "004-Scale-Normal-0-20-Frequency-1",
+      "mode": "Scale",
+      "matrix": "Moving",
+      "profile": "Normal",
+      "iteration": 1,
+      "staticCount": 0,
+      "movingCount": 20,
+      "optimization": "Frequency",
+      "warmupSeconds": 2,
+      "sampleSeconds": 8,
+      "outageSeconds": 25,
+      "startedAtUtc": "2026-09-27T02:38:55.8086956Z",
+      "durationSeconds": 24.584,
+      "status": "passed",
+      "requiredAssertions": [
+        "ScaleCount",
+        "ScaleClientLoad",
+        "SampleCompleted"
+      ],
+      "errors": [],
+      "metrics": {
+        "outBytes": 63027,
+        "outPackets": 364,
+        "sampleSeconds": 8.008597899228334,
+        "bytesPerSecond": 7869.916905938422,
+        "connections": 1,
+        "actorCount": 2284,
+        "syntheticStaticCount": 0,
+        "syntheticMovingCount": 20,
+        "expectedStaticCount": 0,
+        "expectedMovingCount": 20,
+        "optimization": "Frequency",
+        "matrix": "Moving",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes"
+      },
+      "cpuMetrics": {
+        "serverReplicateActors": {
+          "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+          "unit": "ms",
+          "sampleCount": 366,
+          "nonZeroSampleCount": 366,
+          "allZero": false,
+          "mean": 0.232369,
+          "p95": 0.4846,
+          "p95Method": "nearest-rank",
+          "max": 1.28
+        },
+        "gameThread": {
+          "sourceColumn": "GameThreadTime",
+          "unit": "ms",
+          "sampleCount": 366,
+          "nonZeroSampleCount": 0,
+          "allZero": true,
+          "mean": 0.0,
+          "p95": 0.0,
+          "p95Method": "nearest-rank",
+          "max": 0.0
+        },
+        "fullyDormantActors": {
+          "sourceColumn": "Replication/NumberOfFullyDormantActors",
+          "unit": "actors",
+          "sampleCount": 366,
+          "nonZeroSampleCount": 366,
+          "allZero": false,
+          "mean": 7.0,
+          "p95": 7.0,
+          "p95Method": "nearest-rank",
+          "max": 7.0
+        },
+        "replicateCallsPerConnection": {
+          "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+          "unit": "calls/connection",
+          "sampleCount": 366,
+          "nonZeroSampleCount": 366,
+          "allZero": false,
+          "mean": 19.23224,
+          "p95": 35.0,
+          "p95Method": "nearest-rank",
+          "max": 38.0
+        }
+      },
+      "csvSha256": "a971837ec4feb03f2138d5e7980824d9b9d532870e4cf2dabeccb2dfc5a36c4b",
+      "measurementWarnings": [
+        "GameThreadTime contains only raw zeros; do not interpret this as zero CPU cost. The engine counter may be unavailable in this configuration."
+      ],
+      "events": [
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Real remote PlayerController with possessed character",
+          "elapsed": 9.48644120246172
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "ScaleCount",
+          "passed": true,
+          "detail": "Observed static=0/0 moving=20/20; validUniqueReferences=true; platformsMovedAtLeast5cm=0/20",
+          "elapsed": 9.488612201064825
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "SampleEnd",
+          "assertion": "SampleCompleted",
+          "passed": true,
+          "detail": "Both real network drivers sampled and CSV writes finished",
+          "elapsed": 19.891428999602795
+        },
+        {
+          "mode": "Scale",
+          "role": "Host",
+          "status": "DONE",
+          "phase": "Completing",
+          "passed": true,
+          "detail": "",
+          "elapsed": 19.99991250038147
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Remote-owned replicated test probe received after Find/Join",
+          "elapsed": 6.648091100156307
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Warmup",
+          "assertion": "ScaleClientLoad",
+          "passed": true,
+          "detail": "Observed static=0/0 moving=20/20; validUniqueReferences=true; platformsMovedAtLeast5cm=20/20",
+          "elapsed": 6.756842602044344
+        },
+        {
+          "mode": "Scale",
+          "role": "Client",
+          "status": "DONE",
+          "phase": "Sample",
+          "passed": true,
+          "detail": "",
+          "elapsed": 17.02376139909029
+        }
+      ],
+      "derivedFrameTiming": {
+        "sourceCsvSha256": "a971837ec4feb03f2138d5e7980824d9b9d532870e4cf2dabeccb2dfc5a36c4b",
+        "sourceColumn": "FrameTime",
+        "unit": "ms",
+        "sampleCount": 366,
+        "meanMs": 21.874541,
+        "p95Ms": 31.475,
+        "p95Method": "nearest-rank",
+        "estimatedFPS": 45.715244,
+        "interpretation": "由服务器 CSV 的有限正数 FrameTime 派生；FPS=1000/meanMs，不代表游戏线程纯计算耗时，也不把 60 FPS 上限视为实测帧率。"
+      },
+      "derivedFrameTimingWarning": null
+    }
+  ],
+  "summaries": [
+    {
+      "group": "Scale, Moving, Normal, 0, 20, Baseline",
+      "matrix": "Moving",
+      "attempted": 1,
+      "passed": 1,
+      "measuredSamples": 1,
+      "minimumThreeMeasuredSamples": false,
+      "medianBytesPerSecond": 12235.442,
+      "minBytesPerSecond": 12235.442,
+      "maxBytesPerSecond": 12235.442,
+      "cpuMeasuredSamples": 1,
+      "gameThreadMeasuredSamples": 0,
+      "medianReplicateMeanMs": 0.22253,
+      "medianReplicateP95Ms": 0.5579,
+      "medianGameThreadMeanMs": null,
+      "medianGameThreadP95Ms": null,
+      "gameThreadAllZeroRuns": 1,
+      "medianFullyDormantActorsMean": 7.0
+    },
+    {
+      "group": "Scale, Moving, Normal, 0, 20, Frequency",
+      "matrix": "Moving",
+      "attempted": 1,
+      "passed": 1,
+      "measuredSamples": 1,
+      "minimumThreeMeasuredSamples": false,
+      "medianBytesPerSecond": 7869.917,
+      "minBytesPerSecond": 7869.917,
+      "maxBytesPerSecond": 7869.917,
+      "cpuMeasuredSamples": 1,
+      "gameThreadMeasuredSamples": 0,
+      "medianReplicateMeanMs": 0.232369,
+      "medianReplicateP95Ms": 0.4846,
+      "medianGameThreadMeanMs": null,
+      "medianGameThreadP95Ms": null,
+      "gameThreadAllZeroRuns": 1,
+      "medianFullyDormantActorsMean": 7.0
+    },
+    {
+      "group": "Scale, Static, Normal, 500, 0, Baseline",
+      "matrix": "Static",
+      "attempted": 1,
+      "passed": 1,
+      "measuredSamples": 1,
+      "minimumThreeMeasuredSamples": false,
+      "medianBytesPerSecond": 1852.733,
+      "minBytesPerSecond": 1852.733,
+      "maxBytesPerSecond": 1852.733,
+      "cpuMeasuredSamples": 1,
+      "gameThreadMeasuredSamples": 0,
+      "medianReplicateMeanMs": 1.205394,
+      "medianReplicateP95Ms": 3.2383,
+      "medianGameThreadMeanMs": null,
+      "medianGameThreadP95Ms": null,
+      "gameThreadAllZeroRuns": 1,
+      "medianFullyDormantActorsMean": 7.0
+    },
+    {
+      "group": "Scale, Static, Normal, 500, 0, Dormancy",
+      "matrix": "Static",
+      "attempted": 1,
+      "passed": 1,
+      "measuredSamples": 1,
+      "minimumThreeMeasuredSamples": false,
+      "medianBytesPerSecond": 1891.284,
+      "minBytesPerSecond": 1891.284,
+      "maxBytesPerSecond": 1891.284,
+      "cpuMeasuredSamples": 1,
+      "gameThreadMeasuredSamples": 0,
+      "medianReplicateMeanMs": 0.126237,
+      "medianReplicateP95Ms": 0.2748,
+      "medianGameThreadMeanMs": null,
+      "medianGameThreadP95Ms": null,
+      "gameThreadAllZeroRuns": 1,
+      "medianFullyDormantActorsMean": 507.0
+    }
+  ]
+}

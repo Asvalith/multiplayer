@@ -3,6 +3,33 @@
 #include "Mechanisms/multiplayerTransporterComponent.h"
 
 #include "GameFramework/Actor.h"
+#include "Components/SceneComponent.h"
+#include "Core/multiplayerGameplayConfig.h"
+#include "Core/multiplayerLog.h"
+#if !UE_BUILD_SHIPPING
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#endif
+
+namespace
+{
+	// 仅显式动态载人实验可恢复旧行为，用同一构建作对照；普通玩法和 Shipping 始终使用修复。
+	bool UseLegacyRideBaseline()
+	{
+#if !UE_BUILD_SHIPPING
+		static const bool bBaseline = []
+		{
+			FString Mode, Sync;
+			FParse::Value(FCommandLine::Get(), TEXT("CoopNetTest="), Mode);
+			FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformSyncMode="), Sync);
+			return Mode == TEXT("RideMotion") && Sync == TEXT("Baseline");
+		}();
+		return bBaseline;
+#else
+		return false;
+#endif
+	}
+}
 
 /*
  * 固定轨道运动组件只生成服务器位置：激活选终点、失活可选返回起点，到位后停 Tick。
@@ -15,6 +42,8 @@ UmultiplayerTransporterComponent::UmultiplayerTransporterComponent()
 	// 组件具备 Tick 能力，但初始关闭；只有目标端点发生变化且尚未到达时才开启。
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+	// (*) CMC 在 PrePhysics 更新。基座移动不能晚于乘客，否则其自动 Tick 依赖会跳过本组件。
+	PrimaryComponentTick.TickGroup = UseLegacyRideBaseline() ? TG_DuringPhysics : TG_PrePhysics;
 }
 
 /**
@@ -46,7 +75,14 @@ void UmultiplayerTransporterComponent::TickComponent(
 
 	// 这是固定轨道机关，不使用 Sweep：乘客和轨道旁装饰物都不应改变平台的权威路径。
 	// PlatformMesh 仍保留碰撞作为角色承载面；轨道是否穿过场景由关卡配置保证。
+	const FVector OldLocation = Owner->GetActorLocation();
 	Owner->SetActorLocation(NewLocation, false);
+	if (!UseLegacyRideBaseline() && Owner->GetRootComponent())
+	{
+		// (**) SetActorLocation 不会替我们维护速度。CMC 起跳继承基座速度，位置正确不等于速度正确。
+		Owner->GetRootComponent()->ComponentVelocity = DeltaTime > SMALL_NUMBER
+			? (Owner->GetActorLocation() - OldLocation) / DeltaTime : FVector::ZeroVector;
+	}
 
 	if (Owner->GetActorLocation().Equals(TargetLocation, 0.5f))
 	{
@@ -91,6 +127,7 @@ void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 	// 只有尚未位于目标点时才开启 Tick；已经到达的重复通知会在上面直接 FinishMovement。
 	bMoving = true;
 	SetComponentTickEnabled(true);
+	if (!UseLegacyRideBaseline()) Owner->ForceNetUpdate();
 }
 
 /** 保存两个固定世界坐标；仅设置目标数据，不立即启动移动或改变 Owner 位置。 */
@@ -101,6 +138,11 @@ void UmultiplayerTransporterComponent::ConfigureWorldTargets(
 	// 调用方在平台开始移动前传入固定世界坐标，避免附着的 Arrow 端点随 Owner 一起移动。
 	StartLocation = InStartLocation;
 	ActiveLocation = InActiveLocation;
+	if (GetOwner() != nullptr && GetOwner()->HasAuthority())
+	{
+		MoveSpeed = FmultiplayerGameplayConfig::Get(this).PlatformMoveSpeed;
+		UE_LOG(LogMultiplayer, Verbose, TEXT("Transporter %s: MoveSpeed=%.1f"), *GetOwner()->GetName(), MoveSpeed);
+	}
 }
 
 /** 根据期望激活状态选起点或终点；不读取跟随平台移动的端点组件。 */
@@ -117,6 +159,12 @@ FVector UmultiplayerTransporterComponent::GetTargetLocation() const
 /** 只结束运动调度，不修改位置；之后新的激活通知仍可重新开启 Tick。 */
 void UmultiplayerTransporterComponent::FinishMovement()
 {
+	if (!UseLegacyRideBaseline() && GetOwner() && GetOwner()->GetRootComponent())
+	{
+		GetOwner()->GetRootComponent()->ComponentVelocity = FVector::ZeroVector;
+		// 只在实际运动结束时催促最终位置/零速度，静止的重复通知不产生额外发送请求。
+		if (bMoving) GetOwner()->ForceNetUpdate();
+	}
 	// 关闭 Tick 是静止机关最直接的性能收益；无需每帧反复比较已经相等的位置。
 	bMoving = false;
 	SetComponentTickEnabled(false);

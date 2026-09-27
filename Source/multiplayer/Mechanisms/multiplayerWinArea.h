@@ -52,8 +52,8 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Win")
 	TObjectPtr<UmultiplayerPlayerOccupancyComponent> PlayerOccupancy;
 
-	// 当前关卡默认要求两名不同玩家同时在区域内；由 Occupancy 负责去重。
-	UPROPERTY(EditAnywhere, Category = "Coop|Win", meta = (ClampMin = "1"))
+	// JSON 指定终点要求的人数，默认两名；由 Occupancy 负责不同玩家去重。
+	UPROPERTY(VisibleInstanceOnly, Category = "Coop|Win")
 	int32 RequiredPlayers = 2;
 
 	UPROPERTY()

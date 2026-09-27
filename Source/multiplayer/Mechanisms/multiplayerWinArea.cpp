@@ -5,6 +5,7 @@
 #include "Components/BoxComponent.h"
 #include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameMode.h"
+#include "Core/multiplayerGameplayConfig.h"
 #include "Core/multiplayerLog.h"
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 
@@ -50,6 +51,8 @@ void AmultiplayerWinArea::BeginPlay()
 	}
 
 	// 人数和目标完成顺序不确定，因此同时监听两种变化并在任一变化后重新读取当前状态。
+	RequiredPlayers = FmultiplayerGameplayConfig::Get(this).WinRequiredPlayers;
+	UE_LOG(LogMultiplayer, Verbose, TEXT("WinArea %s: RequiredPlayers=%d"), *GetName(), RequiredPlayers);
 	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
 		this,
 		&AmultiplayerWinArea::HandleOccupancyChanged);

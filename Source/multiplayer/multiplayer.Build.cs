@@ -28,8 +28,8 @@ public class multiplayer : ModuleRules
 			"SlateCore"
 		});
 
-		// 仅 GameInstance 的实现读取默认菜单地图，公开头文件无需暴露 EngineSettings。
-		PrivateDependencyModuleNames.Add("EngineSettings");
+		// 默认菜单和 JSON 解析只在实现文件中使用，不把解析库暴露给业务头文件。
+		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json" });
 
 		// 面向局域网的具体子系统按配置加载；业务类通过 OnlineSubsystem 接口访问会话。
 		DynamicallyLoadedModuleNames.Add("OnlineSubsystemNull");

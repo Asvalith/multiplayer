@@ -28,6 +28,9 @@ class AmultiplayerGameMode : public AGameMode
 public:
 	AmultiplayerGameMode();
 
+	// 在接收玩家前设置实际登录容量；地图直接启动或重开时同样使用 JSON 人数上限。
+	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+
 	/**
 	 * 登记一个已经通过插槽校验的钥匙目标。
 	 *
@@ -54,6 +57,9 @@ public:
 	 */
 	bool RequestRestartCurrentRound(AController* RequestingController);
 
+	// Travel 失败且本 GameMode/World 仍可用时解除本次重开锁；成功切图由新 World 初始化。
+	bool RecoverFailedRestart(const FString& FailureReason);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -69,4 +75,7 @@ private:
 
 	// 多个客户端可能同时点击重开；服务器只接受本局第一个有效请求。
 	bool bRestartRequested = false;
+	FName MatchStateBeforeRestart = NAME_None;
+	float NextSwitchCountdownBeforeRestart = 0.f;
+	FString PendingRestartURL;
 };

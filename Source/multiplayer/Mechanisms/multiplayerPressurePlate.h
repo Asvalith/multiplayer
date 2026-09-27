@@ -34,7 +34,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
  * 完整链路为：PlayerOccupancy 在服务器统计不同角色 -> EvaluatePlateState 组合人数与目标条件 ->
  * 服务器写 bPlateActive -> RepNotify 让各客户端根据同一个离散状态播放压下/弹起表现。
  * 人数统计交给 PlayerOccupancy，本 Actor 只负责激活规则、状态复制和压下表现。
- * (*) 仅复制 bPlateActive，客户端根据状态插值网格位置，减少持续同步位置的开销。
+ * (*) 运行中仅复制 bPlateActive，速度在初始复制时另行提供；客户端插值网格，减少持续同步位置的开销。
  * 这种策略适合只需同步开关结果、过渡时序要求较低的机关；本地网格仍有碰撞，
  * 但服务器不根据客户端的压下进度判定激活。持续承载玩家的平台采用位置复制。
  * (**) Tick 只在视觉过渡期间开启，到达目标后立即关闭，避免静止机关长期空转。
@@ -105,8 +105,9 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Movement")
 	FVector PressedOffset = FVector(0.0f, 0.0f, -8.0f);
 
-	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Movement", meta = (ClampMin = "1.0"))
-	float PressMoveSpeed = 80.0f;
+	// 新运行期字段不加载旧蓝图 PressMoveSpeed；0 为未就绪，确保服务器的正速度必定进入初始复制。
+	UPROPERTY(VisibleInstanceOnly, Transient, Replicated, Category = "Pressure Plate|Movement")
+	float RuntimePressMoveSpeed = 0.0f;
 
 	// 开启后只统计玩家控制的 Character，排除 AI 或其他角色类型误触发合作机关。
 	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Rules")
@@ -120,7 +121,7 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Rules")
 	bool bRequireObjectiveComplete = false;
 
-	// 唯一复制状态。网格位置不复制，而是由各端从该值推导。
+	// 运行中复制的开关状态；网格位置不复制，速度另外在初始复制时提供。
 	UPROPERTY(ReplicatedUsing = OnRep_PlateActive)
 	bool bPlateActive = false;
 

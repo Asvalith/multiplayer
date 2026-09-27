@@ -35,7 +35,7 @@ class AmultiplayerCharacter : public ACharacter
 	GENERATED_BODY()
 
 public:
-	AmultiplayerCharacter();
+	AmultiplayerCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
 	// 控制器发生变化时重新判断本地所有权，并为本地玩家安装输入映射上下文。

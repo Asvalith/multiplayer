@@ -18,7 +18,7 @@ class UStaticMeshComponent;
  * 压力板负责检测玩家，门只组合多个压力板的结果。关卡设计者可摆放任意数量的压力板，
  * 再通过 RequiredPlates 建立引用，避免门和具体触发区域绑死。
  *
- * 服务器监听每块压力板以及可选的目标进度变化，重新计算 bGateOpen；客户端只收到开关状态，
+ * 服务器监听每块压力板以及可选的目标进度变化，重新计算 bGateOpen；客户端收到开关状态和初始速度，
  * 使用相同的 ClosedPoint/OpenPoint 插值门网格。各端碰撞随本地门网格移动，角色最终位置仍以服务器为准。
  * 这里没有同步动画起始时间，也没有预测或回滚；网络延迟下，两端门的过渡进度可能暂时不同。
  *
@@ -67,6 +67,8 @@ private:
 	void BindRequiredPlates();
 	// 与 BindRequiredPlates 对称，处理关卡卸载和 Actor 销毁。
 	void UnbindRequiredPlates();
+	// 关卡卸载和单块板销毁共用解绑顺序；调用方保证指针可用，允许销毁回调中的板进入。
+	void UnbindRequiredPlate(AmultiplayerPressurePlate* Plate);
 	// 统计激活板数和不同玩家数，并组合可选的钥匙目标前置条件。
 	void EvaluateGateState();
 	// 服务器写入与客户端 OnRep 的共同表现出口。
@@ -106,8 +108,10 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
 	bool bRequireObjectiveComplete = false;
 
-	UPROPERTY(EditAnywhere, Category = "Coop Gate|Movement", meta = (ClampMin = "1.0"))
-	float DoorMoveSpeed = 250.0f;
+	// (*) 使用新的运行期字段和 0 初值，合法速度始终大于 0，确保初始复制不会因等于旧蓝图默认值而省略。
+	// 不读取旧关卡保存的 DoorMoveSpeed；客户端只采用服务器发来的速度。
+	UPROPERTY(VisibleInstanceOnly, Transient, Replicated, Category = "Coop Gate|Movement")
+	float RuntimeDoorMoveSpeed = 0.0f;
 
 	// 只复制逻辑开关，不复制门网格的每帧位置。
 	UPROPERTY(ReplicatedUsing = OnRep_GateOpen)

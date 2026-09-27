@@ -86,6 +86,8 @@ private:
 	ACharacter* GetValidOccupant(AActor* OtherActor) const;
 	// 增加该角色的重叠组件计数，首次进入时绑定 OnDestroyed。
 	void AddOccupant(AActor* OtherActor);
+	// 只登记一条有效角色重叠，不广播；实时进入和初始重建共用相同计数、解绑配对规则。
+	void RecordOccupantOverlap(ACharacter* Character);
 	// 减少重叠组件计数，最后一个组件离开时才移除角色。
 	void RemoveOccupant(AActor* OtherActor);
 	// 屏蔽“组件数变化但不同玩家数不变”的噪声事件。

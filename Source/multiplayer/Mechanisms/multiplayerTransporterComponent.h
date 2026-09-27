@@ -51,7 +51,8 @@ private:
 	// 仅清除运动标记并关闭 Tick；移动与最终位置对齐由调用方负责。
 	void FinishMovement();
 
-	UPROPERTY(EditAnywhere, Category = "Coop|Transport", meta = (ClampMin = "1.0"))
+	// 配置端点时从 JSON 缓存速度，Tick 不查文件；客户端仍只接收所属 Actor 的位置。
+	UPROPERTY(VisibleInstanceOnly, Category = "Coop|Transport")
 	float MoveSpeed = 150.0f;
 
 	// false 表示忽略取消激活，途中也继续前往终点；true 表示取消激活后返回起点。

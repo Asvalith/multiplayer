@@ -1,0 +1,122 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Actor.h"
+#include "multiplayerCoopGate.generated.h"
+
+class AmultiplayerPressurePlate;
+class AmultiplayerCoopGameState;
+class UArrowComponent;
+class USceneComponent;
+class UStaticMeshComponent;
+
+/**
+ * 由服务器判定、在所需压力板激活后开启的合作门。
+ *
+ * 压力板负责检测玩家，门只组合多个压力板的结果。关卡设计者可摆放任意数量的压力板，
+ * 再通过 RequiredPlates 建立引用，避免门和具体触发区域绑死。
+ *
+ * 服务器监听每块压力板以及可选的目标进度变化，重新计算 bGateOpen；客户端收到开关状态和初始速度，
+ * 使用相同的 ClosedPoint/OpenPoint 插值门网格。各端碰撞随本地门网格移动，角色最终位置仍以服务器为准。
+ * 这里没有同步动画起始时间，也没有预测或回滚；网络延迟下，两端门的过渡进度可能暂时不同。
+ *
+ * (*) 门只复制开关状态，各端根据相同端点播放表现；相比持续复制门的位置，网络开销更小。
+ * (**) 判定时同时检查激活压力板数量和不同玩家数量，防止一个玩家同时压住多块板绕过双人条件。
+ * (**) RequiredPlates 是关卡实例引用，EndPlay 对每个外部 Delegate 对称解绑，明确结束依赖关系；
+ * 不把 UObject 委托的失效对象保护当作日常清理流程。
+ */
+UCLASS(Blueprintable)
+class MULTIPLAYER_API AmultiplayerCoopGate : public AActor
+{
+	GENERATED_BODY()
+
+public:
+	AmultiplayerCoopGate();
+
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// 返回关卡配置要求；运行时有效且去重后的压力板数量不足时保持失败关闭，不能偷偷降低门槛。
+	int32 GetRequiredPlateCount() const;
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	UFUNCTION()
+	void HandleRequiredPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive);
+
+	UFUNCTION()
+	void HandleRequiredPlateOccupancyChanged(AmultiplayerPressurePlate* Plate, int32 PlayerCount);
+
+	UFUNCTION()
+	void HandleRequiredPlateDestroyed(AActor* DestroyedActor);
+
+	UFUNCTION()
+	void HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys);
+
+	UFUNCTION()
+	void OnRep_GateOpen();
+
+private:
+	// 从关卡配置生成有效且不重复的运行时依赖集合；之后所有绑定和计数都只使用该集合。
+	void RebuildRuntimeRequiredPlates();
+	// 仅服务器绑定外部压力板，客户端不重复执行规则组合。
+	void BindRequiredPlates();
+	// 与 BindRequiredPlates 对称，处理关卡卸载和 Actor 销毁。
+	void UnbindRequiredPlates();
+	// 关卡卸载和单块板销毁共用解绑顺序；调用方保证指针可用，允许销毁回调中的板进入。
+	void UnbindRequiredPlate(AmultiplayerPressurePlate* Plate);
+	// 统计激活板数和不同玩家数，并组合可选的钥匙目标前置条件。
+	void EvaluateGateState();
+	// 服务器写入与客户端 OnRep 的共同表现出口。
+	void HandleGateStateChanged();
+	// 初始加载时直接对齐目标；状态改变后只在过渡阶段启用 Tick。
+	void ApplyGateState(bool bSnapToTarget);
+
+	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
+	TObjectPtr<USceneComponent> SceneRoot;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMeshComponent> DoorMesh;
+
+	// 用两个可视化端点定义门的行程，设计者可以在蓝图中直接调整，无需填写难理解的坐标。
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UArrowComponent> ClosedPoint;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UArrowComponent> OpenPoint;
+
+	// 关卡实例显式配置依赖关系，比运行时按类型查找更可控，也支持一个关卡中多组独立机关。
+	UPROPERTY(EditInstanceOnly, Category = "Coop Gate|Rules")
+	TArray<TObjectPtr<AmultiplayerPressurePlate>> RequiredPlates;
+
+	// 服务器在 BeginPlay 从 RequiredPlates 生成，避免空引用或重复引用改变规则含义。
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<AmultiplayerPressurePlate>> RuntimeRequiredPlates;
+
+	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules", meta = (ClampMin = "1"))
+	int32 RequiredActivePlateCount = 1;
+
+	// 一次开启后保持打开；否则任一必要压力板释放时门会重新关闭。
+	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
+	bool bStayOpenOnceActivated = false;
+
+	// 开启前还可以等待钥匙目标完成，从而复用为关卡末端机关。
+	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
+	bool bRequireObjectiveComplete = false;
+
+	// (*) 使用新的运行期字段和 0 初值，合法速度始终大于 0，确保初始复制不会因等于旧蓝图默认值而省略。
+	// 不读取旧关卡保存的 DoorMoveSpeed；客户端只采用服务器发来的速度。
+	UPROPERTY(VisibleInstanceOnly, Transient, Replicated, Category = "Coop Gate|Movement")
+	float RuntimeDoorMoveSpeed = 0.0f;
+
+	// 只复制逻辑开关，不复制门网格的每帧位置。
+	UPROPERTY(ReplicatedUsing = OnRep_GateOpen)
+	bool bGateOpen = false;
+
+	UPROPERTY()
+	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
+};

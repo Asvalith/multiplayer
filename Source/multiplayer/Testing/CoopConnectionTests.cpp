@@ -1,0 +1,49 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Network/multiplayerGameInstance.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "TimerManager.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopConnectionStateTest, "Coop.Connection.State",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCoopConnectionStateTest::RunTest(const FString&)
+{
+	FString Address;
+	TestTrue(TEXT("IPv4 endpoint"), UmultiplayerGameInstance::NormalizeServerAddress(TEXT(" 127.0.0.1:7777 "), Address));
+	TestEqual(TEXT("Normalized endpoint"), Address, FString(TEXT("127.0.0.1:7777")));
+	for (const FString Bad : {TEXT("127.0.0.1:0"), TEXT("host:65536"), TEXT("host:7777?listen"), TEXT("/Game/Map"), TEXT("host:abc"), TEXT("host..name:7777")})
+		TestFalse(*Bad, UmultiplayerGameInstance::NormalizeServerAddress(Bad, Address));
+	auto* GI = NewObject<UmultiplayerGameInstance>(GEngine);
+	GI->AddToRoot();
+	GI->InitializeStandalone(FName(TEXT("CoopDSStateTest")));
+	// 拒绝重叠请求不覆盖旧地址；取消通知中的同步重入不能把旧连接重新发出去。
+	GI->ConnectionState = EMultiplayerConnectionState::ReconnectWaiting;
+	GI->LastServerAddress = TEXT("localhost:7777");
+	TestFalse(TEXT("Busy request refused"), GI->ConnectToServer(TEXT("other:7778")));
+	TestEqual(TEXT("Address retained"), GI->LastServerAddress, FString(TEXT("localhost:7777")));
+	GI->ConnectionState = EMultiplayerConnectionState::Idle;
+	const auto Handle = GI->OnConnectionChanged.AddLambda([GI]()
+	{
+		if (GI->ConnectionState == EMultiplayerConnectionState::Connecting)
+		{
+			++GI->OperationRevision;
+			GI->ConnectionState = EMultiplayerConnectionState::Leaving;
+		}
+	});
+	GI->StartTravel(false);
+	TestFalse(TEXT("Canceled before travel deadline armed"), GI->GetTimerManager().IsTimerActive(GI->ConnectTimeoutHandle));
+	TestTrue(TEXT("Cancel state retained"), GI->ConnectionState == EMultiplayerConnectionState::Leaving);
+	GI->OnConnectionChanged.Remove(Handle);
+	GI->ConnectionState = EMultiplayerConnectionState::Reconnecting;
+	GI->ReconnectAttempt = GI->GameplayConfig.ReconnectDelaysSeconds.Num();
+	GI->ScheduleReconnect();
+	TestTrue(TEXT("Bounded reconnect returns idle"), GI->ConnectionState == EMultiplayerConnectionState::Idle && GI->LastServerAddress.IsEmpty());
+	TestFalse(TEXT("Other world failure ignored"), GI->OwnsFailure(nullptr, nullptr));
+	GI->Shutdown();
+	if (UWorld* World = GI->GetWorld()) { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); }
+	GI->RemoveFromRoot();
+	return true;
+}
+#endif

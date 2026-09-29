@@ -1,0 +1,2844 @@
+{
+  "artifactKind": "DS migration compact evidence, not original logs",
+  "date": "2026-09-29",
+  "boundary": "Local Editor Dedicated Server plus two remote client processes; NullRHI; no packaged Server or Linux deployment.",
+  "rawReports": [
+    {
+      "rawReport": "Saved/NetworkValidation/DS-Migration-Normal01/report.json",
+      "rawSha256": "c2bd737717bf9633e3df94b6c8960ed6cf1c39b02eba787d9a4cfc3a9eb953ac",
+      "runId": "20260929-102946-7ca8f6db",
+      "status": "passed",
+      "topology": "One local dedicated server and two separate remote client processes",
+      "moduleSha256": "a46272deff4ee5630608fcce428c2883050b37f55b707a64cd837e905e4f8782",
+      "sourceFingerprint": "797065cb1af9d31e0ff3afaf48a6e80e06d8dd97ff541bf2de9dc0f0ec5574ae",
+      "cases": [
+        {
+          "id": "001-Flow-Normal-0-1-Combined-1",
+          "mode": "Flow",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "PlateDistinctPlayers",
+                "GateRules",
+                "OccupancyUnpossess",
+                "OccupancyRepossess",
+                "OccupancyUncontrolledEntry",
+                "OccupancyLatePossess",
+                "GateReclosed",
+                "GateReopened",
+                "DestroyedPawnCleanup",
+                "PlatformEndpoint",
+                "RestartFailureRecovery",
+                "Restart",
+                "ServerSurvivesClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerVictory",
+                "PartnerRestart",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "GateOpen",
+                "GateClosed",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "ClientVictoryState",
+                "ClientRestartFailureRecovery",
+                "ClientRestart",
+                "ClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "002-Keys-Normal-0-1-Combined-1",
+          "mode": "Keys",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "KeyHeld",
+                "KeyInstallFailureRollback",
+                "KeyCommitReentryBlocked",
+                "KeyInstalledOnce",
+                "KeyConsumeCommitted",
+                "KeyInstallRejectedRetainsKey",
+                "KeyConsumeRejectedRetainsKey",
+                "KeyDestroyClearsCarry",
+                "KeyDropRepick"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "ClientKeyHeld",
+                "ClientKeyInstalled",
+                "ClientKeyRepicked",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "003-LateJoin-Normal-0-1-Combined-1",
+          "mode": "LateJoin",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "OverlapKeys",
+                "LateJoinPrepared",
+                "Join"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "LateJoinState",
+                "LateJoinKeyAttachments",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "004-Reconnect-Normal-0-1-Combined-1",
+          "mode": "Reconnect",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "OutageApplied",
+                "ServerConnectionRetained",
+                "ReconnectAfterOutage"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "BeforeOutage",
+                "ConnectionLostDetected",
+                "ReconnectStateRestored",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "005-ConnectionRetry-Normal-0-1-Combined-1",
+          "mode": "ConnectionRetry",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ConnectionRetrySucceeded"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "ConnectionFailureRecovered",
+                "Join",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "006-Ride-Normal-0-1-Combined-1",
+          "mode": "Ride",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "PlatformEndpoint"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "007-RideMotion-Normal-0-1-Combined-1",
+          "mode": "RideMotion",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ServerMotionStand",
+                "ServerMotionWalk",
+                "ServerMotionReverse",
+                "ServerMotionJump",
+                "MotionServerObserved"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "MotionBoard",
+                "MotionStand",
+                "MotionWalk",
+                "MotionReverse",
+                "MotionJump",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": [
+            {
+              "phase": "Stand",
+              "elapsedSeconds": 4.011913299560547,
+              "frameSamples": 184,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Walk",
+              "elapsedSeconds": 4.006155967712402,
+              "frameSamples": 184,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Reverse",
+              "elapsedSeconds": 4.013671398162842,
+              "frameSamples": 185,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Jump",
+              "elapsedSeconds": 4.024890422821045,
+              "frameSamples": 183,
+              "correctionCount": 2,
+              "comparableCorrections": 2,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 4.997499465942383,
+              "landedAfterJump": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rawReport": "Saved/NetworkValidation/DS-Migration-Weak01/report.json",
+      "rawSha256": "664f35719608e3c207e50d2d35b892b9ac5a9749c2586a26e954e908d05fd06b",
+      "runId": "20260929-103644-3bec419c",
+      "status": "passed",
+      "topology": "One local dedicated server and two separate remote client processes",
+      "moduleSha256": "a46272deff4ee5630608fcce428c2883050b37f55b707a64cd837e905e4f8782",
+      "sourceFingerprint": "15f288d2ff5a2e462e774dcc745d63eabb916038814fe8e7e8b95662644216f9",
+      "cases": [
+        {
+          "id": "001-Flow-Moderate-0-1-Combined-1",
+          "mode": "Flow",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "PlateDistinctPlayers",
+                "GateRules",
+                "OccupancyUnpossess",
+                "OccupancyRepossess",
+                "OccupancyUncontrolledEntry",
+                "OccupancyLatePossess",
+                "GateReclosed",
+                "GateReopened",
+                "DestroyedPawnCleanup",
+                "PlatformEndpoint",
+                "RestartFailureRecovery",
+                "Restart",
+                "ServerSurvivesClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerVictory",
+                "PartnerRestart",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "GateOpen",
+                "GateClosed",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "ClientVictoryState",
+                "ClientRestartFailureRecovery",
+                "ClientRestart",
+                "ClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "002-Flow-Harsh-0-1-Combined-1",
+          "mode": "Flow",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "PlateDistinctPlayers",
+                "GateRules",
+                "OccupancyUnpossess",
+                "OccupancyRepossess",
+                "OccupancyUncontrolledEntry",
+                "OccupancyLatePossess",
+                "GateReclosed",
+                "GateReopened",
+                "DestroyedPawnCleanup",
+                "PlatformEndpoint",
+                "RestartFailureRecovery",
+                "Restart",
+                "ServerSurvivesClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerVictory",
+                "PartnerRestart",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "GateOpen",
+                "GateClosed",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "ClientVictoryState",
+                "ClientRestartFailureRecovery",
+                "ClientRestart",
+                "ClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "003-Keys-Moderate-0-1-Combined-1",
+          "mode": "Keys",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "KeyHeld",
+                "KeyInstallFailureRollback",
+                "KeyCommitReentryBlocked",
+                "KeyInstalledOnce",
+                "KeyConsumeCommitted",
+                "KeyInstallRejectedRetainsKey",
+                "KeyConsumeRejectedRetainsKey",
+                "KeyDestroyClearsCarry",
+                "KeyDropRepick"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "ClientKeyHeld",
+                "ClientKeyInstalled",
+                "ClientKeyRepicked",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "004-Keys-Harsh-0-1-Combined-1",
+          "mode": "Keys",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "KeyHeld",
+                "KeyInstallFailureRollback",
+                "KeyCommitReentryBlocked",
+                "KeyInstalledOnce",
+                "KeyConsumeCommitted",
+                "KeyInstallRejectedRetainsKey",
+                "KeyConsumeRejectedRetainsKey",
+                "KeyDestroyClearsCarry",
+                "KeyDropRepick"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "ClientKeyHeld",
+                "ClientKeyInstalled",
+                "ClientKeyRepicked",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "005-LateJoin-Moderate-0-1-Combined-1",
+          "mode": "LateJoin",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "OverlapKeys",
+                "LateJoinPrepared",
+                "Join"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "LateJoinState",
+                "LateJoinKeyAttachments",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "006-LateJoin-Harsh-0-1-Combined-1",
+          "mode": "LateJoin",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "OverlapKeys",
+                "LateJoinPrepared",
+                "Join"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "LateJoinState",
+                "LateJoinKeyAttachments",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "007-Reconnect-Moderate-0-1-Combined-1",
+          "mode": "Reconnect",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "OutageApplied",
+                "ServerConnectionRetained",
+                "ReconnectAfterOutage"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "BeforeOutage",
+                "ConnectionLostDetected",
+                "ReconnectStateRestored",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "008-Reconnect-Harsh-0-1-Combined-1",
+          "mode": "Reconnect",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "OutageApplied",
+                "ServerConnectionRetained",
+                "ReconnectAfterOutage"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "BeforeOutage",
+                "ConnectionLostDetected",
+                "ReconnectStateRestored",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "009-ConnectionRetry-Moderate-0-1-Combined-1",
+          "mode": "ConnectionRetry",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ConnectionRetrySucceeded"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "ConnectionFailureRecovered",
+                "Join",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "010-ConnectionRetry-Harsh-0-1-Combined-1",
+          "mode": "ConnectionRetry",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ConnectionRetrySucceeded"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "ConnectionFailureRecovered",
+                "Join",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "011-Ride-Moderate-0-1-Combined-1",
+          "mode": "Ride",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "PlatformEndpoint"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "012-Ride-Harsh-0-1-Combined-1",
+          "mode": "Ride",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "PlatformEndpoint"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "Freeze",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "013-RideMotion-Moderate-0-1-Combined-1",
+          "mode": "RideMotion",
+          "profile": "Moderate",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ServerMotionStand",
+                "ServerMotionWalk",
+                "ServerMotionReverse",
+                "ServerMotionJump",
+                "MotionServerObserved"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "MotionBoard",
+                "MotionStand",
+                "MotionWalk",
+                "MotionReverse",
+                "MotionJump",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": [
+            {
+              "phase": "Stand",
+              "elapsedSeconds": 4.003190994262695,
+              "frameSamples": 179,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Walk",
+              "elapsedSeconds": 4.01902437210083,
+              "frameSamples": 182,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Reverse",
+              "elapsedSeconds": 4.008444309234619,
+              "frameSamples": 178,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Jump",
+              "elapsedSeconds": 4.023406982421875,
+              "frameSamples": 182,
+              "correctionCount": 7,
+              "comparableCorrections": 7,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 41.038875579833984,
+              "landedAfterJump": true
+            }
+          ]
+        },
+        {
+          "id": "014-RideMotion-Harsh-0-1-Combined-1",
+          "mode": "RideMotion",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ServerMotionStand",
+                "ServerMotionWalk",
+                "ServerMotionReverse",
+                "ServerMotionJump",
+                "MotionServerObserved"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "MotionBoard",
+                "MotionStand",
+                "MotionWalk",
+                "MotionReverse",
+                "MotionJump",
+                "Complete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": [
+            {
+              "phase": "Stand",
+              "elapsedSeconds": 4.004758834838867,
+              "frameSamples": 180,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Walk",
+              "elapsedSeconds": 4.027055740356445,
+              "frameSamples": 181,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Reverse",
+              "elapsedSeconds": 4.01289701461792,
+              "frameSamples": 183,
+              "correctionCount": 0,
+              "comparableCorrections": 0,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 0,
+              "landedAfterJump": false
+            },
+            {
+              "phase": "Jump",
+              "elapsedSeconds": 4.01627779006958,
+              "frameSamples": 183,
+              "correctionCount": 12,
+              "comparableCorrections": 12,
+              "baseChangeCorrections": 0,
+              "maxCorrectionCm": 70.1282958984375,
+              "landedAfterJump": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rawReport": "Saved/NetworkValidation/DS-Migration-FinalFlow/report.json",
+      "rawSha256": "d23be6a935e365794e62e6d597ad9b75c09aadb1812fa08c8f3642068ac08dbe",
+      "runId": "20260929-105409-d3f747e8",
+      "status": "passed",
+      "topology": "One local dedicated server and two separate remote client processes",
+      "moduleSha256": "420fbfba64a8091bead683095c5463306151a6d33f4a4d40fc05d026d4a14776",
+      "sourceFingerprint": "742dba2646e610f74795f2ab5e97d9e072587a492999afbe9054de7b4dd37657",
+      "cases": [
+        {
+          "id": "001-Flow-Normal-0-1-Combined-1",
+          "mode": "Flow",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "PlateDistinctPlayers",
+                "GateRules",
+                "OccupancyUnpossess",
+                "OccupancyRepossess",
+                "OccupancyUncontrolledEntry",
+                "OccupancyLatePossess",
+                "GateReclosed",
+                "GateReopened",
+                "DestroyedPawnCleanup",
+                "PlatformEndpoint",
+                "RestartFailureRecovery",
+                "Restart",
+                "ServerSurvivesClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerVictory",
+                "PartnerRestart",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ClientInputReady",
+                "Freeze",
+                "GateOpen",
+                "GateClosed",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "ClientVictoryState",
+                "ClientRestartFailureRecovery",
+                "ClientRestart",
+                "ClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "002-Flow-Harsh-0-1-Combined-1",
+          "mode": "Flow",
+          "profile": "Harsh",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "OverlapKeys",
+                "PlateDistinctPlayers",
+                "GateRules",
+                "OccupancyUnpossess",
+                "OccupancyRepossess",
+                "OccupancyUncontrolledEntry",
+                "OccupancyLatePossess",
+                "GateReclosed",
+                "GateReopened",
+                "DestroyedPawnCleanup",
+                "PlatformEndpoint",
+                "RestartFailureRecovery",
+                "Restart",
+                "ServerSurvivesClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerVictory",
+                "PartnerRestart",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ClientInputReady",
+                "Freeze",
+                "GateOpen",
+                "GateClosed",
+                "RidePrepare",
+                "Boarding",
+                "ClientRide",
+                "ClientVictoryState",
+                "ClientRestartFailureRecovery",
+                "ClientRestart",
+                "ClientLeave"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": null,
+          "cpu": null,
+          "csvSha256": null,
+          "warnings": [],
+          "clientMotion": []
+        }
+      ]
+    },
+    {
+      "rawReport": "Saved/NetworkValidation/DS-Migration-ScaleSmoke/report.json",
+      "rawSha256": "46ab5282ada1ee55aa40d4efb715db1cb15f08085550068e882df40e0bb48646",
+      "runId": "20260929-105621-3dccc9f9",
+      "status": "failed",
+      "topology": "One local dedicated server and two separate remote client processes",
+      "moduleSha256": "420fbfba64a8091bead683095c5463306151a6d33f4a4d40fc05d026d4a14776",
+      "sourceFingerprint": "302a630bd2a5bcf66d050d64e67557b9dcf06bea956af93d239247ee13a5bef5",
+      "cases": [
+        {
+          "id": "001-Scale-Normal-500-0-Baseline-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "failed",
+          "errors": [
+            "Missing valid measured CSV columns: Exclusive/GameThread/ServerReplicateActors and GameThreadTime"
+          ],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 35320,
+            "outPackets": 661,
+            "sampleSeconds": 10.061913501471281,
+            "bytesPerSecond": 3510.266709690499,
+            "connections": 2,
+            "actorCount": 2762,
+            "syntheticStaticCount": 500,
+            "syntheticMovingCount": 0,
+            "expectedStaticCount": 500,
+            "expectedMovingCount": 0,
+            "optimization": "Baseline",
+            "matrix": "Static",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleSmoke/001-Scale-Normal-500-0-Baseline-1-Server.csv"
+          },
+          "cpu": null,
+          "csvSha256": "1b7b76eea8a101e35e00a09f98be22c1a34a152273398670eea757dec940bfb7",
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "002-Scale-Normal-500-0-Dormancy-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "failed",
+          "errors": [
+            "Missing valid measured CSV columns: Exclusive/GameThread/ServerReplicateActors and GameThreadTime"
+          ],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 34852,
+            "outPackets": 652,
+            "sampleSeconds": 10.00128709897399,
+            "bytesPerSecond": 3484.7514779948065,
+            "connections": 2,
+            "actorCount": 2762,
+            "syntheticStaticCount": 500,
+            "syntheticMovingCount": 0,
+            "expectedStaticCount": 500,
+            "expectedMovingCount": 0,
+            "optimization": "Dormancy",
+            "matrix": "Static",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleSmoke/002-Scale-Normal-500-0-Dormancy-1-Server.csv"
+          },
+          "cpu": null,
+          "csvSha256": "78849afe5c3f4fcb16cc140480938a1de20a43656f86c2373f96fdfd458498e5",
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "003-Scale-Normal-0-20-Baseline-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "failed",
+          "errors": [
+            "Missing valid measured CSV columns: Exclusive/GameThread/ServerReplicateActors and GameThreadTime"
+          ],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 275136,
+            "outPackets": 660,
+            "sampleSeconds": 10.054240297526121,
+            "bytesPerSecond": 27365.17050101718,
+            "connections": 2,
+            "actorCount": 2282,
+            "syntheticStaticCount": 0,
+            "syntheticMovingCount": 20,
+            "expectedStaticCount": 0,
+            "expectedMovingCount": 20,
+            "optimization": "Baseline",
+            "matrix": "Moving",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleSmoke/003-Scale-Normal-0-20-Baseline-1-Server.csv"
+          },
+          "cpu": null,
+          "csvSha256": "828727b1a9ed8309f8b2de73309d2c3fa6881cf74fcf65129ac3f2aefa128eb8",
+          "warnings": [],
+          "clientMotion": []
+        },
+        {
+          "id": "004-Scale-Normal-0-20-Frequency-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "failed",
+          "errors": [
+            "Missing valid measured CSV columns: Exclusive/GameThread/ServerReplicateActors and GameThreadTime"
+          ],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 160067,
+            "outPackets": 664,
+            "sampleSeconds": 10.108909398317337,
+            "bytesPerSecond": 15834.250134504491,
+            "connections": 2,
+            "actorCount": 2282,
+            "syntheticStaticCount": 0,
+            "syntheticMovingCount": 20,
+            "expectedStaticCount": 0,
+            "expectedMovingCount": 20,
+            "optimization": "Frequency",
+            "matrix": "Moving",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleSmoke/004-Scale-Normal-0-20-Frequency-1-Server.csv"
+          },
+          "cpu": null,
+          "csvSha256": "7f2a381f177eb37009e8c78ac50c8795b53acfb4ed9f711a58a5589c2ca30905",
+          "warnings": [],
+          "clientMotion": []
+        }
+      ]
+    },
+    {
+      "rawReport": "Saved/NetworkValidation/DS-Migration-ScaleVerified/report.json",
+      "rawSha256": "e4bfc6f6304e26f40244a335d9fba7a78894b88932fb3f39e75a07f3fd25640b",
+      "runId": "20260929-110048-93d8f64f",
+      "status": "passed",
+      "topology": "One local dedicated server and two separate remote client processes",
+      "moduleSha256": "420fbfba64a8091bead683095c5463306151a6d33f4a4d40fc05d026d4a14776",
+      "sourceFingerprint": "3abce53cc65abf66edfd20c1fa75d0ad003b31d961f37c4b279f41fef79d8ce7",
+      "cases": [
+        {
+          "id": "001-Scale-Normal-500-0-Baseline-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 35086,
+            "outPackets": 655,
+            "sampleSeconds": 10.043934501707554,
+            "bytesPerSecond": 3493.2525689046543,
+            "connections": 2,
+            "actorCount": 2762,
+            "syntheticStaticCount": 500,
+            "syntheticMovingCount": 0,
+            "expectedStaticCount": 500,
+            "expectedMovingCount": 0,
+            "optimization": "Baseline",
+            "matrix": "Static",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleVerified/001-Scale-Normal-500-0-Baseline-1-Server.csv"
+          },
+          "cpu": {
+            "serverReplicateActors": {
+              "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+              "unit": "ms",
+              "sampleCount": 328,
+              "nonZeroSampleCount": 328,
+              "allZero": false,
+              "mean": 2.298235,
+              "p95": 4.712,
+              "p95Method": "nearest-rank",
+              "max": 6.0712
+            },
+            "gameThread": null,
+            "fullyDormantActors": {
+              "sourceColumn": "Replication/NumberOfFullyDormantActors",
+              "unit": "actors",
+              "sampleCount": 328,
+              "nonZeroSampleCount": 328,
+              "allZero": false,
+              "mean": 7,
+              "p95": 7,
+              "p95Method": "nearest-rank",
+              "max": 7
+            },
+            "replicateCallsPerConnection": {
+              "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+              "unit": "calls/connection",
+              "sampleCount": 328,
+              "nonZeroSampleCount": 328,
+              "allZero": false,
+              "mean": 264.920732,
+              "p95": 308,
+              "p95Method": "nearest-rank",
+              "max": 309
+            }
+          },
+          "csvSha256": "5e9ec2cdbeac7b15aa66539a5857f13b6f9b85a1d804d2a6268d237fdc720db9",
+          "warnings": [
+            "GameThreadTime is unavailable in this DS CSV; total game-thread cost remains null. Replication CPU is measured separately."
+          ],
+          "clientMotion": []
+        },
+        {
+          "id": "002-Scale-Normal-500-0-Dormancy-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 34834,
+            "outPackets": 650,
+            "sampleSeconds": 10.030741699039936,
+            "bytesPerSecond": 3472.72425560854,
+            "connections": 2,
+            "actorCount": 2762,
+            "syntheticStaticCount": 500,
+            "syntheticMovingCount": 0,
+            "expectedStaticCount": 500,
+            "expectedMovingCount": 0,
+            "optimization": "Dormancy",
+            "matrix": "Static",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleVerified/002-Scale-Normal-500-0-Dormancy-1-Server.csv"
+          },
+          "cpu": {
+            "serverReplicateActors": {
+              "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+              "unit": "ms",
+              "sampleCount": 329,
+              "nonZeroSampleCount": 329,
+              "allZero": false,
+              "mean": 0.232202,
+              "p95": 0.5162,
+              "p95Method": "nearest-rank",
+              "max": 1.5922
+            },
+            "gameThread": null,
+            "fullyDormantActors": {
+              "sourceColumn": "Replication/NumberOfFullyDormantActors",
+              "unit": "actors",
+              "sampleCount": 329,
+              "nonZeroSampleCount": 329,
+              "allZero": false,
+              "mean": 507,
+              "p95": 507,
+              "p95Method": "nearest-rank",
+              "max": 507
+            },
+            "replicateCallsPerConnection": {
+              "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+              "unit": "calls/connection",
+              "sampleCount": 329,
+              "nonZeroSampleCount": 329,
+              "allZero": false,
+              "mean": 15.326748,
+              "p95": 17,
+              "p95Method": "nearest-rank",
+              "max": 18
+            }
+          },
+          "csvSha256": "671274372d1a793f2882a2fcd15744fd4b7b4dfaf70568997dddf4c3b5ec1a1b",
+          "warnings": [
+            "GameThreadTime is unavailable in this DS CSV; total game-thread cost remains null. Replication CPU is measured separately."
+          ],
+          "clientMotion": []
+        },
+        {
+          "id": "003-Scale-Normal-0-20-Baseline-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 274819,
+            "outPackets": 656,
+            "sampleSeconds": 10.058276999741793,
+            "bytesPerSecond": 27322.671667031533,
+            "connections": 2,
+            "actorCount": 2282,
+            "syntheticStaticCount": 0,
+            "syntheticMovingCount": 20,
+            "expectedStaticCount": 0,
+            "expectedMovingCount": 20,
+            "optimization": "Baseline",
+            "matrix": "Moving",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleVerified/003-Scale-Normal-0-20-Baseline-1-Server.csv"
+          },
+          "cpu": {
+            "serverReplicateActors": {
+              "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+              "unit": "ms",
+              "sampleCount": 328,
+              "nonZeroSampleCount": 328,
+              "allZero": false,
+              "mean": 0.572317,
+              "p95": 1.3227,
+              "p95Method": "nearest-rank",
+              "max": 3.1156
+            },
+            "gameThread": null,
+            "fullyDormantActors": {
+              "sourceColumn": "Replication/NumberOfFullyDormantActors",
+              "unit": "actors",
+              "sampleCount": 328,
+              "nonZeroSampleCount": 328,
+              "allZero": false,
+              "mean": 7,
+              "p95": 7,
+              "p95Method": "nearest-rank",
+              "max": 7
+            },
+            "replicateCallsPerConnection": {
+              "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+              "unit": "calls/connection",
+              "sampleCount": 328,
+              "nonZeroSampleCount": 328,
+              "allZero": false,
+              "mean": 35.353659,
+              "p95": 37,
+              "p95Method": "nearest-rank",
+              "max": 38
+            }
+          },
+          "csvSha256": "feb6d9810f955f4421363c5100b20c63612282d746a61c81350575a46e129f50",
+          "warnings": [
+            "GameThreadTime is unavailable in this DS CSV; total game-thread cost remains null. Replication CPU is measured separately."
+          ],
+          "clientMotion": []
+        },
+        {
+          "id": "004-Scale-Normal-0-20-Frequency-1",
+          "mode": "Scale",
+          "profile": "Normal",
+          "status": "passed",
+          "errors": [],
+          "peers": [
+            {
+              "role": "Server",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Partner",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            },
+            {
+              "role": "Client",
+              "exitCode": 0,
+            "stoppedByRunner": false
+            }
+          ],
+          "checks": [
+            {
+              "role": "Server",
+              "passedAssertions": [
+                "DedicatedAuthority",
+                "Join",
+                "ScaleCount",
+                "SampleCompleted"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Partner",
+              "passedAssertions": [
+                "PartnerReady",
+                "PartnerComplete"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            },
+            {
+              "role": "Client",
+              "passedAssertions": [
+                "Join",
+                "ScaleClientLoad"
+              ],
+              "done": [
+                {
+                  "passed": true
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "outBytes": 159669,
+            "outPackets": 664,
+            "sampleSeconds": 10.07624140009284,
+            "bytesPerSecond": 15846.087212492632,
+            "connections": 2,
+            "actorCount": 2282,
+            "syntheticStaticCount": 0,
+            "syntheticMovingCount": 20,
+            "expectedStaticCount": 0,
+            "expectedMovingCount": 20,
+            "optimization": "Frequency",
+            "matrix": "Moving",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes",
+            "csvPath": "Saved/NetworkValidation/DS-Migration-ScaleVerified/004-Scale-Normal-0-20-Frequency-1-Server.csv"
+          },
+          "cpu": {
+            "serverReplicateActors": {
+              "sourceColumn": "Exclusive/GameThread/ServerReplicateActors",
+              "unit": "ms",
+              "sampleCount": 332,
+              "nonZeroSampleCount": 332,
+              "allZero": false,
+              "mean": 0.403448,
+              "p95": 0.9888,
+              "p95Method": "nearest-rank",
+              "max": 1.7001
+            },
+            "gameThread": null,
+            "fullyDormantActors": {
+              "sourceColumn": "Replication/NumberOfFullyDormantActors",
+              "unit": "actors",
+              "sampleCount": 332,
+              "nonZeroSampleCount": 332,
+              "allZero": false,
+              "mean": 7,
+              "p95": 7,
+              "p95Method": "nearest-rank",
+              "max": 7
+            },
+            "replicateCallsPerConnection": {
+              "sourceColumn": "Replication/NumReplicateActorCallsPerConAvg",
+              "unit": "calls/connection",
+              "sampleCount": 332,
+              "nonZeroSampleCount": 332,
+              "allZero": false,
+              "mean": 25.274096,
+              "p95": 38,
+              "p95Method": "nearest-rank",
+              "max": 40
+            }
+          },
+          "csvSha256": "19a8d6fc3a3473ea82f51cac0d3af9845e5833c2eb2de788a4eb5e104902fb05",
+          "warnings": [
+            "GameThreadTime is unavailable in this DS CSV; total game-thread cost remains null. Replication CPU is measured separately."
+          ],
+          "clientMotion": []
+        }
+      ]
+    }
+  ],
+  "smoke": {
+    "status": "passed",
+    "rawSha256": "5a01c935d05429a65c56c4d98487173fa88a5b52df15cb2b80011e735581e3cd",
+    "rawReport": "Saved/DedicatedServer/20260929-185338-ece0c32b/report.json",
+    "peers": [
+      {
+        "name": "Server",
+        "exitCode": 0,
+        "forced": false
+      },
+      {
+        "name": "Client1",
+        "exitCode": 0,
+        "forced": false
+      },
+      {
+        "name": "Client2",
+        "exitCode": 0,
+        "forced": false
+      }
+    ]
+  },
+  "unit": {
+    "failed": 0,
+    "succeededWithWarnings": 1,
+    "rawSha256": "8e03acb32d7604094051745e7508ece4155b455288c11dd35eec7936d2bc94d2",
+    "succeeded": 0,
+    "rawReport": "Saved/TestReports/DSConnection/index.json"
+  },
+  "standaloneServerBuild": {
+    "log": "Saved/DSMigration-ServerBuild.log",
+    "status": "blocked-by-installed-engine",
+    "sha256": "f4311a4fbdf32ff9599b9a1e3c209e96ff0e40e5e15ed7d373704a84cc9490e7",
+    "error": "Server targets are not currently supported from this engine distribution."
+  },
+  "retiredMenuBackup": "Saved/BeforeDSMigration-20260929-181149/UI",
+  "dsMenuSha256": "f5d8f69842fef337e7c645bce32e85432b59fd00f7161cb4f451975ef4578562"
+}

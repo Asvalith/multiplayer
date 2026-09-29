@@ -4,6 +4,8 @@ DerivedDataCache/
 Intermediate/
 Saved/
 Packaged/
+# Cooker-generated file access traces; keep hand-maintained Build assets trackable.
+/Build/Windows/FileOpenOrder/
 
 # Visual Studio generated files
 .vs/

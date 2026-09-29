@@ -9,14 +9,14 @@
 
 /*
  * 事件流：触发体报告进入/离开 -> 按 Character 累计重叠项 -> 对外发布不同角色数量。
- * 另用 OnDestroyed 补足角色销毁的清理路径；重绑定时从触发体已有重叠表恢复站在原地的角色。
+ * 控制器变更更新玩家资格，OnDestroyed 补足销毁清理；重绑定从已有重叠表恢复区域候选。
  * 调用方应确保组件用于服务器规则；非复制的本地 Actor 还须像 WinArea 一样先排除客户端世界。
  */
 
 /** 关闭 Tick 和组件复制，人数表作为服务器按事件维护的临时规则数据。 */
 UmultiplayerPlayerOccupancyComponent::UmultiplayerPlayerOccupancyComponent()
 {
-	// 完全由 Overlap/OnDestroyed 事件驱动，不需要 Tick，也不需要把服务器临时成员表复制给客户端。
+	// 重叠、控制器变化和销毁均由事件驱动，不需要 Tick，也不复制服务器临时成员表。
 	PrimaryComponentTick.bCanEverTick = false;
 	SetIsReplicatedByDefault(false);
 }
@@ -32,25 +32,25 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 	// 保存旧人数与成员、静默清理，最后只广播最终结果；这是事件层面的合并，并非线程同步原子操作。
 	const int32 PreviousPlayerCount = GetPlayerCount();
 	TSet<TWeakObjectPtr<ACharacter>> PreviousOccupants;
-	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OverlapCounts)
+	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 	{
-		if (Entry.Key.IsValid() && Entry.Value > 0)
+		if (Entry.Key.IsValid() && Entry.Value.OverlapCount > 0 && Entry.Value.bCountsAsPlayer)
 		{
 			PreviousOccupants.Add(Entry.Key);
 		}
 	}
 
 	const auto BroadcastRebindIfChanged =
-		[this, PreviousPlayerCount, PreviousOccupants]()
+		[this, PreviousPlayerCount, &PreviousOccupants]()
 		{
 			const int32 NewPlayerCount = GetPlayerCount();
 			bool bMembershipChanged = NewPlayerCount != PreviousPlayerCount;
 			if (!bMembershipChanged)
 			{
-				for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OverlapCounts)
+				for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 				{
 					if (Entry.Key.IsValid()
-						&& Entry.Value > 0
+						&& Entry.Value.OverlapCount > 0 && Entry.Value.bCountsAsPlayer
 						&& !PreviousOccupants.Contains(Entry.Key))
 					{
 						bMembershipChanged = true;
@@ -128,9 +128,9 @@ int32 UmultiplayerPlayerOccupancyComponent::GetPlayerCount() const
 {
 	// 不直接返回 Map.Num()：弱引用失效与延迟销毁窗口中，容器可能暂时保留无效条目。
 	int32 PlayerCount = 0;
-	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OverlapCounts)
+	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 	{
-		if (Entry.Key.IsValid() && Entry.Value > 0)
+		if (Entry.Key.IsValid() && Entry.Value.OverlapCount > 0 && Entry.Value.bCountsAsPlayer)
 		{
 			++PlayerCount;
 		}
@@ -143,9 +143,9 @@ void UmultiplayerPlayerOccupancyComponent::GetOccupyingCharacters(
 	TArray<ACharacter*>& OutCharacters) const
 {
 	// 采用追加语义，不擅自清空调用者已有内容；当前门机关传入的是新建临时数组。
-	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OverlapCounts)
+	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 	{
-		if (Entry.Key.IsValid() && Entry.Value > 0)
+		if (Entry.Key.IsValid() && Entry.Value.OverlapCount > 0 && Entry.Value.bCountsAsPlayer)
 		{
 			OutCharacters.Add(Entry.Key.Get());
 		}
@@ -201,17 +201,20 @@ void UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed(
 		return;
 	}
 
-	// Pawn 销毁可能没有 EndOverlap，直接移除整个角色条目并按人数变化广播一次。
-	const int32 PreviousPlayerCount = GetPlayerCount();
-	OverlapCounts.Remove(Character);
-	Character->OnDestroyed.RemoveDynamic(
-		this,
-		&UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
-	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
+	FOccupantRecord RemovedRecord;
+	if (Occupants.RemoveAndCopyValue(Character, RemovedRecord))
+	{
+		UnbindOccupant(Character);
+		// 销毁中的弱引用可能已失效，不能仅用“调用前 GetPlayerCount”推测是否需要通知。
+		if (RemovedRecord.bCountsAsPlayer)
+		{
+			OnOccupancyChanged.Broadcast(GetPlayerCount());
+		}
+	}
 }
 
-/** 将事件对象过滤成允许计数的 Character；关闭玩家限制时也允许 AI Character。 */
-ACharacter* UmultiplayerPlayerOccupancyComponent::GetValidOccupant(
+/** 保留区域内所有 Character 候选；玩家资格由独立字段和控制器事件维护。 */
+ACharacter* UmultiplayerPlayerOccupancyComponent::GetOverlapCandidate(
 	AActor* OtherActor) const
 {
 	const AActor* Owner = GetOwner();
@@ -220,24 +223,47 @@ ACharacter* UmultiplayerPlayerOccupancyComponent::GetValidOccupant(
 		return nullptr;
 	}
 
-	// IsPlayerControlled 在服务器上判断实际玩家 Pawn；配置允许时也可接受 AI Character。
 	ACharacter* Character = Cast<ACharacter>(OtherActor);
-	if (Character == nullptr
-		|| (bRequirePlayerControlledCharacter && !Character->IsPlayerControlled()))
-	{
-		return nullptr;
-	}
+	return IsValid(Character) && !Character->IsActorBeingDestroyed() ? Character : nullptr;
+}
 
-	return Character;
+/** 物理重叠不等于玩家占用；资格会随 Possess/UnPossess 改变，而不一定产生新的 Overlap。 */
+bool UmultiplayerPlayerOccupancyComponent::CanCountAsPlayer(const ACharacter* Character) const
+{
+	return IsValid(Character) && !Character->IsActorBeingDestroyed()
+		&& (!bRequirePlayerControlledCharacter || Character->IsPlayerControlled());
+}
+
+/** 用记录中的旧资格比较变化；直接查询当前 Controller 会丢失变更前的人数。 */
+void UmultiplayerPlayerOccupancyComponent::HandleControllerChanged(
+	APawn* Pawn, AController* OldController, AController* NewController)
+{
+	ACharacter* Character = Cast<ACharacter>(Pawn);
+	FOccupantRecord* Record = Occupants.Find(Character);
+	if (Record == nullptr)
+	{
+		return;
+	}
+	const int32 PreviousPlayerCount = GetPlayerCount();
+	Record->bCountsAsPlayer = CanCountAsPlayer(Character);
+	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
+}
+
+/** 一个候选角色的外部订阅成组释放，与首次重叠的绑定严格配对。 */
+void UmultiplayerPlayerOccupancyComponent::UnbindOccupant(ACharacter* Character)
+{
+	Character->OnDestroyed.RemoveDynamic(this, &UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
+	Character->ReceiveControllerChangedDelegate.RemoveDynamic(
+		this, &UmultiplayerPlayerOccupancyComponent::HandleControllerChanged);
 }
 
 /**
- * 为允许进入的角色增加一个重叠项；首次出现时监听销毁，只有不同角色人数改变才广播。
+ * 为候选角色增加重叠项并监听生命周期；只有有效玩家人数改变才广播。
  * (*) 这里去重的是玩家计数，不会按 OtherComponent 对重复的同一 Begin 事件再次去重。
  */
 void UmultiplayerPlayerOccupancyComponent::AddOccupant(AActor* OtherActor)
 {
-	ACharacter* Character = GetValidOccupant(OtherActor);
+	ACharacter* Character = GetOverlapCandidate(OtherActor);
 	if (Character == nullptr)
 	{
 		return;
@@ -248,21 +274,24 @@ void UmultiplayerPlayerOccupancyComponent::AddOccupant(AActor* OtherActor)
 	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
 }
 
-/** 首次重叠时绑定销毁回调；批量重建由调用方最后统一通知，不发布中间人数。 */
+/** 首次重叠绑定销毁和控制器回调；批量重建由调用方最后统一通知，不发布中间人数。 */
 void UmultiplayerPlayerOccupancyComponent::RecordOccupantOverlap(ACharacter* Character)
 {
-	int32& OverlapCount = OverlapCounts.FindOrAdd(Character);
+	FOccupantRecord& Record = Occupants.FindOrAdd(Character);
 	// 一个 Begin 贡献一个重叠项；角色可能有多个组件或刚体，但对外人数始终只算一人。
-	++OverlapCount;
-	if (OverlapCount == 1)
+	++Record.OverlapCount;
+	if (Record.OverlapCount == 1)
 	{
+		Record.bCountsAsPlayer = CanCountAsPlayer(Character);
 		Character->OnDestroyed.AddUniqueDynamic(
 			this,
 			&UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
+		Character->ReceiveControllerChangedDelegate.AddUniqueDynamic(
+			this, &UmultiplayerPlayerOccupancyComponent::HandleControllerChanged);
 	}
 }
 
-/** 减少已有角色的一条重叠记录；移除最后一项时同步解除销毁监听，未知角色直接忽略。 */
+/** 减少已有重叠记录；移除最后一项时解除全部角色监听，未知角色直接忽略。 */
 void UmultiplayerPlayerOccupancyComponent::RemoveOccupant(AActor* OtherActor)
 {
 	ACharacter* Character = Cast<ACharacter>(OtherActor);
@@ -271,22 +300,20 @@ void UmultiplayerPlayerOccupancyComponent::RemoveOccupant(AActor* OtherActor)
 		return;
 	}
 
-	int32* OverlapCount = OverlapCounts.Find(Character);
-	if (OverlapCount == nullptr)
+	FOccupantRecord* Record = Occupants.Find(Character);
+	if (Record == nullptr)
 	{
 		// 碰撞状态重建时可能收到没有配对 Begin 的 End，直接忽略比创建负计数更安全。
 		return;
 	}
 
 	const int32 PreviousPlayerCount = GetPlayerCount();
-	--(*OverlapCount);
-	if (*OverlapCount <= 0)
+	--Record->OverlapCount;
+	if (Record->OverlapCount <= 0)
 	{
 		// 只有最后一个重叠组件离开，角色才真正离开区域。
-		OverlapCounts.Remove(Character);
-		Character->OnDestroyed.RemoveDynamic(
-			this,
-			&UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
+		Occupants.Remove(Character);
+		UnbindOccupant(Character);
 	}
 	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
 }
@@ -324,7 +351,7 @@ void UmultiplayerPlayerOccupancyComponent::RebuildOccupantsFromCurrentOverlaps()
 			continue;
 		}
 
-		ACharacter* Character = GetValidOccupant(OtherComponent->GetOwner());
+		ACharacter* Character = GetOverlapCandidate(OtherComponent->GetOwner());
 		if (Character == nullptr)
 		{
 			continue;
@@ -338,14 +365,12 @@ void UmultiplayerPlayerOccupancyComponent::RebuildOccupantsFromCurrentOverlaps()
 void UmultiplayerPlayerOccupancyComponent::ClearOccupants()
 {
 	// Map 使用弱引用不会阻止销毁，但动态 Delegate 仍保存在角色对象中，必须对有效对象逐一解绑。
-	for (const TPair<TWeakObjectPtr<ACharacter>, int32>& Entry : OverlapCounts)
+	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 	{
 		if (Entry.Key.IsValid())
 		{
-			Entry.Key->OnDestroyed.RemoveDynamic(
-				this,
-				&UmultiplayerPlayerOccupancyComponent::HandleOccupantDestroyed);
+			UnbindOccupant(Entry.Key.Get());
 		}
 	}
-	OverlapCounts.Reset();
+	Occupants.Reset();
 }

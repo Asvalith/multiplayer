@@ -36,7 +36,7 @@ AmultiplayerGameMode::AmultiplayerGameMode()
 }
 
 /*
- * 父类先创建 GameSession，再写入 JSON 容量；原地建房、直连和重开使用同一入场上限。
+ * 父类先创建引擎 GameSession，再写入 JSON 容量；直连和重开使用同一入场上限。
  */
 void AmultiplayerGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
 {
@@ -68,13 +68,13 @@ void AmultiplayerGameMode::BeginPlay()
 }
 
 /*
- * 插槽完成自身校验后调用的服务器登记入口；检查胜利状态和目标上限后，只推进一格进度。
- * (**) 本函数不接收插槽身份，不能自行识别同一插槽的重复登记；去重依赖插槽先设置 bActivated。
+ * 先校验进度，再同步完成钥匙操作，最后发布进度；不能先销毁钥匙再发现本局不接受目标。
+ * 插槽负责自身去重，本函数阻止提交期间的嵌套登记；这不是跨网络的原子事务。
  */
-bool AmultiplayerGameMode::RegisterActivatedKey()
+bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 {
 	// 即使当前函数通常由服务器插槽调用，仍保留 Authority 检查，防止以后新增入口时破坏写权限边界。
-	if (!HasAuthority())
+	if (!HasAuthority() || bRegisteringKey)
 	{
 		return false;
 	}
@@ -84,6 +84,13 @@ bool AmultiplayerGameMode::RegisterActivatedKey()
 	if (CoopState == nullptr
 		|| CoopState->GetObjectiveState().bGameWon
 		|| CoopState->IsObjectiveComplete())
+	{
+		return false;
+	}
+
+	// 借用的回调仅在本栈帧执行；拒绝和操作失败都不发布进度，也不会提前消耗钥匙。
+	TGuardValue<bool> RegisterGuard(bRegisteringKey, true);
+	if (!CommitKey())
 	{
 		return false;
 	}
@@ -141,7 +148,7 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 		|| RequestingController->GetWorld() != GetWorld()
 		|| CoopState == nullptr
 		|| !CoopState->GetObjectiveState().bGameWon
-		|| bRestartRequested
+		|| PendingRestart.bRequested
 		|| GetMatchState() == MatchState::LeavingMap
 		|| !World->NextURL.IsEmpty() || World->IsInSeamlessTravel())
 	{
@@ -149,10 +156,10 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 	}
 
 	// 先锁定请求再触发 Travel，阻止两名玩家同帧点击导致重复重载。
-	bRestartRequested = true;
-	MatchStateBeforeRestart = GetMatchState();
-	NextSwitchCountdownBeforeRestart = World->NextSwitchCountdown;
-	PendingRestartURL.Reset();
+	PendingRestart.bRequested = true;
+	PendingRestart.PreviousMatchState = GetMatchState();
+	PendingRestart.PreviousSwitchCountdown = World->NextSwitchCountdown;
+	PendingRestart.Requester = RequestingController;
 #if !UE_BUILD_SHIPPING
 	static bool bRestartFailureInjected = false;
 	if (!bRestartFailureInjected && FParse::Param(FCommandLine::Get(), TEXT("CoopTestFailRestartOnce")))
@@ -162,27 +169,19 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 		// 不广播引擎全局错误，避免引擎默认处理器另行断线/切回菜单干扰本分支。
 		StartToLeaveMap();
 		World->NextURL = TEXT("?Restart");
-		PendingRestartURL = World->NextURL;
+		PendingRestart.TravelURL = World->NextURL;
 		RecoverFailedRestart(TEXT("CoopTest SyntheticTravelFailure injected once; no map load attempted."));
 		return false;
 	}
 #endif
-	// 原地 World::Listen 不会更新引擎的 LastURL。RestartGame 的 ?Restart 会重新读取它，
-	// 若遗漏 listen，新世界就会退回单机，客户端无法重连。这里只保留当前关卡的监听模式。
-	if (World->GetNetMode() == NM_ListenServer && GEngine != nullptr)
-	{
-		if (FWorldContext* Context = GEngine->GetWorldContextFromWorld(World))
-		{
-			Context->LastURL.AddOption(TEXT("listen"));
-		}
-	}
+	// DS 的服务端身份来自进程；重开当前地图不需要追加 listen 或创建本地主机玩家。
 	UE_LOG(LogMultiplayer, Log, TEXT("Restarting the current coop map after an authoritative victory."));
 	RestartGame();
-	if (!bRestartRequested)
+	if (!PendingRestart.bRequested)
 	{
 		return false;
 	}
-	PendingRestartURL = World->NextURL;
+	PendingRestart.TravelURL = World->NextURL;
 	// RestartGame 不返回结果；请求被 GameSession/CanServerTravel 拒绝时不会留下待跳转任务。
 	if (World->NextURL.IsEmpty() && !World->IsInSeamlessTravel())
 	{
@@ -195,44 +194,51 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 {
 	UWorld* World = GetWorld();
-	if (!HasAuthority() || !bRestartRequested || World == nullptr || World->bIsTearingDown
+	if (!HasAuthority() || !PendingRestart.bRequested || World == nullptr || World->bIsTearingDown
 		|| World->GetAuthGameMode() != this)
 	{
 		return false;
 	}
 
-	// 引擎已中止比赛或其他跳转接管时，只释放本次锁，不覆盖引擎自己的错误恢复。
+	// 先取出快照并释放旧请求，再恢复状态和通知外部，避免通知期间重入旧请求。
+	const FPendingRestart FailedRestart = MoveTemp(PendingRestart);
+	PendingRestart = FPendingRestart{};
+	AmultiplayerCoopPlayerController* Requester =
+		Cast<AmultiplayerCoopPlayerController>(FailedRestart.Requester.Get());
+	const FText Message = NSLOCTEXT("Multiplayer", "RestartTravelFailed", "重开失败，可以重试或退出房间。");
+
+	// 引擎已中止比赛或其他跳转接管时，不覆盖引擎自己的错误恢复。
 	if (GetMatchState() == MatchState::Aborted
-		|| (!World->NextURL.IsEmpty() && World->NextURL != PendingRestartURL))
+		|| (!World->NextURL.IsEmpty() && World->NextURL != FailedRestart.TravelURL))
 	{
-		bRestartRequested = false;
-		MatchStateBeforeRestart = NAME_None;
-		NextSwitchCountdownBeforeRestart = 0.f;
-		PendingRestartURL.Reset();
+		if (Requester != nullptr)
+		{
+			Requester->NotifyRestartFailed(Message);
+		}
 		return false;
 	}
-	if (World->NextURL == PendingRestartURL)
+	if (World->NextURL == FailedRestart.TravelURL)
 	{
 		World->NextURL.Empty();
 	}
 	// 上面已排除其他跳转接管；引擎也可能先清空本次失败 URL，因此两种情况都恢复本次快照。
-	// 不能清零：Listen Server 重试不会自动重置此倒计时，需要保留客户端接收 Travel RPC 的时间。
-	World->NextSwitchCountdown = NextSwitchCountdownBeforeRestart;
-	if (GetMatchState() == MatchState::LeavingMap && !MatchStateBeforeRestart.IsNone())
+	// 重试仍需保留客户端接收 Travel RPC 的时间，不能把切图倒计时清零。
+	World->NextSwitchCountdown = FailedRestart.PreviousSwitchCountdown;
+	if (GetMatchState() == MatchState::LeavingMap && !FailedRestart.PreviousMatchState.IsNone())
 	{
 		// 恢复已有比赛而非再次开赛，避免 SetMatchState 重复执行 HandleMatchHasStarted。
-		MatchState = MatchStateBeforeRestart;
+		MatchState = FailedRestart.PreviousMatchState;
 		if (AGameState* FullGameState = GetGameState<AGameState>())
 		{
 			FullGameState->SetMatchState(MatchState);
 		}
 	}
-	bRestartRequested = false;
-	MatchStateBeforeRestart = NAME_None;
-	NextSwitchCountdownBeforeRestart = 0.f;
-	PendingRestartURL.Reset();
 	UE_LOG(LogMultiplayer, Warning, TEXT("Restart failure recovered in the existing world; retry unlocked. Reason=%s"),
 		*FailureReason);
+	if (Requester != nullptr)
+	{
+		Requester->NotifyRestartFailed(Message);
+	}
 	return true;
 }
 

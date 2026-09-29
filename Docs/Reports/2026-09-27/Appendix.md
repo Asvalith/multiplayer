@@ -4,15 +4,15 @@
 
 ## A. 数据分层与阅读方法
 
-正文的百分比来自下列已结束的实测报告，没有重新跑游戏。为避免把汇总当原始记录，分三层保存：
+正文的百分比来自已结束的打包版 A/B 实测，后续动态载人专项另用编辑器构建；整理时没有重新跑游戏。为避免把汇总当原始记录，分三层保存：
 
-1. **正文**：三轮中位数、问题解释及下一步计划。
+1. **正文**：打包版性能三轮中位数、正确性结果、动态专项单次对照，以及各自的问题解释和下一步。
 2. **本附录与公开 JSON**：逐轮计数、结果、断言、构建指纹。JSON 是脱敏摘录，不是完整原始报告；本附录表格又做了显示位数舍入。
 3. **本地源数据包**：原始 report.json、服务器及客户端 CSV、双方日志、构建日志、历史失败记录。原文件字节未修改，每个文件的 SHA-256 在包内 manifest.json 中。
 
 ### A.1 原始数据包
 
-本地文件：[source-data.zip](../../../Saved/NetworkValidation/Reports/2026-09-27/source-data.zip)，约 18.34 MiB（19,234,233 字节）。包括 272 个原始文件和一份新生成的索引 manifest.json；解压流逐文件复核通过。
+本地文件：[source-data.zip](../../../Saved/NetworkValidation/Reports/2026-09-27/source-data.zip)，约 18.34 MiB（19,234,233 字节）。包括 272 个原始文件和一份新生成的索引 manifest.json；解压流逐文件复核通过。此包对应构建 A/B 的旧批次，不包含后续编辑器动态载人专项；专项公开摘录与本地原始目录另见 G 节。
 
 压缩包 SHA-256：`a1028fe2ff14f64b9c0e2678a33735fe5022a69b2760d3094690d0622e0060b2`。
 
@@ -35,7 +35,7 @@ source-data.zip
 
 46 份服务器 CSV 的整理时指纹与各自运行报告中记录的指纹匹配；客户端 CSV 也被完整收录并计算了整理时指纹，但原运行报告没有记录其 hash，不能说完成了同等级的历史指纹匹配。正式 42 份服务器 CSV 共 57,486 个有效帧样本；最终短验收另有 1,473 个，不混算。
 
-### A.2 原始报告与公开摘录
+### A.2 打包版 A/B 的原始报告与公开摘录
 
 以下 SHA-256 对应原始 report.json，不是公开摘录文件自身。原文件在包内 `runs/<目录>/report.json`。
 
@@ -46,7 +46,7 @@ source-data.zip
 | scale-final-smoke-20260927 | [performance-final-smoke.json](../../../Tests/Evidence/2026-09-27/performance-final-smoke.json) | `4b21747b3261ceb3281370cd37905176b67f56d05c73e2a15137a2c5ca57774e` | 最终短验收：4/4 |
 | regression-20260927 | [regression.json](../../../Tests/Evidence/2026-09-27/regression.json) | `b32ad3bfe77704d18a9f946f113e62d81067740d21a6b5af88a5cbf6f4ec565a` | 历史初次回归：不替代最终报告 |
 
-### A.3 构建与配置
+### A.3 打包版 A/B 的构建与配置
 
 | 项目 | 构建 A：正式性能 | 构建 B：最终回归与短验收 |
 | --- | --- | --- |
@@ -262,12 +262,185 @@ source-data.zip
 
 完整 Cook 在前面的打包阶段已完成；最终 C++ 修复后的 Stage 复用了已有 Cook 结果，不描述为每次都完整重新 Cook。Shipping 测试启动入口关闭，不声称二进制剔除了全部 UHT 测试类型。
 
-## F. 解释边界与验收空白
+## F. 构建 A/B 的解释边界与验收空白
 
-- 全部实验为同机双进程、NullRHI，非双物理机、公网或专用服务器。
+- 本节 A/B 批次为同机双进程、NullRHI，非双物理机、公网或专用服务器；后续 D 专项也为同机 NullRHI，但使用另一编辑器构建。
 - 合成机关关闭交互碰撞且始终网络相关，数量不是正式关卡容量结论。
 - 属性状态和 Widget 入 Viewport 的通过，不能证明菜单按钮操作、像素显示、平台视觉平滑与门碰撞过渡都正确。
 - 未强制 GameState 晚到，未专测胜利通知嵌套重入次数，未验收胜利后晚加入的界面。
 - 发送量是整个被测服务器对其连接的引擎计数，不是平台独占字节，不证明成功送达或网卡实际流量。
 - 3 轮性能样本保留散布但样本量有限，且按组执行存在时间漂移；不作跨机器显著性与玩家容量承诺。
 - 数据中的初次回归、历史失败与最终结果一并保留，不修改旧记录让报告更好看。
+
+## G. 动态载人专项（编辑器构建）
+
+本节是晚于构建 A/B 的独立实验：同机 Listen Server 与客户端、编辑器 `-game -NullRHI`、一个水平移动平台、每阶段约 4 秒。测试 Pawn 复制实际关卡角色的五项关键移动参数，但不覆盖完整蓝图资产和相机。公开 JSON 是原报告的脱敏摘录，不与前述 `source-data.zip` 或 15/42 批次合并计数。
+
+### G.1 对照、结果与文件
+
+| 模式和网络档位 | 双端站立 / 行走 / 换向 / 跳跃 | 公开摘录 | 原始报告 SHA-256 |
+| --- | --- | --- | --- |
+| Baseline / Normal | 通过 / 通过 / 通过 / 失败 | [baseline.json](../../../Tests/Evidence/2026-09-27/PlatformRide/baseline.json) | `3f59d1f86816c0d0f2d104f3b67516cbb29dd0fa7657d9293c61523838a59bbf` |
+| OrderedVelocity / Normal | 通过 / 通过 / 通过 / 失败 | [ordered-velocity.json](../../../Tests/Evidence/2026-09-27/PlatformRide/ordered-velocity.json) | `a2043cd2d534cefbaa077fd1b753cce728b1efbf6020dd1ef9073be1e7401782` |
+| PlatformInertia / Normal、Moderate、Harsh | 三档各四阶段全部通过 | [inertia.json](../../../Tests/Evidence/2026-09-27/PlatformRide/inertia.json) | `49dc9a5fd359c495e92e37a97d6288b323e2c7f85951e1f649be640d1893b4dd` |
+| 原合作 Flow / Normal | 双端通过；不是全 15 例重跑 | [flow-regression.json](../../../Tests/Evidence/2026-09-27/PlatformRide/flow-regression.json) | `7c4d3defffaf8b3f4713d7291c5af0a36491404afd1eac4c05a7ce69f0c80fc7` |
+
+两个失败对照的 Host 与 Client 均有 `MotionJump=false`，没有将预期失败改写为成功。最终三档各有双方 `DONE passed=true` 与 `MotionServerObserved`。五个载人案例及一个 Flow 案例记录的磁盘 `UnrealEditor-multiplayer.dll` SHA-256 均为 `7fbe6e58f591bca60145c0ddced1f2f2360afc7015f3523db0e1519fb575376d`；公开字段 `loadedByRuntimeVerified=false`，不能说进程内加载模块也完成了哈希校验。各轮源码清单另存于本地完整报告。原始目录在 `Saved/NetworkValidation/` 下，依次为 `ride-motion-control-baseline-final`、`ride-motion-control-orderedvelocity-final`、`ride-motion-inertia-30hz-final`、`ride-motion-flow-regression-final`；本地日志与构建记录未全部公开。
+
+### G.2 最终方案客户端逐阶段指标
+
+距离单位 cm；“在基座帧”在跳跃阶段减少是正常的。下表只摘录客户端，完整的主机和客户端 24 段指标在 [inertia.json](../../../Tests/Evidence/2026-09-27/PlatformRide/inertia.json) 的 `motionMetrics` 中。服务器不接收客户端校正，其校正字段不适用，不能与客户端计数相加。
+
+| 网络 | 动作 | 采样帧 / 在基座帧 | 校正次数 | 最大可比较校正误差 | 最大平台逐帧位移 | 最大角色相对逐帧位移 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Normal | 站立 | 179 / 179 | 0 | 0 | 12 | 0 |
+| Normal | 行走 | 179 / 179 | 0 | 0 | 12 | 1.80 |
+| Normal | 换向 | 176 / 176 | 0 | 0 | 11 | 0 |
+| Normal | 跳跃 | 178 / 114 | 2 | 4.75 | 12 | 19.13 |
+| Moderate | 站立 | 181 / 181 | 0 | 0 | 18 | 0 |
+| Moderate | 行走 | 181 / 181 | 2 | 1.76 | 17 | 2.87 |
+| Moderate | 换向 | 182 / 182 | 0 | 0 | 17 | 0 |
+| Moderate | 跳跃 | 181 / 116 | 8 | 43.68 | 16 | 43.68 |
+| Harsh | 站立 | 240 / 240 | 0 | 0 | 15 | 0 |
+| Harsh | 行走 | 240 / 240 | 0 | 0 | 15 | 1.00 |
+| Harsh | 换向 | 240 / 240 | 0 | 0 | 15 | 0 |
+| Harsh | 跳跃 | 240 / 155 | 13 | 72.12 | 23 | 65.12 |
+
+本轮这些阶段的 `comparableCorrections` 与校正次数相同，`baseChangeCorrections` 为 0；这不保证其他运行都无基座切换。最大可比较误差以对应历史 Move 的相同参考系计算，**不是画面拉回距离**。`maxRelativeStepCm` 含主动行走和跳跃位移，也不是抖动幅度。Normal/Moderate 实际约 44～45 FPS，Harsh 约 60 FPS，且各仅一次，不据此计算丢包与校正的定量因果或稳定性成功率。
+
+### G.3 代码与引擎核查入口
+
+| 核查对象 | 入口 | 本次用途 |
+| --- | --- | --- |
+| 平台运动与速度 | [Transporter](../../../Source/multiplayer/Mechanisms/multiplayerTransporterComponent.cpp)、[MovingPlatform](../../../Source/multiplayer/Mechanisms/multiplayerMovingPlatform.cpp) | PrePhysics、按实际位移更新速度、客户端接收速度、停下后清零 |
+| 角色玩法规则 | [Character](../../../Source/multiplayer/Player/multiplayerCharacter.cpp) | 空中制动与普通跳跃手感的取舍 |
+| 双端动作与观测 | [RideProbe](../../../Source/multiplayer/Testing/CoopPlatformRideProbe.cpp)、[测试 CMC](../../../Source/multiplayer/Testing/CoopRideTestCharacter.cpp) | 四段动作、PostPhysics 采样、历史 Move 校正统计；不替换 CMC 校正规则 |
+| UE 5.5 源码 | `Character.cpp` 的 `MovementBaseUtility::AddTickDependency` / `GetMovementBaseVelocity`；`ActorReplication.cpp` 的 `GatherCurrentMovement` / `PostNetReceiveVelocity`；`CharacterMovementComponent.cpp` 的 `ApplyImpartedMovementBaseVelocity` / `PhysFalling` / `OnClientCorrectionReceived` | 核对更新依赖、基座速度传递、空中制动和校正对应关系；版本变化时需复查 |
+
+`FormerBaseVelocityDecayHalfLife` 并非本次掉落的直接原因；它涉及 Root Motion 覆盖时的辅助基座速度处理。本项目的对照显示先是缺基座速度、随后是普通空中制动消掉已继承速度，不把名称相近的引擎参数当作修复依据。
+
+## H. 自由跳跃后续定位与被否决的候选（2026-09-28 补记）
+
+本节保留 G 之后追加的证据，不覆盖 G 的 13 次 / 72.12 cm 历史结果。原始目录均位于 `Saved/NetworkValidation/`，下表状态来自各自 `report.json`；这些本地原始包尚未随单文件复习文档公开。编辑器 `-game -NullRHI`、同机 Listen 主机与远端客户端、每阶段约四秒。所有案例都保留在报告中，不把被否决的候选删除后只展示有利数字。
+
+| 原始目录 | 条件 | 案例数 / 状态 | 客户端 Jump：校正次数；最大可比较误差 cm |
+| --- | --- | --- | --- |
+| `20260927-134523-8db191a2` | 自由跳跃，Normal，30 Hz，运动平台 | 1 / passed | 2；7.0044 |
+| `20260927-134821-8371ab83` | 自由跳跃，Moderate，30 Hz，运动平台 | 1 / passed | 8；40.0088 |
+| `20260927-134201-3a66fe39` | 自由跳跃，Harsh，30 Hz，运动平台 | 1 / passed | 10；84.2316 |
+| `20260928-031122-8676c0f0` | 自由跳跃，Harsh，60 Hz，运动平台 | 3 / passed | 11；64.5565 / 13；79.4676 / 13；77.4590 |
+| `20260928-031710-4e33e598` | AirBase，Harsh，30 Hz，运动平台 | 1 / passed，但玩法方案否决 | 4；11.0753 |
+| `20260928-081302-1c97b874` | 恢复自由跳跃，Harsh，30 Hz，静止平台 | 1 / passed | 0；0 |
+
+### H.1 原始报告与构建指纹
+
+| 原始目录 | report.json SHA-256 | 磁盘项目模块分组 |
+| --- | --- | --- |
+| `20260927-134523-8db191a2` | `73cbe27651dd536be736784d70c57849d58c4a3c0517b77b291570f39e06fe73` | M1 |
+| `20260927-134821-8371ab83` | `b74e1163f322dc90cf9e5391928005480cc897a466bb2a2d2a4751399ebfba04` | M1 |
+| `20260927-134201-3a66fe39` | `c689c64eae54aa30a1e051bd1a3b350a3af011f8482c00e75ec53d3355e88274` | M1 |
+| `20260928-031122-8676c0f0` | `39a65626fefc09871cadd89db5639c66aab393886377c8d2f89a5676901bf61d` | M1 |
+| `20260928-031710-4e33e598` | `225b62b6cf49668d57f7bff91144e0813b81c332c57659c65519e787f3877441` | M2 |
+| `20260928-081302-1c97b874` | `dd3b28e04877b9cbd6c3539df6bec496368107843698b60cdb99edbb33e6280c` | M3 |
+
+- M1：`da7bc16a412770fc0ad4897bb2a1061ac5499f94c803a3db48ed3f652b9c022f`，同 Move 观测与自由跳跃频率对照。
+- M2：`2d96211d58b137c23a2dccbcb1e794ffaaa6c4759953e6b1896563c70a45178b`，保留空中基座候选；此模式已退出当前运行入口。
+- M3：`e9075284300b14686d29cad5d5be65322ad8a6feab201db652f84bb54fbb4dbe`，撤回候选接入、增加 XYZ / 模拟时长记录与静止对照；本节只有静止 Harsh 单轮，未重新完成运动平台矩阵。
+
+这些是磁盘 `UnrealEditor-multiplayer.dll` 指纹，不是进程内模块核验。不同源码及帧节奏不能混成同一修复前后统计，1 次与 3 次样本也不能直接给出稳定改善百分比。
+
+### H.2 指标与边界
+
+- `motionMetrics` 中按 `role=Client`、`metrics.phase=Jump` 读取校正；主机不接收客户端校正，其零计数不是优化成果。
+- AirBase 四条校正的 `errorCm` 依次为 11.0753、0、0、0，`errorX` 均为 0。旧记录未拆 Y/Z，不能推定误差只在垂直方向；也不能声称四次可见拉回。
+- 静止对照双端 `landedAfterJump=true`、`maxPlatformStepCm=0`。虽然沿用四阶段脚本，静止组的换向阶段不代表真的换向。一次零校正不等于弱网运动平台问题修复。
+- 同一 Move 的完整配对与未配对标记在 `timeline-*-move-pairs.csv`、`timeline-*-all-moves.csv`；客户端采样和校正在 `*-samples.csv`、`*-corrections.csv`。零校正时没有对应校正 CSV 是允许情况，不能补造记录。
+- M3 原始 Move 快照增加 XYZ、速度、移动模式和模拟时长；旧报告缺少的维度在导出时保持空值，不补 0。未保存的历史值不能靠现在重新跑一轮冒充。
+- 所有这批结果都没有双端录像、完整角色模型或镜头平滑验收，没有测得屏幕拉回距离。该批结束时后续优化暂停；2026-09-29 恢复后的同构建频率对照见 I。不将 AirBase 的数值列为自由跳跃的最终优化收益。
+
+## I. 平台频率与跳跃校正对照（2026-09-29）
+
+本节对应[Move 时间戳专项报告](PlatformMoveTimestampValidation.md)的后续验证，不与 G/H 的不同构建混算改善幅度。原始根目录为 `Saved/NetworkValidation/PlatformFrequency-20260929/`。每个子目录均保留 `report.json`、双端日志、`timeline-*.svg`、采样及逐 Move CSV；这些文件是本地原始证据，不包含在早期 `source-data.zip` 中。
+
+### I.1 设计与逐轮结果
+
+同机 Listen Server + Client，Editor-game、NullRHI，`RideMotion / PlatformInertia / Moving`。双端 Harsh 参数为 `PktLag=200 / PktLagVariance=50 / PktLoss=5`；不是实测 RTT。顺序为 30、60、60、30、30、60，仅改变测试平台的 `NetUpdateFrequency` 和 `MinNetUpdateFrequency`。正式平台仍为 30 Hz；输入、空中惯性与 CMC 校正规则不变。
+
+下表只统计客户端 Jump 段，误差单位 cm。“误差 > 1”是额外描述统计，不是通过阈值。校正总数包含位置误差为零的状态校正，不能换算成肉眼回拉次数。
+
+| 原始子目录 | Hz 上限 | 校正次数 | 可比较误差 > 1 的次数 | 最大可比较误差 | 观察到的平台位置变化/秒 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `01-Harsh-30Hz` | 30 | 11 | 2 | 79.2585 | 14.9654 |
+| `02-Harsh-60Hz` | 60 | 11 | 2 | 80.7417 | 17.6510 |
+| `03-Harsh-60Hz` | 60 | 12 | 2 | 64.9211 | 16.9277 |
+| `04-Harsh-30Hz` | 30 | 19 | 6 | 65.1718 | 13.6736 |
+| `05-Harsh-30Hz` | 30 | 12 | 2 | 67.1594 | 14.4590 |
+| `06-Harsh-60Hz` | 60 | 13 | 2 | 76.5380 | 17.6248 |
+
+六轮 `status=passed`，双端动作断言通过并落回平台，十二个进程均正常退出，无脚本强杀。78 次校正全部唯一配对，各种截断计数为 0。NullRHI 结果不等于画面平滑验收，也不是 GPU 性能测试。
+
+| 原始子目录 | 主机 / 客户端采样次数/秒 | 平台非零阶跃间隔中位数 / 最大值（ms） | 首次 JumpPressed Move 平台 X 差（cm） | 落地 Move 平台 X 差（cm） |
+| --- | --- | --- | ---: | ---: |
+| `01-Harsh-30Hz` | 44.93 / 45.64 | 62.64 / 140.45 | 79.2411 | 71.4638 |
+| `02-Harsh-60Hz` | 45.01 / 45.25 | 46.34 / 124.57 | 69.3761 | 80.7417 |
+| `03-Harsh-60Hz` | 45.46 / 45.56 | 46.99 / 188.24 | 64.9210 | 55.7135 |
+| `04-Harsh-30Hz` | 46.91 / 47.48 | 62.96 / 203.85 | 65.1718 | 69.9707 |
+| `05-Harsh-30Hz` | 45.08 / 45.37 | 63.09 / 140.98 | 67.1594 | 62.0654 |
+| `06-Harsh-60Hz` | 45.44 / 46.42 | 62.11 / 124.32 | 76.5379 | 69.7304 |
+
+六轮首次记录到按下跳跃的 Move，两端角色 X 速度差绝对值均小于 `0.00001 cm/s`。这里只检验 X 分量，不扩展为三维速度完全相同。平台 X 差与校正误差是不同变量，不要求每行落地差都等于该轮最大校正。
+
+### I.2 统计口径与判断边界
+
+- 采样次数/秒为 `frameSamples / elapsedSeconds`，不是渲染 FPS。进程上限 60 FPS 不代表稳定达到 60，也不代表 60 Hz 复制实际发出 60 包/秒。
+- 观察到的平台位置变化/秒为 `platformPositionChanges / elapsedSeconds`；非零阶跃间隔取 Jump `timelineSamples` 中 `platformStepCm > 0.01` 的相邻采样时间差。它们都不是精确的 NetDriver 收包频率或收包间隔，单帧可能处理多次更新。
+- 同 Move 配对以 `abs(ClientMoveTimeStamp - ServerMoveTimeStamp) < 0.001` 且仅一个候选为准。首次 JumpPressed Move 不保证正好是内部状态切换前的那一帧；落地选起跳后首次 `!startBased && endBased` 的记录。
+- 平台差来自同一 Move 在双端各自处理时的快照，不是同一物理时刻的测量；不能除以平台速度便声称测出了单向网络延迟。
+- 30/60 Hz 的校正次数中位数均为 12；每轮最大误差的中位数分别为 67.1594 / 76.5380 cm。这不是合并全部事件后的 P95。
+- 每档只有三轮，且没有控制丢包随机种子。本条件下未见提高频率的稳定收益，不宣称 60 Hz 必然更差或频率优化普遍无用。未采集本轮带宽与 CPU 收益，不引用旧规模压测数据冒充。
+
+### I.3 构建与报告指纹
+
+运行前 Editor 编译检查为 up to date，运行脚本 SelfTest 通过。六轮源码、配置和磁盘模块指纹一致：
+
+| 对象 | 指纹 |
+| --- | --- |
+| Git 基准（工作区有未提交改动，不代表只运行该提交） | `8ff9ea15ff8f667a695ec17d56d3133758060afc` |
+| 报告记录的源码清单指纹 | `5c1b5a62ae536ea91ea26638b4b667ce45a0b5c3db22a9d9bd9e96c9727eb517` |
+| 磁盘项目 DLL SHA-256 | `582f73865a2632be8f9bb8e35e676562bf1dee59b4948e4b4f93f4bc4210f61d` |
+| 玩法 JSON SHA-256 | `97b67b8238706e2f2765446c93b512dbcb39153a3e32676bc7c5b9316f8c0ce0` |
+
+`loadedByRuntimeVerified=false`，仍不声称完成进程内加载模块哈希核验。
+
+| 原始子目录 | report.json SHA-256 |
+| --- | --- |
+| `01-Harsh-30Hz` | `8d5e01bf818c76dc488c12bf7789507e80e2213c1e50fd273f053278ffd25409` |
+| `02-Harsh-60Hz` | `6270f12eea1eb14717afe70679e6b06de09b57296180b21a3034936d24a5469c` |
+| `03-Harsh-60Hz` | `a5caf76334e81e00aee38aec4491e2499e78218729b501c17f8a1e8e01ab492f` |
+| `04-Harsh-30Hz` | `2aef789c1985087a50e14b04701163a73b8feb5390e2854e8205425fd0fae40c` |
+| `05-Harsh-30Hz` | `de0bc286f83b0fbd50264ccec859474b1e9972211dd6347ccf8052d1405f5abc` |
+| `06-Harsh-60Hz` | `fd9da7d437e7e19dca7785c92f1bc6da7c44dae26033dbf76199d5a4a5062eb7` |
+
+### I.4 复现入口
+
+在工程根目录的 PowerShell 中执行现有脚本；使用新目录，避免覆盖本次证据。重新运行会产生新时间戳与新的模拟丢包结果，不期待逐数字复现。
+
+```powershell
+./Scripts/RunMultiplayerNetworkTests.ps1 -SelfTest
+if ($LASTEXITCODE -ne 0) { throw 'Runner self-test failed.' }
+
+$experimentRoot = 'Saved/NetworkValidation/PlatformFrequency-Recheck'
+if (Test-Path -LiteralPath $experimentRoot) { throw 'Choose a new output directory.' }
+$frequencies = @(30, 60, 60, 30, 30, 60)
+for ($runIndex = 0; $runIndex -lt $frequencies.Count; $runIndex++) {
+    $frequency = $frequencies[$runIndex]
+    $runDirectory = Join-Path $experimentRoot ('{0:D2}-Harsh-{1}Hz' -f ($runIndex + 1), $frequency)
+    ./Scripts/RunMultiplayerNetworkTests.ps1 `
+        -Scenario RideMotion -Profiles Harsh -Repeat 1 `
+        -PlatformNetHz $frequency -PlatformSyncMode PlatformInertia `
+        -PlatformMotion Moving -OutputDirectory $runDirectory
+    if ($LASTEXITCODE -ne 0) { throw "Run failed: $runDirectory" }
+}
+```
+
+当前结论是保持正式平台 30 Hz，下一项验证运动段同步与时间一致性；本轮没有实现该候选，也未宣布自由跳跃问题已解决。

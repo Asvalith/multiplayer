@@ -34,7 +34,7 @@ class UCoopNetTestDriver : public UObject
 public:
 	void Start();
 	void Stop();
-	void Receipt(const FString& Name, bool bPassed, const FString& Detail);
+	void Receipt(const FString& Name, bool bPassed, const FString& Detail, ACoopNetTestProbe* Source = nullptr);
 private:
 	bool Tick(float DeltaSeconds);
 	UWorld* FindWorld() const;
@@ -42,30 +42,36 @@ private:
 	void Emit(const FString& Status, const FString& Detail = FString(), TSharedPtr<FJsonObject> Extra = nullptr) const;
 	void Assert(const FString& Name, bool bPassed, const FString& Detail = FString());
 	void Finish(bool bPassed, const FString& Detail = FString());
-	void HostTick(UWorld* World);
+	void ServerTick(UWorld* World);
 	void ClientTick(UWorld* World);
+	void PartnerTick(UWorld* World);
+	APlayerController* PartnerPlayer(UWorld* World) const;
+	APlayerController* PrimaryPlayer(UWorld* World) const;
+	// DS 冒烟走直连：两名玩家均为远端，不能复用 Listen Server 的本地主机假设。
+	void DedicatedTick(UWorld* World);
 	void ScaleTick(UWorld* World);
 	void BeginSample(UWorld* World);
 	bool EndSample(UWorld* World);
 	void SpawnScale(UWorld* World);
 	bool CheckScaleLoad(UWorld* World, bool bRequireObservedMovement);
-	// 回归场景单独实现，避免把测试步骤混进 Session 和机关业务类。
+	// 回归场景单独实现，避免把测试步骤混进连接和机关业务类。
 	void PrepareLateJoin(UWorld* World);
-	void ScenarioHostTick(UWorld* World);
+	void ScenarioServerTick(UWorld* World);
 	void ScenarioClientTick(UWorld* World);
-	void MotionHostTick(UWorld* World);
+	void MotionServerTick(UWorld* World);
 	void MotionClientTick(UWorld* World);
 	void SetCommand(const FString& Command);
 	void SendReceipt(const FString& Name, bool bPassed, const FString& Detail);
 	void CollectMapKeys(UWorld* World, bool bTwoPlayers);
 	void CreateGateFixture(UWorld* World);
+	void KeyServerTick(UWorld* World);
 	void NetworkFailure(UWorld* World, UNetDriver* NetDriver, ENetworkFailure::Type Type, const FString& Error);
-	UFUNCTION() void FoundGames(bool bSuccess, const TArray<FmultiplayerSessionInfo>& Results);
-	UFUNCTION() void SessionOperation(EMultiplayerSessionOperation Operation);
 
 	FTSTicker::FDelegateHandle TickHandle;
 	TWeakObjectPtr<UmultiplayerGameInstance> GameInstance;
 	TWeakObjectPtr<ACoopNetTestProbe> Probe;
+	TWeakObjectPtr<ACoopNetTestProbe> PartnerProbe;
+	TArray<TWeakObjectPtr<ACoopNetTestProbe>> DedicatedProbes;
 	TWeakObjectPtr<UNetDriver> SampleDriver;
 	TArray<TWeakObjectPtr<AmultiplayerMovingPlatform>> MovingActors;
 	TArray<FVector> MovingStarts;
@@ -73,12 +79,14 @@ private:
 	TSet<FString> Receipts;
 	TSet<FString> SentReceipts;
 	FString Mode, Role, Token, Phase, Optimization, Matrix, CsvRequestedPath;
-	EMultiplayerSessionOperation Operation = EMultiplayerSessionOperation::None;
-	double StartedAt = 0, PhaseAt = 0, NextAttemptAt = 0, SampleAt = 0, SampleElapsed = 0;
+	FString ServerAddress;
+	FString PartnerPlayerId;
+	bool bPartner = false;
+	double StartedAt = 0, PhaseAt = 0, SampleAt = 0, SampleElapsed = 0;
 	float WarmupSeconds = 10, SampleSeconds = 30, TimeoutSeconds = 180;
-	int32 StaticCount = 0, MovingCount = 1, Attempts = 0;
+	int32 StaticCount = 0, MovingCount = 1;
 	uint32 StartBytes = 0, StartPackets = 0, SampleBytes = 0, SamplePackets = 0;
-	bool bHost = false, bDone = false, bSampleEnding = false, bMetricEmitted = false;
+	bool bServer = false, bDone = false, bSampleEnding = false, bMetricEmitted = false;
 	TSharedFuture<FString> CsvFinished;
 	// 压测就绪证据：保存客户端真正收到的对象及位移，不用启动参数冒充实测数量。
 	TMap<TWeakObjectPtr<AmultiplayerMovingPlatform>, FVector> ScaleObservedStarts;
@@ -89,9 +97,9 @@ private:
 	TWeakObjectPtr<APlayerController> PreviousRemote;
 	TArray<TWeakObjectPtr<AActor>> Fixture;
 	FVector RideStart = FVector::ZeroVector;
-	float OutageSeconds = 25, RideMaxOffset = 0;
+	float RideMaxOffset = 0;
 	int32 RideSamples = 0, RideBasedSamples = 0;
-	bool bSawNetworkFailure = false, bSessionFailureChecked = false;
+	bool bSawNetworkFailure = false;
 };
 
 void StartCoopNetTests();

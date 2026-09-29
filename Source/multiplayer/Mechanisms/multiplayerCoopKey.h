@@ -17,8 +17,8 @@ class AmultiplayerKeySocket;
  *
  * 当前有两条明确流程：关卡预绑定 DestinationSocket 时，玩家触碰后钥匙直接自动归位；没有预绑定
  * 时，钥匙先由角色携带，角色进入插槽后钥匙被消费。Holder 和 bInstalled 是客户端恢复表现所需的
- * 最小状态：Holder 决定挂到哪个角色插槽，bInstalled 表示预绑定钥匙已经归位；自由状态下的世界
- * 位置由 ReplicateMovement 同步，携带路径完成后 Actor 直接销毁。
+ * 最小状态：Holder 表示归属，bInstalled 表示已经归位；服务器修改附着，客户端仅由 Actor 内建
+ * AttachmentReplication 恢复附着关系。自由位置由 ReplicateMovement 同步，携带交付后销毁。
  *
  * 拾取使用服务器端 Overlap，不需要客户端提交“我捡到了”的自定义 RPC。服务器根据自己的碰撞
  * 世界和当前状态作决定，对两个客户端近乎同时触碰同一把钥匙的情况按事件顺序只接受第一个。
@@ -42,9 +42,9 @@ public:
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	bool IsHeldBy(const ACharacter* Character) const { return Holder == Character; }
+	bool IsHeldBy(const ACharacter* Character) const { return Character != nullptr && Holder == Character && !bInstalled; }
 
-	/** 携带路径：服务器清理双方持有关系后销毁钥匙，成功时返回 true。 */
+	/** 携带路径：只有 Destroy 被接受才消费，双方持有关系在 EndPlay 中清理。 */
 	bool ConsumeAtSocket();
 	/** 兼容预绑定插槽路径：服务器将钥匙固定到显示点并进入不可拾取的 Installed 状态。 */
 	bool InstallAtSocket(USceneComponent* SocketPoint);
@@ -62,7 +62,7 @@ protected:
 		bool bFromSweep,
 		const FHitResult& SweepResult);
 
-	// 客户端 Holder 更新入口；只重建附着、碰撞和 Tick 等表现，不修改玩法结果。
+	// RepNotify 只刷新碰撞/Tick，不与 Actor 附件复制争抢附着关系。
 	UFUNCTION()
 	void OnRep_Holder();
 
@@ -79,14 +79,8 @@ private:
 	void PickupBy(ACharacter* Character);
 	// 只清理 Delegate、携带槽、Holder 和网络 Owner；安装、销毁、掉落各自提交最终表现。
 	void ReleaseHolder();
-	// 根据当前 Holder 重建附着/分离状态，使服务器直接写入与客户端 OnRep 走同一表现路径。
-	void ApplyHeldState();
-	// Holder 变化后的公共收口，避免服务器路径和客户端路径产生两套视觉逻辑。
-	void HandleHolderChanged();
-	// Installed 变化后的公共收口，负责禁用拾取并刷新 Tick。
-	void HandleInstalledChanged();
-	// 各端只有自由且未安装的钥匙需要旋转表现 Tick；其他状态全部停 Tick。
-	void RefreshVisualTick();
+	// 状态与附着先提交，最后恢复服务器自由状态的拾取碰撞；此后不得继续按旧状态写入。
+	void RefreshKeyState();
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
 	TObjectPtr<USceneComponent> SceneRoot;

@@ -52,6 +52,13 @@ TSharedRef<SWidget> UmultiplayerVictoryWidget::RebuildWidget()
 					.Text(NSLOCTEXT("Multiplayer", "LeaveCoopSession", "退出房间"))
 					.OnClicked_UObject(this, &UmultiplayerVictoryWidget::HandleLeaveClicked)
 				]
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0.0f, 12.0f, 0.0f, 0.0f)
+				[
+					SAssignNew(ActionMessage, STextBlock)
+					.ColorAndOpacity(FLinearColor::White)
+				]
 			]
 		];
 }
@@ -66,35 +73,38 @@ TSharedPtr<SWidget> UmultiplayerVictoryWidget::GetInitialFocusWidget() const
 void UmultiplayerVictoryWidget::ReleaseSlateResources(bool bReleaseChildren)
 {
 	RestartButton.Reset();
+	ActionMessage.Reset();
 	Super::ReleaseSlateResources(bReleaseChildren);
 }
 
-/** 先占用本地提交标记再进入控制器，避免同步回调或快速点击再次进入操作入口。 */
+/** 只在状态变化时刷新 Slate；空指针检查覆盖控件树尚未构建或已释放的阶段。 */
+void UmultiplayerVictoryWidget::SetActionFeedback(bool bActionsEnabled, const FText& Message)
+{
+	SetIsEnabled(bActionsEnabled);
+	if (ActionMessage.IsValid())
+	{
+		ActionMessage->SetText(Message);
+	}
+}
+
+/** 控制器先校验本地条件，再锁定本次请求；失败结果沿同一入口恢复界面。 */
 FReply UmultiplayerVictoryWidget::HandleRestartClicked()
 {
-	if (!bActionSubmitted)
+	if (AmultiplayerCoopPlayerController* PlayerController =
+		Cast<AmultiplayerCoopPlayerController>(GetOwningPlayer()))
 	{
-		bActionSubmitted = true;
-		if (AmultiplayerCoopPlayerController* PlayerController =
-			Cast<AmultiplayerCoopPlayerController>(GetOwningPlayer()))
-		{
-			PlayerController->RequestRestartCurrentRound();
-		}
+		PlayerController->RequestRestartCurrentRound();
 	}
 	return FReply::Handled();
 }
 
-/** 只转发用户意图；会话销毁与网络清理由 GameInstance 完成，Widget 不直接操作连接。 */
+/** 只转发用户意图；断开连接与返回菜单由 GameInstance 完成。 */
 FReply UmultiplayerVictoryWidget::HandleLeaveClicked()
 {
-	if (!bActionSubmitted)
+	if (AmultiplayerCoopPlayerController* PlayerController =
+		Cast<AmultiplayerCoopPlayerController>(GetOwningPlayer()))
 	{
-		bActionSubmitted = true;
-		if (AmultiplayerCoopPlayerController* PlayerController =
-			Cast<AmultiplayerCoopPlayerController>(GetOwningPlayer()))
-		{
-			PlayerController->LeaveCoopSession();
-		}
+		PlayerController->LeaveCoopSession();
 	}
 	return FReply::Handled();
 }

@@ -7,13 +7,14 @@
 #include "multiplayerVictoryWidget.generated.h"
 
 class SButton;
+class STextBlock;
 class SWidget;
 
 /**
  * 无需蓝图即可工作的胜利界面。
  *
  * 共享胜利仍由服务器 GameState 决定；本类只提供本地展示和两个明确操作：重开当前关卡、
- * 主动退出会话。使用 C++ 默认实现后，即使没有制作 UMG 蓝图也能完成最小玩法闭环，
+ * 主动断开连接。使用 C++ 默认实现后，即使没有制作 UMG 蓝图也能完成最小玩法闭环，
  * 控制器上的蓝图事件仍可扩展美术表现。
  *
  * (*) UUserWidget 参与 UObject 生命周期，内部 SWidget 使用 Slate 的共享指针管理；
@@ -28,6 +29,9 @@ public:
 	// UIOnly 输入模式必须聚焦真正支持键盘焦点的控件，不能把根 Overlay 当作焦点目标。
 	TSharedPtr<SWidget> GetInitialFocusWidget() const;
 
+	/** 控制器是操作状态的唯一来源；界面只按事件更新按钮和提示，不维护第二份提交标记。 */
+	void SetActionFeedback(bool bActionsEnabled, const FText& Message);
+
 protected:
 	/** 创建标题与两个按钮的 Slate 树，保留重开按钮以提供可靠的初始焦点。 */
 	virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -35,14 +39,14 @@ protected:
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
 
 private:
-	/** 本地只提交一次重开意图；返回 Handled 表示输入已处理，不表示服务器已同意。 */
+	// 测试驱动调用真实按钮处理函数，不新增可供玩法绕过权限的测试入口。
+	friend class UCoopNetTestDriver;
+	/** 返回 Handled 仅表示输入已处理；权限、重复提交和失败恢复统一交给控制器。 */
 	FReply HandleRestartClicked();
-	/** 与重开共用提交标记，防止连续点击发起两个互相冲突的操作。 */
+	/** 转交退出意图，不直接操作网络连接。 */
 	FReply HandleLeaveClicked();
 
-	// 防止连续点击重复发请求；当前界面等待重开/退出销毁，没有失败后解锁按钮的恢复流程。
-	bool bActionSubmitted = false;
-
-	// 保存默认操作按钮的 Slate 引用，仅用于设置初始键盘/手柄焦点。
+	// Slate 引用用于事件驱动刷新；在 ReleaseSlateResources 中与控件树一起释放。
 	TSharedPtr<SButton> RestartButton;
+	TSharedPtr<STextBlock> ActionMessage;
 };

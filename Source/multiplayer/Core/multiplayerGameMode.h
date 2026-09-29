@@ -32,12 +32,12 @@ public:
 	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
 
 	/**
-	 * 登记一个已经通过插槽校验的钥匙目标。
+	 * 校验进度后，同步执行插槽提供的钥匙操作；操作成功才增加进度并通知外部。
 	 *
 	 * @return 本次是否真正增加了进度。非权威端、状态缺失、目标已完成或游戏已胜利时返回 false。
-	 * 返回值使调用者可以区分“事件到达”和“状态确实发生变化”，避免把重复调用当成成功。
+	 * CommitKey 不会被保存或异步执行；返回 false 必须保留钥匙，不能先消耗再报告失败。
 	 */
-	bool RegisterActivatedKey();
+	bool RegisterActivatedKey(TFunctionRef<bool()> CommitKey);
 
 	/**
 	 * 尝试完成合作游戏。
@@ -64,6 +64,19 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
+	// 钥匙附着、销毁和进度通知可能同步触发其他事件，拒绝提交期间的嵌套登记。
+	bool bRegisteringKey = false;
+
+	/** 同一次重开的回滚资料成组保存和清空，不允许遗漏某一个恢复字段。 */
+	struct FPendingRestart
+	{
+		bool bRequested = false;
+		FName PreviousMatchState = NAME_None;
+		float PreviousSwitchCountdown = 0.0f;
+		FString TravelURL;
+		TWeakObjectPtr<AController> Requester;
+	};
+
 	/**
 	 * 以关卡实际摆放的插槽数量作为目标数量。
 	 * 这样增加或删除插槽后无需同步修改另一份配置；没有插槽时使用回退值。
@@ -74,8 +87,5 @@ private:
 	int32 RequiredKeys = 4;
 
 	// 多个客户端可能同时点击重开；服务器只接受本局第一个有效请求。
-	bool bRestartRequested = false;
-	FName MatchStateBeforeRestart = NAME_None;
-	float NextSwitchCountdownBeforeRestart = 0.f;
-	FString PendingRestartURL;
+	FPendingRestart PendingRestart;
 };

@@ -40,7 +40,7 @@ AmultiplayerCoopKey::AmultiplayerCoopKey()
 
 /*
  * 仅在钥匙处于自由、未安装状态时旋转网格。该 Tick 不参与拾取判定，也不修改可复制的根变换；
- * 状态改变后由 RefreshVisualTick 立即关闭，避免已持有或已归位的钥匙继续空转。
+ * 状态改变后由 RefreshKeyState 关闭，避免已持有或已归位的钥匙继续空转。
  */
 void AmultiplayerCoopKey::Tick(float DeltaSeconds)
 {
@@ -72,12 +72,7 @@ void AmultiplayerCoopKey::BeginPlay()
 			this,
 			&AmultiplayerCoopKey::HandlePickupOverlap);
 	}
-	else
-	{
-		PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	}
-
-	RefreshVisualTick();
+	RefreshKeyState();
 }
 
 /*
@@ -87,9 +82,9 @@ void AmultiplayerCoopKey::BeginPlay()
 void AmultiplayerCoopKey::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// EndPlay 可能来自关卡卸载，也可能来自插槽消费后的 Destroy；两种路径都必须先移除外部回调。
-	if (Holder != nullptr)
+	if (HasAuthority())
 	{
-		Holder->OnDestroyed.RemoveDynamic(this, &AmultiplayerCoopKey::HandleHolderDestroyed);
+		ReleaseHolder();
 	}
 
 	PickupTrigger->OnComponentBeginOverlap.RemoveDynamic(
@@ -139,7 +134,8 @@ void AmultiplayerCoopKey::HandlePickupOverlap(
  */
 void AmultiplayerCoopKey::PickupBy(ACharacter* Character)
 {
-	if (!HasAuthority() || Character == nullptr || Holder != nullptr || bInstalled)
+	if (!HasAuthority() || !IsValid(Character) || Character->IsActorBeingDestroyed()
+		|| IsActorBeingDestroyed() || Holder != nullptr || bInstalled)
 	{
 		return;
 	}
@@ -161,9 +157,21 @@ void AmultiplayerCoopKey::PickupBy(ACharacter* Character)
 	Holder = Character;
 	// (**) 玩家断线或 Pawn 被销毁时不一定产生 EndOverlap，用 OnDestroyed 释放持有关系。
 	Holder->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerCoopKey::HandleHolderDestroyed);
-	// SetOwner 表示网络所有权；真正的视觉挂接由 ApplyHeldState 负责，两者含义不同。
+	// 附着只由服务器写，客户端通过 Actor 附件复制恢复；Holder 的 RepNotify 不再重复挂接。
+	USceneComponent* AttachParent = Character->GetMesh();
+	if (AttachParent == nullptr)
+	{
+		AttachParent = Character->GetRootComponent();
+	}
+	if (AttachParent == nullptr || !AttachToComponent(
+		AttachParent, FAttachmentTransformRules::SnapToTargetNotIncludingScale, CarrySocketName))
+	{
+		ReleaseHolder();
+		return;
+	}
+	// 网络 Owner 和物理附着是不同关系，二者均在拾取成功后确定。
 	SetOwner(Character);
-	HandleHolderChanged();
+	RefreshKeyState();
 	ForceNetUpdate();
 }
 
@@ -173,38 +181,41 @@ void AmultiplayerCoopKey::PickupBy(ACharacter* Character)
  */
 bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
 {
-	if (!HasAuthority() || SocketPoint == nullptr || bInstalled)
+	if (!HasAuthority() || IsActorBeingDestroyed() || bInstalled
+		|| !IsValid(SocketPoint) || !SocketPoint->IsRegistered() || SocketPoint == GetRootComponent()
+		|| SocketPoint->GetWorld() != GetWorld())
 	{
 		return false;
 	}
 
-	// 安装前先清理角色携带槽和 OnDestroyed 绑定，保持 bInstalled => Holder == nullptr 的状态约束。
-	ReleaseHolder();
+	// 先占用安装状态以拦截重入；本类使用非物理 SceneRoot，附着校验失败不会先释放携带关系。
 	bInstalled = true;
-	SetOwner(SocketPoint->GetOwner());
-	AttachToComponent(
+	if (!AttachToComponent(
 		SocketPoint,
-		FAttachmentTransformRules::SnapToTargetNotIncludingScale);
-	HandleInstalledChanged();
+		FAttachmentTransformRules::SnapToTargetNotIncludingScale))
+	{
+		bInstalled = false;
+		return false;
+	}
+	ReleaseHolder();
+	SetOwner(SocketPoint->GetOwner());
+	RefreshKeyState();
 	ForceNetUpdate();
 	return true;
 }
 
 /*
  * 普通携带路径到达插槽后的服务器提交函数。钥匙已完成目标后不再需要保留独立展示 Actor，
- * 因此先对称清理 Holder/携带槽，再销毁钥匙；插槽随后登记共享进度。
+ * Destroy 被拒绝时保留原状态；成功销毁会在 EndPlay 对称清理 Holder/携带槽。
  */
 bool AmultiplayerCoopKey::ConsumeAtSocket()
 {
-	if (!HasAuthority() || Holder == nullptr)
+	if (!HasAuthority() || IsActorBeingDestroyed() || Holder == nullptr || bInstalled)
 	{
 		return false;
 	}
 
-	// Destroy 之前先清理双方引用；不能等待 GC 或 EndPlay 猜测角色携带槽里保存了什么。
-	ReleaseHolder();
-	Destroy();
-	return true;
+	return Destroy();
 }
 
 /*
@@ -219,8 +230,9 @@ void AmultiplayerCoopKey::HandleHolderDestroyed(AActor* DestroyedActor)
 	}
 
 	ReleaseHolder();
-	// 只有掉落需要恢复自由状态。安装和消费不能先开启拾取碰撞，否则可能同步触发新的拾取。
-	HandleHolderChanged();
+	// 先分离，再恢复碰撞；恢复碰撞可能立即被另一个玩家拾取，此后不再执行旧的分离操作。
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	RefreshKeyState();
 	ForceNetUpdate();
 }
 
@@ -246,79 +258,28 @@ void AmultiplayerCoopKey::ReleaseHolder()
 	SetOwner(nullptr);
 }
 
-/* 客户端收到 Holder 后只恢复附件和外观，不重新执行服务器拾取规则。 */
+/* Holder 与 Installed 可以先后到达；这里只刷新外观，不覆盖引擎已经复制的附件关系。 */
 void AmultiplayerCoopKey::OnRep_Holder()
 {
-	HandleHolderChanged();
+	RefreshKeyState();
 }
 
 /* 客户端收到 Installed 后关闭自由状态表现；实际插槽附件关系由 Actor 附件复制恢复。 */
 void AmultiplayerCoopKey::OnRep_Installed()
 {
-	HandleInstalledChanged();
+	RefreshKeyState();
 }
 
-/* 服务器赋值和客户端收到 Holder 后共用的表现刷新入口，避免两端各维护一份状态分支。 */
-void AmultiplayerCoopKey::HandleHolderChanged()
+/* 不重复维护“自由”枚举；由现有状态推导。碰撞必须最后更新，避免重入后写回旧 Tick/附着。 */
+void AmultiplayerCoopKey::RefreshKeyState()
 {
-	ApplyHeldState();
-	RefreshVisualTick();
-}
-
-/* 归位后关闭拾取和旋转；安装位置由附件关系处理，这里不再次移动钥匙。 */
-void AmultiplayerCoopKey::HandleInstalledChanged()
-{
-	if (!bInstalled)
-	{
-		return;
-	}
-
-	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	RefreshVisualTick();
-}
-
-/* 根据当前复制状态统一决定是否需要旋转 Tick，避免各状态分支分别开关后发生遗漏。 */
-void AmultiplayerCoopKey::RefreshVisualTick()
-{
-	// 旋转只是待拾取表现；被携带或安装后关闭 Tick，避免每把钥匙长期空转。
+	const bool bFree = Holder == nullptr && !bInstalled;
 	SetActorTickEnabled(
-		Holder == nullptr
-		&& !bInstalled
+		bFree
 		&& RotationSpeedDegrees > 0.0f
 		&& !RotationAxis.IsNearlyZero());
-}
-
-/*
- * 根据 Holder 重建当前机器上的碰撞和附件表现。服务器直接赋值与客户端 RepNotify 都复用此处，
- * 但只有服务器会重新开启可拾取碰撞，客户端始终没有本地判定权。
- */
-void AmultiplayerCoopKey::ApplyHeldState()
-{
-	// 碰撞只在权威端的自由状态开启；客户端即便已有相同几何体，也不能自行产生拾取结论。
-	const bool bIsHeld = Holder != nullptr;
 	PickupTrigger->SetCollisionEnabled(
-		HasAuthority() && !bIsHeld && !bInstalled
+		HasAuthority() && bFree
 			? ECollisionEnabled::QueryOnly
 			: ECollisionEnabled::NoCollision);
-
-	if (!bIsHeld)
-	{
-		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		return;
-	}
-
-	// 优先挂到骨骼网格的命名 Socket；没有骨骼网格时回退到角色根组件。
-	USceneComponent* AttachParent = Holder->GetMesh();
-	if (AttachParent == nullptr)
-	{
-		AttachParent = Holder->GetRootComponent();
-	}
-
-	if (AttachParent != nullptr)
-	{
-		AttachToComponent(
-			AttachParent,
-			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
-			CarrySocketName);
-	}
 }

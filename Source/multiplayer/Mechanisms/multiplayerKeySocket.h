@@ -57,8 +57,8 @@ protected:
 private:
 	// 同时核对 CarryComponent::CarriedKey 与 Key::Holder，避免任一侧迟到清理导致误消费。
 	AmultiplayerCoopKey* FindCarriedKey(ACharacter* Character) const;
-	// 两种入口共用的唯一提交点；先关闭触发并锁定 bActivated，再通知 GameMode。
-	void CommitServerActivation();
+	// 两种入口共用提交点：先检查进度，再安装或消费；失败解锁且不丢失钥匙。
+	bool CommitServerActivation(AmultiplayerCoopKey* Key, bool bInstall);
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
 	TObjectPtr<USceneComponent> SceneRoot;

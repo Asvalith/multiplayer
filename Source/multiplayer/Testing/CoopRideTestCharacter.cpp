@@ -1,4 +1,5 @@
 #include "Testing/CoopRideTestCharacter.h"
+#include "Engine/World.h"
 
 void UCoopRideTestMovement::ResetMetrics()
 {
@@ -6,6 +7,78 @@ void UCoopRideTestMovement::ResetMetrics()
 	ComparableCorrectionCount = 0;
 	BaseChangeCorrectionCount = 0;
 	MaxCorrectionCm = 0.0f;
+	CorrectionEvents.Reset();
+	DroppedCorrectionEvents = 0;
+	ClientMoveEvents.Reset();
+	ServerMoveEvents.Reset();
+	DroppedClientMoves = DroppedServerMoves = 0;
+}
+
+void UCoopRideTestMovement::ReplicateMoveToServer(float DeltaTime, const FVector& NewAcceleration)
+{
+	Super::ReplicateMoveToServer(DeltaTime, NewAcceleration);
+#if !UE_BUILD_SHIPPING
+	if (!ObservedPlatform.IsValid()) return;
+	const FNetworkPredictionData_Client_Character* ClientData = GetPredictionData_Client_Character();
+	if (!ClientData || ClientData->SavedMoves.IsEmpty()) return;
+	const FSavedMovePtr& Move = ClientData->SavedMoves.Last();
+	if (!Move.IsValid() || (ClientMoveEvents.Num() && ClientMoveEvents.Last().MoveTimeStamp == Move->TimeStamp)) return;
+	FCoopRideClientMoveEvent Event;
+	Event.MoveTimeStamp = Move->TimeStamp;
+	Event.ClientWorldSeconds = GetWorld()->GetTimeSeconds();
+	Event.Start = Move->StartLocation;
+	Event.End = Move->SavedLocation;
+	Event.Relative = Move->SavedRelativeLocation;
+	Event.StartVelocity = Move->StartVelocity;
+	Event.EndVelocity = Move->SavedVelocity;
+	Event.Platform = ObservedPlatform->GetActorLocation();
+	Event.PlatformVelocity = ObservedPlatform->GetVelocity();
+	Event.DeltaSeconds = Move->DeltaTime;
+	Event.StartMovementMode = Move->StartPackedMovementMode;
+	Event.EndMovementMode = Move->EndPackedMovementMode;
+	Event.bStartBased = Move->StartBase.IsValid();
+	Event.bEndBased = Move->EndBase.IsValid();
+	Event.bJumpPressed = Move->bPressedJump;
+	Event.StartBase = GetNameSafe(Move->StartBase.Get());
+	Event.EndBase = GetNameSafe(Move->EndBase.Get());
+	if (ClientMoveEvents.Num() < 512) ClientMoveEvents.Add(MoveTemp(Event));
+	else ++DroppedClientMoves;
+#endif
+}
+
+void UCoopRideTestMovement::ServerMoveHandleClientError(float ClientTimeStamp, float DeltaTime,
+	const FVector& Accel, const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase,
+	FName ClientBaseBoneName, uint8 ClientMovementMode)
+{
+#if !UE_BUILD_SHIPPING
+	if (ObservedPlatform.IsValid() && CharacterOwner)
+	{
+		FCoopRideServerMoveEvent Event;
+		Event.MoveTimeStamp = ClientTimeStamp;
+		Event.ServerWorldSeconds = GetWorld()->GetTimeSeconds();
+		Event.Server = CharacterOwner->GetActorLocation();
+		Event.ServerVelocity = Velocity;
+		Event.Platform = ObservedPlatform->GetActorLocation();
+		Event.PlatformVelocity = ObservedPlatform->GetVelocity();
+		Event.ServerRelative = Event.Server - Event.Platform;
+		Event.Reported = RelativeClientLocation;
+		Event.DeltaSeconds = DeltaTime;
+		Event.bServerBased = GetMovementBase() != nullptr;
+		Event.bReportedBased = ClientMovementBase != nullptr;
+		Event.bServerFalling = IsFalling();
+		TEnumAsByte<EMovementMode> ReportedMode, GroundMode;
+		uint8 CustomMode;
+		UnpackNetworkMovementMode(ClientMovementMode, ReportedMode, CustomMode, GroundMode);
+		Event.bReportedFalling = ReportedMode == MOVE_Falling;
+		Event.ServerBase = GetNameSafe(GetMovementBase());
+		Event.ReportedBase = GetNameSafe(ClientMovementBase);
+		if (ServerMoveEvents.Num() < 512) ServerMoveEvents.Add(MoveTemp(Event));
+		else ++DroppedServerMoves;
+	}
+#endif
+	// 保持原来的误差判断、容差和校正发送路径不变。
+	Super::ServerMoveHandleClientError(ClientTimeStamp, DeltaTime, Accel, RelativeClientLocation,
+		ClientMovementBase, ClientBaseBoneName, ClientMovementMode);
 }
 
 void UCoopRideTestMovement::OnClientCorrectionReceived(
@@ -22,10 +95,19 @@ void UCoopRideTestMovement::OnClientCorrectionReceived(
 {
 #if !UE_BUILD_SHIPPING
 	++CorrectionCount;
+	FCoopRideCorrectionEvent Event;
+	Event.ReceiptWorldSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0;
+	Event.MoveTimeStamp = TimeStamp;
+	Event.ServerVelocity = NewVelocity;
+	Event.bServerOnBase = bHasBase && NewBase != nullptr;
+	Event.ServerBase = GetNameSafe(NewBase);
 	// CMC 在调用本事件前已确认对应时间戳的 Move；不能用当前角色位置减历史校正位置。
 	const FSavedMovePtr& SavedMove = ClientData.LastAckedMove;
-	if (SavedMove.IsValid())
+	if (SavedMove.IsValid() && FMath::IsNearlyEqual(SavedMove->TimeStamp, TimeStamp, .001f))
 	{
+		Event.ClientVelocity = SavedMove->SavedVelocity;
+		Event.bSavedOnBase = SavedMove->EndBase.IsValid();
+		Event.SavedBase = GetNameSafe(SavedMove->EndBase.Get());
 		FVector ClientLocation;
 		FVector ServerLocation;
 		bool bComparable = false;
@@ -50,8 +132,12 @@ void UCoopRideTestMovement::OnClientCorrectionReceived(
 
 		if (bComparable)
 		{
+			const FVector Difference = ServerLocation - ClientLocation;
+			Event.bComparable = true;
+			Event.ErrorCm = Difference.Size();
+			Event.Error = Difference;
 			++ComparableCorrectionCount;
-			MaxCorrectionCm = FMath::Max(MaxCorrectionCm, FVector::Distance(ClientLocation, ServerLocation));
+			MaxCorrectionCm = FMath::Max(MaxCorrectionCm, Event.ErrorCm);
 		}
 		else
 		{
@@ -59,6 +145,9 @@ void UCoopRideTestMovement::OnClientCorrectionReceived(
 			++BaseChangeCorrectionCount;
 		}
 	}
+	// 只在显式 RideMotion 测试角色上收集，避免逐帧日志和无限增长。
+	if (CorrectionEvents.Num() < 128) CorrectionEvents.Add(MoveTemp(Event));
+	else ++DroppedCorrectionEvents;
 #endif
 
 	// 保留引擎日志/调试行为；真正的位置校正和后续 Move 重演仍完全由 CMC 执行。

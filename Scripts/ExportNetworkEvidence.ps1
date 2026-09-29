@@ -122,7 +122,7 @@ function Get-DerivedFrameTiming {
 }
 
 $cases = @($report.cases | ForEach-Object {
-    $case = Select-PublicFields $_ @('id', 'mode', 'matrix', 'profile', 'iteration', 'staticCount', 'movingCount', 'optimization', 'platformNetHz', 'platformSyncMode', 'warmupSeconds', 'sampleSeconds', 'samplingDurationSource', 'outageSeconds', 'startedAtUtc', 'durationSeconds', 'status', 'requiredAssertions', 'errors', 'metrics', 'motionMetrics', 'cpuMetrics', 'csvSha256', 'measurementWarnings')
+    $case = Select-PublicFields $_ @('id', 'mode', 'matrix', 'profile', 'iteration', 'staticCount', 'movingCount', 'optimization', 'platformNetHz', 'platformSyncMode', 'warmupSeconds', 'sampleSeconds', 'samplingDurationSource', 'outageSeconds', 'outageModel', 'startedAtUtc', 'durationSeconds', 'status', 'requiredAssertions', 'errors', 'metrics', 'motionMetrics', 'cpuMetrics', 'csvSha256', 'measurementWarnings')
     # ASSERT、DONE 和 FAIL 原样取值；不从服务器断言推断客户端已通过。
     $case['events'] = @($_.events | Where-Object { $_.status -in @('ASSERT', 'DONE', 'FAIL', 'UNSUPPORTED') } | ForEach-Object {
         Select-PublicFields $_ @('mode', 'role', 'status', 'phase', 'assertion', 'passed', 'detail', 'elapsed')
@@ -158,11 +158,11 @@ $excerpt = [ordered]@{
     scope = @($report.scope) + @(
         '案例通过仅指原报告中的具体自动断言，不表示人工完整通关、全部蓝图配置或画面验收。',
         'Flow 使用真实 Overlap，但角色由测试放置，并包含合成机关；ClientRide 不证明视觉平滑，VictoryWidget 入 Viewport 不证明按钮点击和像素正确。',
-        'SessionRetry 和首次重开失败使用开发注入；Reconnect 使用进程内真实断包和缩短的连接超时，不是物理网络故障穷举。',
-        '同机双进程会竞争 CPU；NullRHI 不测渲染。合成对象数量不等于玩家容量，100 Hz 设置不等于实测发送频率。',
+        '历史 SessionRetry 和首次重开失败使用开发注入；当前 ConnectionRetry 使用不可达端口；Reconnect 使用进程内断包和缩短的连接超时，具体拓扑及断包范围见源报告。',
+        '同机多进程会竞争 CPU；NullRHI 不测渲染。合成对象数量不等于玩家容量，100 Hz 设置不等于实测发送频率。',
         '带宽是服务器总出站；CPU 缺失或全零需保留限制。正式对照每组至少三次，单次成功不等于正式性能结论。',
         'runtimeGameplayConfig.loadedByRuntimeVerified=false 时只证明磁盘文件指纹，不能据此声称运行时已加载该配置。',
-        'RideMotion 的 motionMetrics 按角色与阶段保留实际采样；平台逐帧位移、角色相对位移和历史 Move 校正误差不是同一指标。基座变化的校正另计，Host 校正字段不适用；动作通过不代表视觉平滑。',
+        'RideMotion 的 motionMetrics 按角色与阶段保留实际采样；平台逐帧位移、角色相对位移和历史 Move 校正误差不是同一指标。基座变化的校正另计，Server（历史 Host）校正字段不适用；动作通过不代表视觉平滑。',
         'projectModule.loadedByRuntimeVerified=false 时只记录磁盘上的项目模块指纹，未在运行进程内验证加载模块的哈希。'
     )
     cases = $cases

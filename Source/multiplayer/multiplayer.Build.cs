@@ -15,23 +15,19 @@ public class multiplayer : ModuleRules
 		// 按功能目录组织头文件和实现，模块内 include 统一从模块根目录开始查找。
 		PrivateIncludePaths.Add(ModuleDirectory);
 
-		// 反射与引擎对象、增强输入、会话接口和本地 UI 是当前玩法实际使用的模块。
+		// 反射与引擎对象、增强输入和本地 UI 是当前玩法实际使用的模块。
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
 			"Core",
 			"CoreUObject",
 			"Engine",
 			"EnhancedInput",
-			"OnlineSubsystem",
 			"UMG",
 			"Slate",
 			"SlateCore"
 		});
 
-		// 默认菜单和 JSON 解析只在实现文件中使用，不把解析库暴露给业务头文件。
-		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json" });
-
-		// 面向局域网的具体子系统按配置加载；业务类通过 OnlineSubsystem 接口访问会话。
-		DynamicallyLoadedModuleNames.Add("OnlineSubsystemNull");
+		// 默认菜单、JSON 解析及测试用玩家连接标识只在实现文件中使用。
+		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline" });
 	}
 }

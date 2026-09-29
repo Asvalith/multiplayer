@@ -288,7 +288,9 @@ void AmultiplayerCoopGate::EvaluateGateState()
 
 	int32 ActivePlateCount = 0;
 	// (**) 除了板数还要统计不同角色，防止同一角色同时覆盖两块板。
-	TSet<ACharacter*> DistinctPlayers;
+	// 常见双人/少量成员使用内联存储，超过 4 人仍可扩容；容量不是玩法人数限制。
+	// 这里只减少事件求值时的小额临时分配，不宣称未经测量的帧率收益。
+	TSet<ACharacter*, DefaultKeyFuncs<ACharacter*>, TInlineSetAllocator<4>> DistinctPlayers;
 	TArray<ACharacter*> PlateOccupants;
 	for (const AmultiplayerPressurePlate* Plate : RuntimeRequiredPlates)
 	{

@@ -25,10 +25,16 @@ void AmultiplayerCoopPlayerController::BeginPlayingState()
 	// 服务器也为远端玩家创建 PlayerController，但只有所属客户端能确认本地连接已经进入可操作状态。
 	if (IsLocalController())
 	{
+		// 菜单的 UIOnly 修改的是共享视口；换控制器后显式恢复，不能依赖旧菜单析构。
+		bShowMouseCursor = false;
+		SetInputMode(FInputModeGameOnly());
 		// (*) 用所属控制器进入 PlayingState 作为本项目的连接确认点；独立复制对象仍可能稍后到达。
 		if (UmultiplayerGameInstance* GameInstance =
 			GetGameInstance<UmultiplayerGameInstance>())
 		{
+			GameInstance->OnLeaveFailed.RemoveAll(this);
+			GameInstance->OnLeaveFailed.AddUObject(
+				this, &AmultiplayerCoopPlayerController::HandleLeaveFailed);
 			GameInstance->NotifyClientConnected();
 		}
 	}
@@ -43,6 +49,10 @@ void AmultiplayerCoopPlayerController::BeginPlayingState()
 void AmultiplayerCoopPlayerController::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
+	if (UmultiplayerGameInstance* GameInstance = GetGameInstance<UmultiplayerGameInstance>())
+	{
+		GameInstance->OnLeaveFailed.RemoveAll(this);
+	}
 	RemoveVictoryScreen();
 	Super::EndPlay(EndPlayReason);
 }
@@ -65,6 +75,7 @@ void AmultiplayerCoopPlayerController::PresentCoopVictory()
 	}
 
 	VictoryWidget->AddToViewport(100);
+	VictoryWidget->SetActionFeedback(VictoryAction == ECoopVictoryAction::Idle, FText::GetEmpty());
 	// 胜利界面接管输入，避免点击按钮的同时继续操纵角色；退出时与 RemoveVictoryScreen 对称恢复。
 	bShowMouseCursor = true;
 	FInputModeUIOnly InputMode;
@@ -82,34 +93,91 @@ void AmultiplayerCoopPlayerController::PresentCoopVictory()
 	ReceiveCoopGameWon();
 }
 
-/** 只接受本地玩家入口；监听服务器的本地主机也沿同一条 RPC/规则路径发起重开。 */
+/** 只接受所属客户端的本地入口，经 Controller RPC 交给 DS 判断是否允许重开。 */
 void AmultiplayerCoopPlayerController::RequestRestartCurrentRound()
 {
-	if (IsLocalController())
+	if (!IsLocalController() || VictoryAction != ECoopVictoryAction::Idle)
 	{
-		ServerRequestRestartCurrentRound();
+		return;
 	}
+
+	// 先占用再发 RPC；只有失败回执能解除等待，避免快速点击重复提交。
+	SetVictoryAction(ECoopVictoryAction::RestartPending,
+		NSLOCTEXT("Multiplayer", "RestartPending", "正在请求重新开始……"));
+	ServerRequestRestartCurrentRound();
 }
 
 /** 服务器收到请求后只做转交；可靠投递不能替代 GameMode 的胜利检查和重复请求保护。 */
 void AmultiplayerCoopPlayerController::ServerRequestRestartCurrentRound_Implementation()
 {
-	if (AmultiplayerGameMode* CoopGameMode =
+	if (bServerRestartPending)
+	{
+		return;
+	}
+
+	bServerRestartPending = true;
+	AmultiplayerGameMode* CoopGameMode =
 		GetWorld() != nullptr
 			? GetWorld()->GetAuthGameMode<AmultiplayerGameMode>()
-			: nullptr)
+			: nullptr;
+	if (CoopGameMode == nullptr || !CoopGameMode->RequestRestartCurrentRound(this))
 	{
-		CoopGameMode->RequestRestartCurrentRound(this);
+		NotifyRestartFailed(NSLOCTEXT("Multiplayer", "RestartRejected", "暂时无法重开，请重试或退出房间。"));
 	}
 }
 
-/** 将用户退出意图交给 GameInstance，由它统一取消重连、清理会话并返回默认菜单。 */
+/** 先释放服务器请求，再通知所属客户端，避免通知期间重入旧请求。 */
+void AmultiplayerCoopPlayerController::NotifyRestartFailed(const FText& Reason)
+{
+	if (!HasAuthority() || !bServerRestartPending)
+	{
+		return;
+	}
+	bServerRestartPending = false;
+	ClientRestartFailed(Reason);
+}
+
+/** 可靠 RPC 与单请求限制保证失败先于重试；不把正在退出的界面改回空闲。 */
+void AmultiplayerCoopPlayerController::ClientRestartFailed_Implementation(const FText& Reason)
+{
+	if (VictoryAction == ECoopVictoryAction::RestartPending)
+	{
+		SetVictoryAction(ECoopVictoryAction::Idle, Reason);
+	}
+}
+
+/** 将退出意图交给 GameInstance，由它统一取消重连、断开连接并返回菜单。 */
 void AmultiplayerCoopPlayerController::LeaveCoopSession()
 {
+	if (!IsLocalController() || VictoryAction != ECoopVictoryAction::Idle)
+	{
+		return;
+	}
 	if (UmultiplayerGameInstance* GameInstance =
 		GetGameInstance<UmultiplayerGameInstance>())
 	{
+		SetVictoryAction(ECoopVictoryAction::Leaving,
+			NSLOCTEXT("Multiplayer", "LeavePending", "正在退出房间……"));
 		GameInstance->LeaveGame();
+	}
+}
+
+/** 状态只有一份；默认 Widget 与蓝图调用都走控制器，不各自维护一把永久按钮锁。 */
+void AmultiplayerCoopPlayerController::SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message)
+{
+	VictoryAction = NewAction;
+	if (VictoryWidget != nullptr)
+	{
+		VictoryWidget->SetActionFeedback(NewAction == ECoopVictoryAction::Idle, Message);
+	}
+}
+
+/** 退出失败只恢复本地操作，不伪造房间已恢复或重连成功。 */
+void AmultiplayerCoopPlayerController::HandleLeaveFailed(const FText& Reason)
+{
+	if (VictoryAction == ECoopVictoryAction::Leaving)
+	{
+		SetVictoryAction(ECoopVictoryAction::Idle, Reason);
 	}
 }
 
@@ -117,7 +185,7 @@ void AmultiplayerCoopPlayerController::LeaveCoopSession()
 void AmultiplayerCoopPlayerController::ClientReturnToMainMenuWithTextReason_Implementation(
 	const FText& ReturnReason)
 {
-	// 主机退出时，远端也走主动退出入口。先销毁本机会话并关闭重连，再返回菜单。
+	// 服务器主动要求返回菜单时关闭自动重连，避免退出后再次连回。
 	if (UmultiplayerGameInstance* GameInstance =
 		GetGameInstance<UmultiplayerGameInstance>())
 	{

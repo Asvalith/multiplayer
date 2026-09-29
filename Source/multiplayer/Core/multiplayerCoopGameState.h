@@ -9,8 +9,8 @@
 /**
  * 一次网络更新中发送的合作目标快照。
  *
- * 将“当前进度、目标上限、是否胜利”放在同一结构体内复制，客户端收到的是同一时刻的完整组合，
- * 不会因为三个独立属性先后到达而短暂显示出互相矛盾的状态。
+ * 将“当前进度、目标上限、是否胜利”归在一个业务结构中，并使用同一 RepNotify 刷新表现，
+ * 避免业务层依赖多个 OnRep 的调用顺序；这不等于跨 Actor、RPC 或附件复制的原子事务。
  */
 USTRUCT()
 struct FmultiplayerCoopObjectiveState
@@ -77,7 +77,7 @@ public:
 	 *
 	 * 写入前统一修正范围并拒绝完全相同的快照，防止无效广播、无意义的 UI 刷新和额外网络更新。
 	 * (**) RepNotify 会在客户端收到复制时执行，但服务器修改属性后不会自动执行，
-	 * 所以服务器需要主动走同一套通知逻辑，保证 Listen Server 主机和远端客户端表现一致。
+	 * 所以服务器主动通知本地规则监听者；远端客户端通过 OnRep 更新自己的表现。
 	 */
 	void ApplyAuthoritativeState(
 		const FmultiplayerCoopObjectiveState& NewObjectiveState);

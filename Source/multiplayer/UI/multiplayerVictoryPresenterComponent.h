@@ -19,7 +19,7 @@ class UWorld;
  * 蓝图事件只作为可选表现扩展。
  *
  * (*) 表现组件只在本地玩家控制器上工作，不复制，也不参与胜负判定。
- * (**) Listen Server 的本地玩家也要走同一表现路径；不能只依赖远端客户端的 RepNotify。
+ * (**) 只为所属客户端展示；绑定后补读当前快照，不能只等下一次 RepNotify。
  */
 UCLASS(ClassGroup = (Coop))
 class MULTIPLAYER_API UmultiplayerVictoryPresenterComponent : public UActorComponent

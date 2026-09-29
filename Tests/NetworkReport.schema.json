@@ -27,7 +27,7 @@
         "type": "object",
         "required": ["id", "mode", "profile", "iteration", "status", "commands", "requiredAssertions", "events", "errors", "metrics"],
         "properties": {
-          "mode": { "enum": ["Flow", "LateJoin", "Reconnect", "SessionRetry", "Ride", "RideMotion", "Scale"] },
+          "mode": { "enum": ["DedicatedSmoke", "Flow", "Keys", "LateJoin", "Reconnect", "SessionRetry", "ConnectionRetry", "Ride", "RideMotion", "Scale"] },
           "profile": { "enum": ["Normal", "Moderate", "Harsh"] },
           "status": { "enum": ["planned", "passed", "failed", "unsupported"] },
           "iteration": { "type": "integer", "minimum": 1 },

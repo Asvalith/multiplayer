@@ -3,11 +3,15 @@
 
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/NetDriver.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Core/multiplayerCoopGameState.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "HAL/PlatformMisc.h"
 #include "Mechanisms/multiplayerMovingPlatform.h"
 #include "Mechanisms/multiplayerPressurePlate.h"
@@ -46,7 +50,7 @@ void ACoopNetTestProbe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 void ACoopNetTestProbe::ServerReceipt_Implementation(const FString& Name, bool bPassed, const FString& Detail)
 {
 #if !UE_BUILD_SHIPPING
-	if (Driver) Driver->Receipt(Name, bPassed, Detail);
+	if (Driver) Driver->Receipt(Name, bPassed, Detail, this);
 #endif
 }
 
@@ -90,14 +94,15 @@ void UCoopNetTestDriver::Start()
 	FParse::Value(FCommandLine::Get(), TEXT("CoopWarmupSeconds="), WarmupSeconds);
 	FParse::Value(FCommandLine::Get(), TEXT("CoopSampleSeconds="), SampleSeconds);
 	FParse::Value(FCommandLine::Get(), TEXT("CoopTestTimeout="), TimeoutSeconds);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopOutageSeconds="), OutageSeconds);
-	bHost = Role == TEXT("Host");
+	bServer = Role == TEXT("Server");
+	bPartner = Role == TEXT("Partner");
+	FParse::Value(FCommandLine::Get(), TEXT("CoopServerAddress="), ServerAddress);
 	StartedAt = Now();
 	SetPhase(TEXT("Boot"));
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &ThisClass::Tick), .1f);
-	if ((Role != TEXT("Host") && Role != TEXT("Client")) || Token.IsEmpty())
-		Finish(false, TEXT("Requires CoopTestRole=Host|Client and a unique CoopTestToken"));
-	if (!TArray<FString>{TEXT("Scale"), TEXT("Flow"), TEXT("LateJoin"), TEXT("Reconnect"), TEXT("SessionRetry"), TEXT("Ride"), TEXT("RideMotion")}.Contains(Mode))
+	if ((Role != TEXT("Server") && Role != TEXT("Client") && Role != TEXT("Partner")) || Token.IsEmpty())
+		Finish(false, TEXT("Requires CoopTestRole=Server|Client|Partner and a unique CoopTestToken"));
+	if (!TArray<FString>{TEXT("Scale"), TEXT("Flow"), TEXT("Keys"), TEXT("LateJoin"), TEXT("Reconnect"), TEXT("ConnectionRetry"), TEXT("Ride"), TEXT("RideMotion"), TEXT("DedicatedSmoke")}.Contains(Mode))
 		Finish(false, TEXT("Unknown test mode"));
 	if (StaticCount < 0 || StaticCount > 500 || MovingCount < 0 || MovingCount > 20 || SampleSeconds <= 0 || WarmupSeconds < 0)
 		Finish(false, TEXT("Invalid scale limits"));
@@ -108,11 +113,6 @@ void UCoopNetTestDriver::Stop()
 {
 	FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 	if (GEngine) GEngine->OnNetworkFailure().RemoveAll(this);
-	if (GameInstance.IsValid())
-	{
-		GameInstance->OnFindComplete.RemoveDynamic(this, &ThisClass::FoundGames);
-		GameInstance->OnSessionOperationChanged.RemoveDynamic(this, &ThisClass::SessionOperation);
-	}
 }
 
 UWorld* UCoopNetTestDriver::FindWorld() const
@@ -172,7 +172,7 @@ bool UCoopNetTestDriver::Tick(float)
 #if !UE_BUILD_SHIPPING
 	if (bDone)
 	{
-		if (Now() - PhaseAt > 1) FPlatformMisc::RequestExit(false);
+		if (Now() - PhaseAt > (bServer ? 5 : 2)) FPlatformMisc::RequestExit(false);
 		return true;
 	}
 	if (Now() - StartedAt > TimeoutSeconds) { Finish(false, TEXT("Test timeout")); return true; }
@@ -186,74 +186,66 @@ bool UCoopNetTestDriver::Tick(float)
 		GEngine->OnNetworkFailure().RemoveAll(this);
 		GEngine->OnNetworkFailure().AddUObject(this, &ThisClass::NetworkFailure);
 		GameInstance = GI;
-		GI->OnFindComplete.AddUniqueDynamic(this, &ThisClass::FoundGames);
-		GI->OnSessionOperationChanged.AddUniqueDynamic(this, &ThisClass::SessionOperation);
 	}
-	if (bHost) HostTick(World); else ClientTick(World);
+	if (Mode == TEXT("DedicatedSmoke")) DedicatedTick(World);
+	else if (bServer) ServerTick(World); else if (bPartner) PartnerTick(World); else ClientTick(World);
 #endif
 	return true;
 }
 
-void UCoopNetTestDriver::SessionOperation(EMultiplayerSessionOperation Value) { Operation = Value; }
-
-void UCoopNetTestDriver::FoundGames(bool bSuccess, const TArray<FmultiplayerSessionInfo>& Results)
+APlayerController* UCoopNetTestDriver::PartnerPlayer(UWorld* World) const
 {
-#if !UE_BUILD_SHIPPING
-	if (bDone || bHost || !GameInstance.IsValid()) return;
-	if (bSuccess) for (const FmultiplayerSessionInfo& Result : Results)
-	{
-		if (Result.ServerName == Token)
-		{
-			SetPhase(TEXT("Joining"));
-			GameInstance->JoinGame(Result.ResultIndex);
-			return;
-		}
-	}
-	NextAttemptAt = Now() + 2;
-#endif
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		if (It->Get() && It->Get()->PlayerState
+			&& It->Get()->PlayerState->GetUniqueId().ToString() == PartnerPlayerId) return It->Get();
+	return nullptr;
 }
 
-void UCoopNetTestDriver::HostTick(UWorld* World)
+APlayerController* UCoopNetTestDriver::PrimaryPlayer(UWorld* World) const
+{
+	APlayerController* Partner = PartnerPlayer(World);
+	if (!Partner) return nullptr;
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		if (It->Get() && It->Get() != Partner && It->Get()->GetCharacter()) return It->Get();
+	return nullptr;
+}
+
+void UCoopNetTestDriver::ServerTick(UWorld* World)
 {
 	if (Phase == TEXT("Boot"))
 	{
-		if (Now() - StartedAt < 1) return;
-		SetPhase(TEXT("Hosting"));
-		GameInstance->HostGame(Token, 2, true);
-		NextAttemptAt = Now() + 3;
+		Assert(TEXT("DedicatedAuthority"), World->GetNetMode() == NM_DedicatedServer
+			&& GameInstance->GetLocalPlayers().IsEmpty(), TEXT("DS has zero local players"));
+		if (bDone) return;
+		SetPhase(TEXT("ReadyForPartner"));
+		Emit(TEXT("READY"));
 	}
-	if (Phase == TEXT("Hosting"))
+	// 首次只有 Partner 进程获准连接；随后按稳定的网络 ID 识别，不能依赖重开后的登录顺序。
+	if (PartnerPlayerId.IsEmpty())
+		if (const auto* First = World->GetFirstPlayerController(); First && First->PlayerState)
+			PartnerPlayerId = First->PlayerState->GetUniqueId().ToString();
+	APlayerController* Partner = PartnerPlayer(World);
+	if (Partner && Partner->GetCharacter() && !PartnerProbe.IsValid())
 	{
-		if (Mode == TEXT("SessionRetry") && !bSessionFailureChecked && Operation == EMultiplayerSessionOperation::None)
-		{
-			bSessionFailureChecked = true;
-			Assert(TEXT("SessionFailureObserved"), World->GetNetDriver() == nullptr && World->GetNetMode() == NM_Standalone,
-				TEXT("Injected CreateSession failure must roll back only the newly created listener"));
-			if (bDone) return;
-		}
-		if (World->GetNetMode() == NM_ListenServer && Operation == EMultiplayerSessionOperation::None)
-		{
-			if (Mode == TEXT("LateJoin")) PrepareLateJoin(World);
-			SetPhase(TEXT("ReadyForClient"));
-			Emit(TEXT("READY"));
-		}
-		else if (Operation == EMultiplayerSessionOperation::None && Now() > NextAttemptAt)
-		{
-			GameInstance->HostGame(Token, 2, true);
-			NextAttemptAt = Now() + 3;
-		}
-		return;
+		FActorSpawnParameters Params; Params.Owner = Partner;
+		PartnerProbe = World->SpawnActor<ACoopNetTestProbe>(Params);
+		PartnerProbe->Stage = TEXT("PartnerReady");
+	}
+	if (Phase == TEXT("ReadyForPartner"))
+	{
+		if (!Receipts.Contains(TEXT("PartnerReady"))) return;
+		if (Mode == TEXT("LateJoin")) PrepareLateJoin(World);
+		if (bDone) return;
+		SetPhase(TEXT("ReadyForClient"));
+		Emit(TEXT("PRIMARY_READY"));
 	}
 	if (Phase == TEXT("ReadyForClient"))
 	{
-		APlayerController* Remote = nullptr;
-		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
-			if (It->Get() && !It->Get()->IsLocalController() && It->Get()->GetCharacter()) Remote = It->Get();
+		APlayerController* Remote = PrimaryPlayer(World);
 		if (!Remote) return;
-		FActorSpawnParameters Params;
-		Params.Owner = Remote;
+		FActorSpawnParameters Params; Params.Owner = Remote;
 		Probe = Mode == TEXT("RideMotion") ? World->SpawnActor<ACoopPlatformRideProbe>(Params) : World->SpawnActor<ACoopNetTestProbe>(Params);
-		Assert(TEXT("Join"), Probe.IsValid(), TEXT("Real remote PlayerController with possessed character"));
+		Assert(TEXT("Join"), Probe.IsValid(), TEXT("Two remote players; primary probe owned by second connection"));
 		if (!Probe.IsValid()) return;
 		if (Mode == TEXT("Scale"))
 		{
@@ -266,8 +258,48 @@ void UCoopNetTestDriver::HostTick(UWorld* World)
 		else SetPhase(TEXT("ScenarioStart"));
 	}
 	if (Mode == TEXT("Scale")) ScaleTick(World);
-	else if (Mode == TEXT("RideMotion")) MotionHostTick(World);
-	else ScenarioHostTick(World);
+	else if (Mode == TEXT("RideMotion")) MotionServerTick(World);
+	else ScenarioServerTick(World);
+	// 广播完成状态；服务器延迟退出，外层脚本还会要求 Partner 独立 DONE 才判通过。
+	if (bDone && PartnerProbe.IsValid()) { PartnerProbe->Stage = TEXT("Complete"); PartnerProbe->ForceNetUpdate(); }
+}
+
+void UCoopNetTestDriver::PartnerTick(UWorld* World)
+{
+	if (World->GetNetMode() != NM_Client)
+	{
+		if (Phase == TEXT("Boot") && World->GetFirstPlayerController())
+		{
+			SetPhase(TEXT("Connecting"));
+			GameInstance->ConnectToServer(ServerAddress);
+		}
+		return;
+	}
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC || !PC->GetCharacter()) return;
+	PC->GetCharacter()->GetCharacterMovement()->DisableMovement();
+	if (!Probe.IsValid())
+	{
+		for (TActorIterator<ACoopNetTestProbe> It(World); It; ++It)
+			if (It->GetOwner() == PC) { Probe = *It; break; }
+	}
+	if (!Probe.IsValid()) return;
+	auto* State = World->GetGameState<AmultiplayerCoopGameState>();
+	if (!State || State->GetObjectiveState().RequiredKeys <= 0) return;
+	if (!SentReceipts.Contains(TEXT("PartnerReady")))
+		SendReceipt(TEXT("PartnerReady"), true, TEXT("First remote client received pawn, owned probe and shared objective"));
+	if (State->GetObjectiveState().bGameWon && !SentReceipts.Contains(TEXT("PartnerVictory")))
+	{
+		SendReceipt(TEXT("PartnerVictory"), true, TEXT("Victory replicated to the other client too"));
+		PreviousWorld = World;
+	}
+	if (Probe->Stage == TEXT("Restarted") && SentReceipts.Contains(TEXT("PartnerVictory")) && !State->GetObjectiveState().bGameWon)
+		SendReceipt(TEXT("PartnerRestart"), true, TEXT("Partner loaded reset world"));
+	if (Probe->Stage == TEXT("Complete"))
+	{
+		SendReceipt(TEXT("PartnerComplete"), true, TEXT("Partner observed completion"));
+		Finish(true);
+	}
 }
 
 void UCoopNetTestDriver::ClientTick(UWorld* World)
@@ -279,19 +311,34 @@ void UCoopNetTestDriver::ClientTick(UWorld* World)
 	}
 	if (World->GetNetMode() != NM_Client)
 	{
-		if ((Phase == TEXT("Boot") || Phase == TEXT("Finding")) && Operation == EMultiplayerSessionOperation::None && Now() > NextAttemptAt)
+		if (Phase == TEXT("Boot") && World->GetFirstPlayerController())
 		{
-			SetPhase(TEXT("Finding"));
-			NextAttemptAt = Now() + 5;
-			GameInstance->FindGames(100, true);
+			SetPhase(Mode == TEXT("ConnectionRetry") ? TEXT("BadAddress") : TEXT("Connecting"));
+			GameInstance->ConnectToServer(Mode == TEXT("ConnectionRetry") ? TEXT("127.0.0.1:1") : ServerAddress);
+		}
+		else if (Phase == TEXT("BadAddress") && GameInstance->GetConnectionState() == EMultiplayerConnectionState::Idle)
+		{
+			Assert(TEXT("ConnectionFailureRecovered"), !GameInstance->GetConnectionMessage().IsEmpty(),
+				TEXT("Unreachable endpoint released busy state and reported error"));
+			SetPhase(TEXT("Connecting"));
+			GameInstance->ConnectToServer(ServerAddress);
 		}
 		return;
 	}
 	if (!Probe.IsValid())
 	{
-		for (TActorIterator<ACoopNetTestProbe> It(World); It; ++It) { Probe = *It; break; }
+		for (TActorIterator<ACoopNetTestProbe> It(World); It; ++It)
+			if (It->GetOwner() == World->GetFirstPlayerController()) { Probe = *It; break; }
 		if (!Probe.IsValid()) return;
-		Assert(TEXT("Join"), true, TEXT("Remote-owned replicated test probe received after Find/Join"));
+		Assert(TEXT("Join"), true, TEXT("Remote-owned replicated test probe received after direct connection"));
+		if (Mode == TEXT("Flow") && Phase == TEXT("Connecting"))
+		{
+			const APlayerController* Local = World->GetFirstPlayerController();
+			const bool bInputReady = Local && Local->IsLocalController() && !Local->bShowMouseCursor
+				&& World->GetGameViewport() && !World->GetGameViewport()->IgnoreInput();
+			Assert(TEXT("ClientInputReady"), bInputReady, TEXT("Menu UIOnly released; gameplay viewport accepts input"));
+			if (bDone) return;
+		}
 	}
 	const FString Command = Probe->Stage;
 	if (Mode == TEXT("RideMotion")) { MotionClientTick(World); return; }
@@ -340,10 +387,18 @@ void UCoopNetTestDriver::ClientTick(UWorld* World)
 	}
 }
 
-void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FString& Detail)
+void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FString& Detail, ACoopNetTestProbe* Source)
 {
-	if (!bHost || bDone || Receipts.Contains(Name)) return;
-	Receipts.Add(Name);
+	if (!bServer || bDone) return;
+	// RPC 所属 Probe 区分两条连接，不能把同一客户端的重复回执算成两人成功。
+	FString ReceiptName = Name;
+	if (Mode == TEXT("DedicatedSmoke"))
+	{
+		if (!Source || !DedicatedProbes.Contains(Source)) return;
+		ReceiptName += TEXT(":") + Source->GetName();
+	}
+	if (Receipts.Contains(ReceiptName)) return;
+	Receipts.Add(ReceiptName);
 	Emit(TEXT("RECEIPT"), Name + TEXT(": ") + Detail);
 	if (!bPassed) Assert(Name, false, Detail);
 }
@@ -486,7 +541,7 @@ void UCoopNetTestDriver::ScaleTick(UWorld* World)
 
 void UCoopNetTestDriver::BeginSample(UWorld* World)
 {
-	if (!CheckScaleLoad(World, !bHost)) { Finish(false, TEXT("Scale load changed before sample: ") + ScaleLoadDetail); return; }
+	if (!CheckScaleLoad(World, !bServer)) { Finish(false, TEXT("Scale load changed before sample: ") + ScaleLoadDetail); return; }
 	UNetDriver* Net = World->GetNetDriver();
 	if (!Net) { Finish(false, TEXT("No NetDriver at sample start")); return; }
 	SampleDriver = Net;
@@ -503,7 +558,7 @@ void UCoopNetTestDriver::BeginSample(UWorld* World)
 bool UCoopNetTestDriver::EndSample(UWorld* World)
 {
 	if (bMetricEmitted) return true;
-	if (!CheckScaleLoad(World, !bHost)) { Finish(false, TEXT("Scale load changed during sample: ") + ScaleLoadDetail); return false; }
+	if (!CheckScaleLoad(World, !bServer)) { Finish(false, TEXT("Scale load changed during sample: ") + ScaleLoadDetail); return false; }
 	UNetDriver* Net = SampleDriver.Get();
 	if (!Net || World->GetNetDriver() != Net) { Finish(false, TEXT("NetDriver changed during sample")); return false; }
 	if (!bSampleEnding)
@@ -528,13 +583,13 @@ bool UCoopNetTestDriver::EndSample(UWorld* World)
 	Metrics->SetNumberField(TEXT("outPackets"), SamplePackets);
 	Metrics->SetNumberField(TEXT("sampleSeconds"), SampleElapsed);
 	Metrics->SetNumberField(TEXT("bytesPerSecond"), SampleBytes / FMath::Max(.001, SampleElapsed));
-	Metrics->SetNumberField(TEXT("connections"), bHost ? Net->ClientConnections.Num() : (Net->ServerConnection ? 1 : 0));
+	Metrics->SetNumberField(TEXT("connections"), bServer ? Net->ClientConnections.Num() : (Net->ServerConnection ? 1 : 0));
 	Metrics->SetNumberField(TEXT("actorCount"), ActorCount);
 	Metrics->SetNumberField(TEXT("syntheticStaticCount"), ScaleObservedStaticCount);
 	Metrics->SetNumberField(TEXT("syntheticMovingCount"), ScaleObservedMovingCount);
 	Metrics->SetNumberField(TEXT("expectedStaticCount"), StaticCount);
 	Metrics->SetNumberField(TEXT("expectedMovingCount"), MovingCount);
-	if (!bHost) Metrics->SetNumberField(TEXT("platformsWithObservedMovement"), ScaleMovedActors.Num());
+	if (!bServer) Metrics->SetNumberField(TEXT("platformsWithObservedMovement"), ScaleMovedActors.Num());
 	Metrics->SetStringField(TEXT("optimization"), Optimization);
 	Metrics->SetStringField(TEXT("matrix"), Matrix);
 	Metrics->SetStringField(TEXT("counterSource"), TEXT("UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes"));

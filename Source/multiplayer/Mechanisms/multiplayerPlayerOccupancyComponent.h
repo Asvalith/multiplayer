@@ -7,6 +7,8 @@
 #include "multiplayerPlayerOccupancyComponent.generated.h"
 
 class ACharacter;
+class APawn;
+class AController;
 class UPrimitiveComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
@@ -48,7 +50,7 @@ public:
 		UPrimitiveComponent* InTrigger,
 		bool bInRequirePlayerControlledCharacter = true);
 
-	// 对称移除 Overlap/OnDestroyed Delegate，并清空所有临时计数；可安全重复调用。
+	// 对称移除重叠、销毁、控制器变化 Delegate，并清空临时计数；可安全重复调用。
 	void UnbindTrigger();
 
 	// 返回有效弱引用的数量，不把同一角色的多个碰撞组件重复算作多个玩家。
@@ -82,9 +84,14 @@ private:
 	UFUNCTION()
 	void HandleOccupantDestroyed(AActor* DestroyedActor);
 
-	// 检查 Owner 权限、Character 类型和可选的玩家控制条件；不是通用 UObject 有效性检查。
-	ACharacter* GetValidOccupant(AActor* OtherActor) const;
-	// 增加该角色的重叠组件计数，首次进入时绑定 OnDestroyed。
+	UFUNCTION()
+	void HandleControllerChanged(APawn* Pawn, AController* OldController, AController* NewController);
+
+	// 先记录物理重叠候选，不在此排除未被玩家控制的角色，否则原地 Possess 无法补入人数。
+	ACharacter* GetOverlapCandidate(AActor* OtherActor) const;
+	bool CanCountAsPlayer(const ACharacter* Character) const;
+	void UnbindOccupant(ACharacter* Character);
+	// 增加该角色的重叠组件计数，首次进入时监听销毁和控制器变化。
 	void AddOccupant(AActor* OtherActor);
 	// 只登记一条有效角色重叠，不广播；实时进入和初始重建共用相同计数、解绑配对规则。
 	void RecordOccupantOverlap(ACharacter* Character);
@@ -96,15 +103,22 @@ private:
 	void RebuildOccupantsFromCurrentOverlaps();
 	// 只做底层解绑与清表，不广播；BindTrigger 用它把重绑定合并成一次状态变化。
 	void UnbindTriggerInternal();
-	// 移除所有角色销毁回调后清空表，不能只 Reset 容器而遗留外部 Delegate。
+	// 移除角色的销毁和控制器回调后清表，不能只 Reset 容器而遗留外部 Delegate。
 	void ClearOccupants();
 
 	// 运行期绑定对象，不应被保存进关卡或复制给客户端。
 	UPROPERTY(Transient)
 	TObjectPtr<UPrimitiveComponent> BoundTrigger;
 
-	// Key 是不延长角色生命周期的弱引用，Value 是该角色当前仍在区域内的重叠项数量。
-	// 弱引用本身不会主动删除 Map 条目，所以 OnDestroyed 和 GetPlayerCount 的有效性检查都不可省略。
-	TMap<TWeakObjectPtr<ACharacter>, int32> OverlapCounts;
+	struct FOccupantRecord
+	{
+		int32 OverlapCount = 0;
+		// 记录上一次已通知的资格，控制器事件到来后才能比较“变更前”和“变更后”。
+		bool bCountsAsPlayer = false;
+	};
+
+	// TMap 按角色定位记录；一个角色的多个碰撞体只增加计数，不能用集合丢掉重叠次数。
+	// 弱引用不保活 Pawn。物理重叠和玩家资格分开，全部由事件维护，不增加逐帧扫描。
+	TMap<TWeakObjectPtr<ACharacter>, FOccupantRecord> Occupants;
 	bool bRequirePlayerControlledCharacter = true;
 };

@@ -70,21 +70,13 @@ void AmultiplayerKeySocket::EndPlay(const EEndPlayReason::Type EndPlayReason)
 }
 
 /*
- * 供钥匙预绑定路径调用的服务器入口。它要求钥匙先成功归位到显示点，
- * 再锁定插槽并登记进度，避免出现“进度增加了但钥匙没有归位”的半完成状态。
+ * 预绑定入口和普通携带入口共用提交顺序，不在校验进度之前修改钥匙。
  */
 bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 {
-	// InstallAtSocket 成功后钥匙已经进入终态；只有这时才允许提交共享进度，保持表现和规则一致。
-	if (!HasAuthority() || bActivated || Key == nullptr || !Key->InstallAtSocket(KeyDisplayPoint))
-	{
-		return false;
-	}
-
-	CommitServerActivation();
-
-	return true;
+	return CommitServerActivation(Key, true);
 }
+
 /*
  * 普通携带路径的服务器入口。角色进入区域后，同时核对角色携带槽和 Key::Holder；
  * 只有两边仍指向同一关系时才消费钥匙并登记进度。
@@ -109,36 +101,40 @@ void AmultiplayerKeySocket::HandleSocketOverlap(
 	}
 
 	// 不能仅凭“角色进入区域”增加进度，必须找到双方记录一致的实际携带钥匙。
-	AmultiplayerCoopKey* Key = FindCarriedKey(Character);
-	if (Key == nullptr || !Key->ConsumeAtSocket())
-	{
-		return;
-	}
-
-	CommitServerActivation();
+	CommitServerActivation(FindCarriedKey(Character), false);
 }
 
 /*
- * 两条钥匙路径共用的一次性提交点。先关闭触发区和设置本地门闩，再通知 GameMode；
- * (**) 这个顺序能挡住重复 Overlap，以及 GameMode 通知链中可能同步发生的再次调用。
+ * 先占用本插槽，再由 GameMode 校验共享进度；借用回调只同步执行一次，不另建事务框架。
+ * 只有钥匙操作成功才关闭触发区并发布进度；失败仅释放门闩，保留原钥匙和可重试的触发区。
  */
-void AmultiplayerKeySocket::CommitServerActivation()
+bool AmultiplayerKeySocket::CommitServerActivation(AmultiplayerCoopKey* Key, bool bInstall)
 {
-	if (!HasAuthority() || bActivated)
+	if (!HasAuthority() || bActivated || !IsValid(Key) || Key->IsActorBeingDestroyed())
 	{
-		// (**) 所有入口最终都会到这里，二次检查可拦住重复 Overlap 和同帧重复提交。
-		return;
+		return false;
 	}
 
-	// 先锁门闩并关闭碰撞，再调用外部 GameMode；即使后续产生嵌套事件也无法重复进入提交。
+	AmultiplayerGameMode* CoopGameMode = GetWorld()->GetAuthGameMode<AmultiplayerGameMode>();
+	if (CoopGameMode == nullptr)
+	{
+		return false;
+	}
 	bActivated = true;
-	ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
-	if (AmultiplayerGameMode* CoopGameMode =
-		GetWorld()->GetAuthGameMode<AmultiplayerGameMode>())
+	const bool bCommitted = CoopGameMode->RegisterActivatedKey([this, Key, bInstall]()
 	{
-		CoopGameMode->RegisterActivatedKey();
+		if (!(bInstall ? Key->InstallAtSocket(KeyDisplayPoint) : Key->ConsumeAtSocket()))
+		{
+			return false;
+		}
+		ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		return true;
+	});
+	if (!bCommitted)
+	{
+		bActivated = false;
 	}
+	return bCommitted;
 }
 
 /*

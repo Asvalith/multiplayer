@@ -3,6 +3,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Mechanisms/multiplayerMovingPlatform.h"
@@ -16,6 +17,14 @@ namespace
 {
 	const FVector RideOrigin(30000, 8000, 2000);
 	const FString MotionStages[] = { TEXT("MotionStand"), TEXT("MotionWalk"), TEXT("MotionReverse"), TEXT("MotionJump") };
+
+	// 导出完整向量，并保留旧版 X 列名，使历史报告仍能用同一绘图工具读取。
+	void SetVectorFields(const TSharedRef<FJsonObject>& Object, const TCHAR* Prefix, const FVector& Value)
+	{
+		Object->SetNumberField(FString(Prefix) + TEXT("X"), Value.X);
+		Object->SetNumberField(FString(Prefix) + TEXT("Y"), Value.Y);
+		Object->SetNumberField(FString(Prefix) + TEXT("Z"), Value.Z);
+	}
 }
 
 void FCoopRideMovementSettings::Apply(UCharacterMovementComponent* Movement) const
@@ -65,10 +74,15 @@ void ACoopPlatformRideProbe::Tick(float DeltaSeconds)
 		PreviousRelative = Character->GetActorLocation() - Subject->GetActorLocation();
 		PreviousPlatform = Subject->GetActorLocation();
 		InitialPlatformX = PreviousPlatform.X;
+		InitialRiderX = Character->GetActorLocation().X;
+		StageStartWorldSeconds = GetWorld()->GetTimeSeconds();
+		TimelineSamples.Reset();
+		FrozenCorrectionEvents = FrozenClientMoves = FrozenServerMoves = DroppedTimelineSamples = 0;
 		InitialRelativeZ = PreviousRelative.Z;
 		MaxRise = MaxFrameSeconds = CorrectionDistance = 0;
 		AirSeconds = InitialAirSpeed = LaterAirSpeed = 0;
 		Corrections = ComparableCorrections = BaseChanges = 0;
+		Movement->ObservedPlatform = Subject;
 		Movement->ResetMetrics();
 	}
 	if (bSegmentFinished) return;
@@ -112,6 +126,26 @@ void ACoopPlatformRideProbe::Tick(float DeltaSeconds)
 		}
 		if (bJumpSent && Elapsed > .9f) Character->StopJumping();
 	}
+	if (Stage == TEXT("MotionJump") && !HasAuthority())
+	{
+		if (TimelineSamples.Num() < 300)
+		{
+			FCoopRideTimelineSample Sample;
+			Sample.WorldSeconds = GetWorld()->GetTimeSeconds();
+			Sample.ElapsedSeconds = Sample.WorldSeconds - StageStartWorldSeconds;
+			Sample.PlatformX = Subject->GetActorLocation().X - InitialPlatformX;
+			Sample.RiderX = Character->GetActorLocation().X - InitialRiderX;
+			Sample.RelativeX = Relative.X - (InitialRiderX - InitialPlatformX);
+			Sample.PlatformStepCm = PlatformStep;
+			Sample.PlatformVelocityX = Subject->GetVelocity().X;
+			Sample.RiderVelocityX = Movement->Velocity.X;
+			Sample.bBased = bBased;
+			Sample.bFalling = bFalling;
+			Sample.bJumpRequested = bJumpSent;
+			TimelineSamples.Add(Sample);
+		}
+		else ++DroppedTimelineSamples;
+	}
 	// 四秒包括输入停止后的稳定区间；不删除首秒、不跳过校正峰值。
 	if (Elapsed >= 4.f)
 	{
@@ -121,19 +155,24 @@ void ACoopPlatformRideProbe::Tick(float DeltaSeconds)
 		ComparableCorrections = Movement->ComparableCorrectionCount;
 		BaseChanges = Movement->BaseChangeCorrectionCount;
 		CorrectionDistance = Movement->MaxCorrectionCm;
+		FrozenCorrectionEvents = Movement->CorrectionEvents.Num();
+		FrozenClientMoves = Movement->ClientMoveEvents.Num();
+		FrozenServerMoves = Movement->ServerMoveEvents.Num();
 	}
 #endif
 }
 
 bool ACoopPlatformRideProbe::IsSegmentValid() const
 {
-	if (Samples < 10 || Elapsed <= 0 || PlatformUpdates == 0 || !Rider.IsValid()) return false;
+	if (Samples < 10 || Elapsed <= 0 || !Rider.IsValid()) return false;
+	if (MovementSettings.bStationaryPlatform ? MaxPlatformStep > .01f : PlatformUpdates == 0) return false;
 	const bool bCurrentlyBased = Rider->GetMovementBase() && Rider->GetMovementBase()->GetOwner() == Subject;
 	if (SampleStage == TEXT("MotionJump")) return (HasAuthority() || bJumpSent) && MaxRise >= 50
 		&& FallingSamples > 0 && bLandedAfterJump && bCurrentlyBased;
 	if (float(BasedSamples) / Samples < .9f || !bCurrentlyBased) return false;
 	if (SampleStage == TEXT("MotionWalk")) return RelativeTravel >= 30;
-	if (SampleStage == TEXT("MotionReverse")) return Subject->GetActorLocation().X < InitialPlatformX - 100;
+	if (SampleStage == TEXT("MotionReverse")) return MovementSettings.bStationaryPlatform
+		|| Subject->GetActorLocation().X < InitialPlatformX - 100;
 	return true;
 }
 
@@ -160,6 +199,112 @@ TSharedRef<FJsonObject> ACoopPlatformRideProbe::MakeMetrics() const
 	Metrics->SetNumberField(TEXT("maxCorrectionCm"), CorrectionDistance);
 	Metrics->SetNumberField(TEXT("comparableCorrections"), ComparableCorrections);
 	Metrics->SetNumberField(TEXT("baseChangeCorrections"), BaseChanges);
+	if (SampleStage == TEXT("MotionJump") && !HasAuthority())
+	{
+		Metrics->SetStringField(TEXT("timelineClock"), TEXT("Client local World seconds relative to Jump phase start; server/client clocks are not aligned"));
+		Metrics->SetNumberField(TEXT("droppedTimelineSamples"), DroppedTimelineSamples);
+		TArray<TSharedPtr<FJsonValue>> SamplesJson;
+		for (const FCoopRideTimelineSample& Sample : TimelineSamples)
+		{
+			auto Row = MakeShared<FJsonObject>();
+			Row->SetNumberField(TEXT("t"), Sample.ElapsedSeconds);
+			Row->SetNumberField(TEXT("platformX"), Sample.PlatformX);
+			Row->SetNumberField(TEXT("riderX"), Sample.RiderX);
+			Row->SetNumberField(TEXT("relativeX"), Sample.RelativeX);
+			Row->SetNumberField(TEXT("platformStepCm"), Sample.PlatformStepCm);
+			Row->SetNumberField(TEXT("platformVelocityX"), Sample.PlatformVelocityX);
+			Row->SetNumberField(TEXT("riderVelocityX"), Sample.RiderVelocityX);
+			Row->SetBoolField(TEXT("based"), Sample.bBased);
+			Row->SetBoolField(TEXT("falling"), Sample.bFalling);
+			Row->SetBoolField(TEXT("jumpRequested"), Sample.bJumpRequested);
+			SamplesJson.Add(MakeShared<FJsonValueObject>(Row));
+		}
+		Metrics->SetArrayField(TEXT("timelineSamples"), MoveTemp(SamplesJson));
+		TArray<TSharedPtr<FJsonValue>> CorrectionsJson;
+		if (Rider.IsValid())
+		{
+			const auto* TestMovement = Cast<UCoopRideTestMovement>(Rider->GetCharacterMovement());
+			Metrics->SetNumberField(TEXT("droppedCorrectionEvents"), TestMovement->DroppedCorrectionEvents);
+			for (int32 Index = 0; Index < FrozenCorrectionEvents; ++Index)
+			{
+				const FCoopRideCorrectionEvent& Event = TestMovement->CorrectionEvents[Index];
+				auto Row = MakeShared<FJsonObject>();
+				Row->SetNumberField(TEXT("t"), Event.ReceiptWorldSeconds - StageStartWorldSeconds);
+				Row->SetNumberField(TEXT("moveTimestamp"), Event.MoveTimeStamp);
+				Row->SetBoolField(TEXT("comparable"), Event.bComparable);
+				Row->SetNumberField(TEXT("errorCm"), Event.ErrorCm);
+				SetVectorFields(Row, TEXT("error"), Event.Error);
+				SetVectorFields(Row, TEXT("clientVelocity"), Event.ClientVelocity);
+				SetVectorFields(Row, TEXT("serverVelocity"), Event.ServerVelocity);
+				Row->SetBoolField(TEXT("savedOnBase"), Event.bSavedOnBase);
+				Row->SetBoolField(TEXT("serverOnBase"), Event.bServerOnBase);
+				Row->SetStringField(TEXT("savedBase"), Event.SavedBase);
+				Row->SetStringField(TEXT("serverBase"), Event.ServerBase);
+				CorrectionsJson.Add(MakeShared<FJsonValueObject>(Row));
+			}
+		}
+		Metrics->SetArrayField(TEXT("correctionEvents"), MoveTemp(CorrectionsJson));
+	}
+	if (SampleStage == TEXT("MotionJump") && Rider.IsValid())
+	{
+		const auto* TestMovement = CastChecked<UCoopRideTestMovement>(Rider->GetCharacterMovement());
+		if (HasAuthority())
+		{
+			Metrics->SetNumberField(TEXT("droppedServerMoves"), TestMovement->DroppedServerMoves);
+			TArray<TSharedPtr<FJsonValue>> MovesJson;
+			for (int32 Index = 0; Index < FrozenServerMoves; ++Index)
+			{
+				const FCoopRideServerMoveEvent& Event = TestMovement->ServerMoveEvents[Index];
+				auto Row = MakeShared<FJsonObject>();
+				Row->SetNumberField(TEXT("moveTimestamp"), Event.MoveTimeStamp);
+				Row->SetNumberField(TEXT("serverWorldSeconds"), Event.ServerWorldSeconds);
+				SetVectorFields(Row, TEXT("server"), Event.Server);
+				SetVectorFields(Row, TEXT("serverRelative"), Event.ServerRelative);
+				SetVectorFields(Row, TEXT("serverVelocity"), Event.ServerVelocity);
+				SetVectorFields(Row, TEXT("reported"), Event.Reported);
+				SetVectorFields(Row, TEXT("platform"), Event.Platform);
+				SetVectorFields(Row, TEXT("platformVelocity"), Event.PlatformVelocity);
+				Row->SetNumberField(TEXT("deltaSeconds"), Event.DeltaSeconds);
+				Row->SetBoolField(TEXT("serverBased"), Event.bServerBased);
+				Row->SetBoolField(TEXT("reportedBased"), Event.bReportedBased);
+				Row->SetBoolField(TEXT("serverFalling"), Event.bServerFalling);
+				Row->SetBoolField(TEXT("reportedFalling"), Event.bReportedFalling);
+				Row->SetStringField(TEXT("serverBase"), Event.ServerBase);
+				Row->SetStringField(TEXT("reportedBase"), Event.ReportedBase);
+				MovesJson.Add(MakeShared<FJsonValueObject>(Row));
+			}
+			Metrics->SetArrayField(TEXT("serverMoveEvents"), MoveTemp(MovesJson));
+		}
+		else
+		{
+			Metrics->SetNumberField(TEXT("droppedClientMoves"), TestMovement->DroppedClientMoves);
+			TArray<TSharedPtr<FJsonValue>> MovesJson;
+			for (int32 Index = 0; Index < FrozenClientMoves; ++Index)
+			{
+				const FCoopRideClientMoveEvent& Event = TestMovement->ClientMoveEvents[Index];
+				auto Row = MakeShared<FJsonObject>();
+				Row->SetNumberField(TEXT("moveTimestamp"), Event.MoveTimeStamp);
+				Row->SetNumberField(TEXT("clientWorldSeconds"), Event.ClientWorldSeconds);
+				SetVectorFields(Row, TEXT("start"), Event.Start);
+				SetVectorFields(Row, TEXT("end"), Event.End);
+				SetVectorFields(Row, TEXT("relative"), Event.Relative);
+				SetVectorFields(Row, TEXT("startVelocity"), Event.StartVelocity);
+				SetVectorFields(Row, TEXT("endVelocity"), Event.EndVelocity);
+				SetVectorFields(Row, TEXT("platform"), Event.Platform);
+				SetVectorFields(Row, TEXT("platformVelocity"), Event.PlatformVelocity);
+				Row->SetNumberField(TEXT("deltaSeconds"), Event.DeltaSeconds);
+				Row->SetNumberField(TEXT("startMovementMode"), Event.StartMovementMode);
+				Row->SetNumberField(TEXT("endMovementMode"), Event.EndMovementMode);
+				Row->SetBoolField(TEXT("startBased"), Event.bStartBased);
+				Row->SetBoolField(TEXT("endBased"), Event.bEndBased);
+				Row->SetBoolField(TEXT("jumpPressed"), Event.bJumpPressed);
+				Row->SetStringField(TEXT("startBase"), Event.StartBase);
+				Row->SetStringField(TEXT("endBase"), Event.EndBase);
+				MovesJson.Add(MakeShared<FJsonValueObject>(Row));
+			}
+			Metrics->SetArrayField(TEXT("clientMoveEvents"), MoveTemp(MovesJson));
+		}
+	}
 	Metrics->SetStringField(TEXT("correctionScope"), HasAuthority() ? TEXT("Not applicable: server does not receive client corrections") : TEXT("CMC accepted corrections; same historical move in comparable coordinate space; base changes counted separately"));
 	int32 Hz = 30;
 	FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformNetHz="), Hz);
@@ -168,11 +313,12 @@ TSharedRef<FJsonObject> ACoopPlatformRideProbe::MakeMetrics() const
 	Metrics->SetNumberField(TEXT("platformNetHz"), Hz);
 	Metrics->SetStringField(TEXT("syncMode"), SyncMode);
 	Metrics->SetNumberField(TEXT("fallingBraking"), Rider.IsValid() ? Rider->GetCharacterMovement()->BrakingDecelerationFalling : -1);
+	Metrics->SetStringField(TEXT("platformMotion"), MovementSettings.bStationaryPlatform ? TEXT("Static") : TEXT("Moving"));
 	return Metrics;
 }
 
 // 场景只搭建一次初始位置，运动阶段不传送玩家、不关 CMC 校正，也不抬高校正容差。
-void UCoopNetTestDriver::MotionHostTick(UWorld* World)
+void UCoopNetTestDriver::MotionServerTick(UWorld* World)
 {
 	auto* MotionProbe = Cast<ACoopPlatformRideProbe>(Probe.Get());
 	if (!MotionProbe) { Finish(false, TEXT("Missing motion probe")); return; }
@@ -198,7 +344,10 @@ void UCoopNetTestDriver::MotionHostTick(UWorld* World)
 		}
 		FString SyncMode = TEXT("PlatformInertia");
 		FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformSyncMode="), SyncMode);
-		if (SyncMode != TEXT("PlatformInertia"))
+		FString PlatformMotion = TEXT("Moving");
+		FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformMotion="), PlatformMotion);
+		MotionProbe->MovementSettings.bStationaryPlatform = PlatformMotion == TEXT("Static");
+		if (SyncMode == TEXT("Baseline") || SyncMode == TEXT("OrderedVelocity"))
 		{
 			MotionProbe->MovementSettings.FallingBraking = 1500;
 		}
@@ -218,7 +367,8 @@ void UCoopNetTestDriver::MotionHostTick(UWorld* World)
 	}
 	if (Phase == TEXT("MotionBoard") && Receipts.Contains(Phase))
 	{
-		Probe->Subject->FindComponentByClass<UmultiplayerTransporterComponent>()->SetTransportActive(true);
+		if (!MotionProbe->MovementSettings.bStationaryPlatform)
+			Probe->Subject->FindComponentByClass<UmultiplayerTransporterComponent>()->SetTransportActive(true);
 		SetCommand(MotionStages[0]);
 	}
 	if (MotionProbe->IsSegmentFinished() && !MotionProbe->bMetricReported)
@@ -243,7 +393,8 @@ void UCoopNetTestDriver::MotionHostTick(UWorld* World)
 		{
 			const FString Next = MotionStages[Index + 1];
 			if (Next == TEXT("MotionReverse")) Probe->Subject->FindComponentByClass<UmultiplayerTransporterComponent>()->SetTransportActive(false);
-			if (Next == TEXT("MotionJump")) Probe->Subject->FindComponentByClass<UmultiplayerTransporterComponent>()->SetTransportActive(true);
+			if (Next == TEXT("MotionJump") && !MotionProbe->MovementSettings.bStationaryPlatform)
+				Probe->Subject->FindComponentByClass<UmultiplayerTransporterComponent>()->SetTransportActive(true);
 			SetCommand(Next);
 		}
 		break;

@@ -18,7 +18,7 @@ void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
 }
 /*
  * 服务器唯一写入口。提交前统一修正字段关系，相同快照直接忽略；成功提交会立即通知
- * Listen Server 本地监听者，并请求尽快复制给远端客户端。
+ * 服务器本地规则监听者，并请求尽快复制给远端客户端。
  * (*) RepNotify 只会因接收复制在客户端触发，服务器本地赋值需要主动走共用通知路径。
  */
 void AmultiplayerCoopGameState::ApplyAuthoritativeState(

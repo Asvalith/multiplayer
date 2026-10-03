@@ -62,7 +62,7 @@ void AmultiplayerCoopKey::BeginPlay()
 			this,
 			&AmultiplayerCoopKey::HandlePickupOverlap);
 	}
-	RefreshKeyState();
+	OnRep_Installed();
 }
 
 void AmultiplayerCoopKey::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -96,7 +96,7 @@ void AmultiplayerCoopKey::HandlePickupOverlap(
 
 	ACharacter* Character = Cast<ACharacter>(OtherActor);
 	if (IsValid(Character) && !Character->IsActorBeingDestroyed() && Character->IsPlayerControlled()
-		&& IsValid(DestinationSocket) && !DestinationSocket->IsActorBeingDestroyed())
+		&& IsValid(DestinationSocket))
 	{
 		DestinationSocket->StoreCollectedKey(this);
 	}
@@ -121,18 +121,13 @@ bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
 		return false;
 	}
 	SetOwner(SocketPoint->GetOwner());
-	RefreshKeyState();
+	OnRep_Installed();
 	ForceNetUpdate();
 	return true;
 }
 
-void AmultiplayerCoopKey::OnRep_Installed()
-{
-	RefreshKeyState();
-}
-
 /** 碰撞最后更新，避免重叠回调重入后又写回旧展示状态。 */
-void AmultiplayerCoopKey::RefreshKeyState()
+void AmultiplayerCoopKey::OnRep_Installed()
 {
 	const bool bFree = !bInstalled;
 	SetActorTickEnabled(

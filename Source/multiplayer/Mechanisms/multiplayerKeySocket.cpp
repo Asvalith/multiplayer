@@ -39,13 +39,9 @@ bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 	}
 	// 回调与进度广播均同步执行；在调用前占位，防止同一插槽重入登记。
 	bActivated = true;
-	const bool bCommitted = CoopGameMode->RegisterActivatedKey([this, Key]()
+	bActivated = CoopGameMode->RegisterActivatedKey([this, Key]()
 	{
 		return Key->InstallAtSocket(KeyDisplayPoint);
 	});
-	if (!bCommitted)
-	{
-		bActivated = false;
-	}
-	return bCommitted;
+	return bActivated;
 }

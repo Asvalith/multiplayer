@@ -1,5 +1,4 @@
 #include "Network/multiplayerGameInstance.h"
-
 #include "Core/multiplayerGameMode.h"
 #include "Core/multiplayerLog.h"
 #include "Engine/Engine.h"
@@ -14,6 +13,7 @@
 void UmultiplayerGameInstance::Init()
 {
 	Super::Init();
+	//加载Content/Config/Gameplay.json
 	GameplayConfig.LoadFromFile(FPaths::Combine(FPaths::ProjectContentDir(), TEXT("Config/Gameplay.json")));
 	if (GEngine)
 	{
@@ -25,7 +25,6 @@ void UmultiplayerGameInstance::Init()
 
 void UmultiplayerGameInstance::Shutdown()
 {
-	++OperationRevision;
 	ClearConnectionTimers();
 	if (GEngine)
 	{
@@ -76,12 +75,13 @@ bool UmultiplayerGameInstance::ConnectToServer(const FString& Address)
 	return ConnectionState == EMultiplayerConnectionState::Connecting;
 }
 
-void UmultiplayerGameInstance::SetConnectionState(EMultiplayerConnectionState State, const FText& Message)
+uint64 UmultiplayerGameInstance::SetConnectionState(EMultiplayerConnectionState State, const FText& Message)
 {
 	ConnectionState = State;
 	ConnectionMessage = Message;
-	UE_LOG(LogMultiplayer, Log, TEXT("Connection state=%d: %s"), static_cast<int32>(State), *Message.ToString());
+	const uint64 Revision = ++OperationRevision;
 	OnConnectionChanged.Broadcast();
+	return Revision;
 }
 
 void UmultiplayerGameInstance::ClearConnectionTimers()
@@ -93,12 +93,13 @@ void UmultiplayerGameInstance::ClearConnectionTimers()
 void UmultiplayerGameInstance::StartTravel(bool bRetry)
 {
 	ClearConnectionTimers();
-	const uint64 Revision = ++OperationRevision;
-	const EMultiplayerConnectionState Expected = bRetry ? EMultiplayerConnectionState::Reconnecting : EMultiplayerConnectionState::Connecting;
-	SetConnectionState(Expected, NSLOCTEXT("Multiplayer", "ConnectingDS", "正在连接服务器……"));
-	if (Revision != OperationRevision || ConnectionState != Expected) return;
+	const uint64 Revision = SetConnectionState(
+		bRetry ? EMultiplayerConnectionState::Reconnecting : EMultiplayerConnectionState::Connecting,
+		NSLOCTEXT("Multiplayer", "ConnectingDS", "正在连接服务器……"));
+	// 通知可以同步触发取消；编号未变，才继续本次连接。
+	if (Revision != OperationRevision) return;
 	APlayerController* PC = GetFirstLocalPlayerController();
-	if (!PC || !PC->IsLocalController())
+	if (!PC)
 	{
 		if (bRetry) ScheduleReconnect(); else FailConnection(TEXT("Local player is not ready"));
 		return;
@@ -113,7 +114,6 @@ void UmultiplayerGameInstance::HandleConnectTimeout(uint64 Revision)
 {
 	if (Revision != OperationRevision) return;
 	const bool bRetry = ConnectionState == EMultiplayerConnectionState::Reconnecting;
-	if (!bRetry && ConnectionState != EMultiplayerConnectionState::Connecting) return;
 	if (GEngine && GetWorld()) GEngine->CancelPending(GetWorld());
 	if (bRetry) ScheduleReconnect(); else FailConnection(TEXT("Connection timed out"));
 }
@@ -126,7 +126,6 @@ void UmultiplayerGameInstance::NotifyClientConnected()
 	FString Address;
 	if (NormalizeServerAddress(FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port), Address)) LastServerAddress = Address;
 	ClearConnectionTimers();
-	++OperationRevision;
 	ReconnectAttempt = 0;
 	SetConnectionState(EMultiplayerConnectionState::Connected, NSLOCTEXT("Multiplayer", "ConnectedDS", "已连接服务器"));
 }
@@ -137,9 +136,9 @@ void UmultiplayerGameInstance::LeaveGame()
 	ClearConnectionTimers();
 	LastServerAddress.Reset();
 	ReconnectAttempt = 0;
-	const uint64 Revision = ++OperationRevision;
-	SetConnectionState(EMultiplayerConnectionState::Leaving, NSLOCTEXT("Multiplayer", "LeavingDS", "正在返回连接菜单……"));
-	if (Revision != OperationRevision || ConnectionState != EMultiplayerConnectionState::Leaving) return;
+	const uint64 Revision = SetConnectionState(EMultiplayerConnectionState::Leaving,
+		NSLOCTEXT("Multiplayer", "LeavingDS", "正在返回连接菜单……"));
+	if (Revision != OperationRevision) return;
 	if (GEngine) GEngine->CancelPending(GetWorld());
 	ReturnToMainMenu();
 }
@@ -202,7 +201,6 @@ void UmultiplayerGameInstance::HandleTravelFailure(UWorld* World, ETravelFailure
 void UmultiplayerGameInstance::FailConnection(const FString& Reason)
 {
 	ClearConnectionTimers();
-	++OperationRevision;
 	LastServerAddress.Reset();
 	ReconnectAttempt = 0;
 	UE_LOG(LogMultiplayer, Warning, TEXT("DS connection failed: %s"), *Reason);
@@ -212,16 +210,16 @@ void UmultiplayerGameInstance::FailConnection(const FString& Reason)
 void UmultiplayerGameInstance::ScheduleReconnect()
 {
 	if (ConnectionState == EMultiplayerConnectionState::ReconnectWaiting) return;
-	ClearConnectionTimers();
 	if (LastServerAddress.IsEmpty() || ReconnectAttempt >= GameplayConfig.ReconnectDelaysSeconds.Num())
 	{
 		FailConnection(TEXT("Reconnect attempts exhausted; connect manually to retry"));
 		return;
 	}
-	const uint64 Revision = ++OperationRevision;
+	ClearConnectionTimers();
 	const float Delay = GameplayConfig.ReconnectDelaysSeconds[ReconnectAttempt];
-	SetConnectionState(EMultiplayerConnectionState::ReconnectWaiting, NSLOCTEXT("Multiplayer", "ReconnectWaiting", "连接中断，等待重试……"));
-	if (Revision != OperationRevision || ConnectionState != EMultiplayerConnectionState::ReconnectWaiting) return;
+	const uint64 Revision = SetConnectionState(EMultiplayerConnectionState::ReconnectWaiting,
+		NSLOCTEXT("Multiplayer", "ReconnectWaiting", "连接中断，等待重试……"));
+	if (Revision != OperationRevision) return;
 	GetTimerManager().SetTimer(ReconnectTimerHandle, this, &ThisClass::TryReconnect, Delay, false);
 }
 

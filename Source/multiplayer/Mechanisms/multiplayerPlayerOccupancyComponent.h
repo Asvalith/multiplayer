@@ -17,19 +17,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	PlayerCount);
 
 /**
- * 多种合作机关共用的服务器区域人数统计组件。
- *
- * (*) 组件只解决“区域里有几个不同玩家”，具体激活规则和网络表现仍由所属机关负责，
- * 避免每个机关重复实现容易出错的 Overlap 代码。
- *
- * (**) 一个 Character 通常有胶囊体、网格体等多个碰撞组件，BeginOverlap 可能触发多次。
- * 因此按角色记录仍在区域内的重叠项计数（包含组件及其刚体）；不能只用 TSet，否则一个 EndOverlap
- * 都可能把仍在区域内的玩家提前移除。
- * (**) 玩家断线、Pawn 被替换或关卡卸载时不保证收到成对的 EndOverlap，因此首次进入时还要
- * 绑定 Character::OnDestroyed，并在 UnbindTrigger/EndPlay 中对称解绑所有外部 Delegate。
- *
- * 该组件不复制人数。规则只在服务器运行，门、平台和 GameState 最终复制各自真正需要的结果；
- * 客户端没必要重复维护一份可能与服务器不一致的触发区成员表。
+ * 服务器区域占用统计，机关自行决定激活规则与复制结果。
+ * 按角色累计组件/刚体重叠次数，避免一个组件离开就把整名玩家移除。
+ * 控制器变化刷新玩家资格；角色销毁补足未收到 EndOverlap 的清理。
  */
 UCLASS(ClassGroup = (Coop))
 class MULTIPLAYER_API UmultiplayerPlayerOccupancyComponent : public UActorComponent
@@ -39,13 +29,7 @@ class MULTIPLAYER_API UmultiplayerPlayerOccupancyComponent : public UActorCompon
 public:
 	UmultiplayerPlayerOccupancyComponent();
 
-	/**
-	 * 绑定一个用于规则判定的触发体。
-	 *
-	 * 重复绑定会先清理旧触发体，再从新触发体的当前重叠组件重建计数；
-	 * 重绑定前后最多广播一次最终人数。非服务器端直接关闭该触发体碰撞，避免两端各算一份。
-	 * @param bInRequirePlayerControlledCharacter 为 true 时排除 AI 和非玩家控制的 Character。
-	 */
+	/** 重绑定时重建已有重叠，最终成员变化只通知一次；客户端关闭本地触发体碰撞。 */
 	void BindTrigger(
 		UPrimitiveComponent* InTrigger,
 		bool bInRequirePlayerControlledCharacter = true);
@@ -65,16 +49,10 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	// 绑定与成员维护：重绑定先静默清理，再重建，最后由 BindTrigger 通知最终状态。
+	// 静默清理供普通解绑和重绑定复用，由调用方统一通知最终状态。
 	void UnbindTriggerInternal();
-	void RebuildOccupantsFromCurrentOverlaps();
-	void ClearOccupants();
-	// 增加该角色的重叠组件计数，首次进入时监听销毁和控制器变化。
-	void AddOccupant(AActor* OtherActor);
-	// 减少重叠组件计数，最后一个组件离开时才移除角色。
-	void RemoveOccupant(AActor* OtherActor);
 
-	// 引擎事件入口；统一交给成员维护流程处理。
+	// 这些监听只由 BindTrigger 的服务器分支安装；事件直接更新成员记录。
 	UFUNCTION()
 	void HandleBeginOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -118,6 +96,7 @@ private:
 	};
 
 	// TMap 按角色定位记录；一个角色的多个碰撞体只增加计数，不能用集合丢掉重叠次数。
+	// 计数归零立即移除条目，查询无需重复检查 OverlapCount。
 	// 弱引用不保活 Pawn。物理重叠和玩家资格分开，全部由事件维护，不增加逐帧扫描。
 	TMap<TWeakObjectPtr<ACharacter>, FOccupantRecord> Occupants;
 	bool bRequirePlayerControlledCharacter = true;

@@ -73,19 +73,16 @@ protected:
 private:
 	// 胜利状态订阅与界面流程。
 	/** 切换订阅并补读当前胜利状态；同一局重绑不重复通知 UI。 */
-	void RefreshVictoryBinding();
+	void RefreshVictoryBinding(AGameStateBase* GameState);
 	void ClearVictoryBinding();
 
 	/** 只向本地视口展示一次，再通知可选蓝图表现。 */
 	UFUNCTION()
 	void PresentCoopVictory();
 
-	/** 清除本地界面与焦点状态；可重复调用，不修改共享胜利结果。 */
-	void RemoveVictoryScreen();
 	void SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message);
 
 	// 外部状态变化回调。
-	void HandleGameStateSet(AGameStateBase* GameState);
 	void HandleLeaveFailed(const FText& Reason);
 
 	// 本地操作状态与服务器请求门禁。

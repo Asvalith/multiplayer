@@ -28,14 +28,19 @@ bool FCoopConnectionStateTest::RunTest(const FString&)
 	{
 		if (GI->ConnectionState == EMultiplayerConnectionState::Connecting)
 		{
-			++GI->OperationRevision;
-			GI->ConnectionState = EMultiplayerConnectionState::Leaving;
+			GI->SetConnectionState(EMultiplayerConnectionState::Leaving, FText::GetEmpty());
 		}
 	});
 	GI->StartTravel(false);
 	TestFalse(TEXT("Canceled before travel deadline armed"), GI->GetTimerManager().IsTimerActive(GI->ConnectTimeoutHandle));
 	TestTrue(TEXT("Cancel state retained"), GI->ConnectionState == EMultiplayerConnectionState::Leaving);
 	GI->OnConnectionChanged.Remove(Handle);
+	// 连接成功会使之前的超时失效，旧回调不能清掉新连接的地址或状态。
+	const uint64 StaleRevision = GI->OperationRevision;
+	GI->SetConnectionState(EMultiplayerConnectionState::Connected, FText::GetEmpty());
+	GI->HandleConnectTimeout(StaleRevision);
+	TestTrue(TEXT("Stale deadline preserves connected state"), GI->ConnectionState == EMultiplayerConnectionState::Connected);
+	TestEqual(TEXT("Stale deadline preserves address"), GI->LastServerAddress, FString(TEXT("localhost:7777")));
 	GI->ConnectionState = EMultiplayerConnectionState::Reconnecting;
 	GI->ReconnectAttempt = GI->GameplayConfig.ReconnectDelaysSeconds.Num();
 	GI->ScheduleReconnect();

@@ -48,8 +48,7 @@ public:
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
 
 	virtual void Tick(float DeltaSeconds) override;
-	virtual void GetLifetimeReplicatedProps(
-		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// 状态变化的本机事件。依赖权威结果的机关只在服务器绑定，客户端可用于非规则表现。
 	FOnPressurePlateActiveChanged OnPlateActiveChanged;
@@ -75,13 +74,7 @@ protected:
 	void OnRep_PlateActive();
 
 private:
-	// 服务器唯一判定入口：组合锁存、目标前置条件和区域是否有人。
 	void EvaluatePlateState();
-	// 服务器直接写入与客户端 OnRep 的公共出口，保证两端触发相同表现和事件。
-	void HandlePlateActiveChanged();
-	// bSnapToTarget 用于初始状态恢复；运行期变化则打开 Tick 做平滑过渡。
-	void ApplyPlateState(bool bSnapToTarget);
-
 	FVector GetMeshTargetLocation() const;
 
 	UPROPERTY(VisibleAnywhere, Category = "Pressure Plate|Components")

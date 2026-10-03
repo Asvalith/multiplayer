@@ -8,13 +8,11 @@
 #include "Engine/StaticMesh.h"
 #include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameplayConfig.h"
-#include "Core/multiplayerLog.h"
 #include "Mechanisms/multiplayerMeshMovement.h"
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
-/** 创建互相独立的触发区域和可移动网格；网格压下不会带动触发区改变人数检测范围。 */
 AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -44,19 +42,15 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 	ActivationTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	ActivationTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 
-	PlayerOccupancy =
-		CreateDefaultSubobject<UmultiplayerPlayerOccupancyComponent>(
-			TEXT("PlayerOccupancy"));
+	PlayerOccupancy = CreateDefaultSubobject<UmultiplayerPlayerOccupancyComponent>(TEXT("PlayerOccupancy"));
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(
-		TEXT("/Engine/BasicShapes/Cube.Cube"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMesh.Succeeded())
 	{
 		PlateMesh->SetStaticMesh(CubeMesh.Object);
 	}
 }
 
-/** 缓存关卡摆放位置、绑定人数变化；服务器按配置追加目标监听并补算初始激活状态。 */
 void AmultiplayerPressurePlate::BeginPlay()
 {
 	Super::BeginPlay();
@@ -67,18 +61,13 @@ void AmultiplayerPressurePlate::BeginPlay()
 		FlushNetDormancy();
 		RuntimePressMoveSpeed = FmultiplayerGameplayConfig::Get(this).PlateMoveSpeed;
 	}
-	UE_LOG(LogMultiplayer, Verbose, TEXT("PressurePlate %s: Authority=%d PressMoveSpeed=%.1f"),
-		*GetName(), HasAuthority(), RuntimePressMoveSpeed);
 
-	// 用关卡实例中的实际摆放位置作为弹起基准，蓝图调整网格后不需要同步修改 C++ 常量。
 	ReleasedRelativeLocation = PlateMesh->GetRelativeLocation();
 	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
-		this,
-		&AmultiplayerPressurePlate::HandleOccupancyChanged);
-	PlayerOccupancy->BindTrigger(
-		ActivationTrigger,
-		bRequirePlayerControlledCharacter);
-	ApplyPlateState(true);
+		this, &AmultiplayerPressurePlate::HandleOccupancyChanged);
+	PlayerOccupancy->BindTrigger(ActivationTrigger, bRequirePlayerControlledCharacter);
+	PlateMesh->SetRelativeLocation(GetMeshTargetLocation());
+	SetActorTickEnabled(false);
 
 	if (!HasAuthority())
 	{
@@ -91,27 +80,23 @@ void AmultiplayerPressurePlate::BeginPlay()
 		if (CoopGameState != nullptr)
 		{
 			CoopGameState->OnObjectiveProgressChanged.AddUniqueDynamic(
-				this,
-				&AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
+				this, &AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
 		}
 	}
 	EvaluatePlateState();
 }
 
-/** 撤销人数和目标监听；先取消本 Actor 的监听，再清空人数，避免清理时触发自身规则。 */
-void AmultiplayerPressurePlate::EndPlay(
-	const EEndPlayReason::Type EndPlayReason)
+void AmultiplayerPressurePlate::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// 先取消本 Actor 的监听，再清空人数，避免清理时触发自身规则。
 	PlayerOccupancy->OnOccupancyChanged.RemoveDynamic(
-		this,
-		&AmultiplayerPressurePlate::HandleOccupancyChanged);
+		this, &AmultiplayerPressurePlate::HandleOccupancyChanged);
 	PlayerOccupancy->UnbindTrigger();
 
 	if (CoopGameState != nullptr)
 	{
 		CoopGameState->OnObjectiveProgressChanged.RemoveDynamic(
-			this,
-			&AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
+			this, &AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
 	}
 	Super::EndPlay(EndPlayReason);
 }
@@ -151,10 +136,8 @@ void AmultiplayerPressurePlate::HandleOccupancyChanged(int32 PlayerCount)
 	}
 }
 
-/** 玩家已在板上等待时，目标完成也要触发判定；不要求玩家重新进入触发区。 */
 void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
-	int32 ActivatedKeys,
-	int32 RequiredKeys)
+	int32 ActivatedKeys, int32 RequiredKeys)
 {
 	EvaluatePlateState();
 }
@@ -166,22 +149,10 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 		return;
 	}
 
-	const bool bObjectiveReady =
-		!bRequireObjectiveComplete
+	const bool bObjectiveReady = !bRequireObjectiveComplete
 		|| (CoopGameState != nullptr && CoopGameState->IsObjectiveComplete());
-	const int32 PlayerCount = PlayerOccupancy->GetPlayerCount();
-	const bool bNewPlateActive =
-		(bLatchOnceActivated && bPlateActive)
-		|| (bObjectiveReady && PlayerCount > 0);
-
-	UE_LOG(
-		LogMultiplayer,
-		Verbose,
-		TEXT("PressurePlate[%s] Players=%d ObjectiveReady=%s Active=%s"),
-		*GetName(),
-		PlayerCount,
-		bObjectiveReady ? TEXT("true") : TEXT("false"),
-		bNewPlateActive ? TEXT("true") : TEXT("false"));
+	const bool bNewPlateActive = (bLatchOnceActivated && bPlateActive)
+		|| (bObjectiveReady && PlayerOccupancy->GetPlayerCount() > 0);
 
 	if (bPlateActive == bNewPlateActive)
 	{
@@ -191,18 +162,13 @@ void AmultiplayerPressurePlate::EvaluatePlateState()
 	// 先刷新休眠再写属性，不能只依赖赋值后的 ForceNetUpdate。
 	FlushNetDormancy();
 	bPlateActive = bNewPlateActive;
-	HandlePlateActiveChanged();
+	OnRep_PlateActive();
 	ForceNetUpdate();
 }
 
 void AmultiplayerPressurePlate::OnRep_PlateActive()
 {
-	HandlePlateActiveChanged();
-}
-
-void AmultiplayerPressurePlate::HandlePlateActiveChanged()
-{
-	ApplyPlateState(false);
+	SetActorTickEnabled(true);
 	OnPlateActiveChanged.Broadcast(this, bPlateActive);
 	ReceivePlateVisualStateChanged(bPlateActive);
 }
@@ -210,13 +176,4 @@ void AmultiplayerPressurePlate::HandlePlateActiveChanged()
 FVector AmultiplayerPressurePlate::GetMeshTargetLocation() const
 {
 	return ReleasedRelativeLocation + (bPlateActive ? PressedOffset : FVector::ZeroVector);
-}
-
-void AmultiplayerPressurePlate::ApplyPlateState(bool bSnapToTarget)
-{
-	if (bSnapToTarget)
-	{
-		PlateMesh->SetRelativeLocation(GetMeshTargetLocation());
-	}
-	SetActorTickEnabled(!bSnapToTarget);
 }

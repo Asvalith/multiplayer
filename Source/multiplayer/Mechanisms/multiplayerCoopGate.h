@@ -25,7 +25,7 @@ class MULTIPLAYER_API AmultiplayerCoopGate : public AActor
 public:
 	AmultiplayerCoopGate();
 
-	// 返回关卡配置要求；运行时有效且去重后的压力板数量不足时保持失败关闭，不能偷偷降低门槛。
+	// 保留配置门槛，即使有效压力板不足也不下调。
 	int32 GetRequiredPlateCount() const;
 
 	virtual void Tick(float DeltaSeconds) override;
@@ -51,18 +51,13 @@ protected:
 	void OnRep_GateOpen();
 
 private:
-	// 统计激活板数和不同玩家数，并组合可选的钥匙目标前置条件。
 	void EvaluateGateState();
-	// 服务器写入与客户端 OnRep 共用；初始对齐目标，后续仅过渡阶段启用 Tick。
-	void ApplyGateState(bool bSnapToTarget);
 
-	// 从关卡配置生成有效且不重复的运行时依赖集合；之后所有绑定和计数都只使用该集合。
+	// 绑定和计数只使用有效且去重的运行时依赖。
 	void RebuildRuntimeRequiredPlates();
-	// 仅服务器绑定外部压力板，客户端不重复执行规则组合。
 	void BindRequiredPlates();
-	// 与 BindRequiredPlates 对称，处理关卡卸载和 Actor 销毁。
 	void UnbindRequiredPlates();
-	// 关卡卸载和单块板销毁共用解绑顺序；调用方保证指针可用，允许销毁回调中的板进入。
+	// 调用方保证指针可用，包括正在执行销毁回调的板。
 	void UnbindRequiredPlate(AmultiplayerPressurePlate* Plate);
 
 	FVector GetMeshTargetLocation() const;
@@ -73,18 +68,18 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UStaticMeshComponent> DoorMesh;
 
-	// 用两个可视化端点定义门的行程，设计者可以在蓝图中直接调整，无需填写难理解的坐标。
+	// 蓝图可通过两个可视化端点调整门的行程。
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UArrowComponent> ClosedPoint;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop Gate|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UArrowComponent> OpenPoint;
 
-	// 关卡实例显式配置依赖关系，比运行时按类型查找更可控，也支持一个关卡中多组独立机关。
+	// 每扇门显式配置自己的压力板。
 	UPROPERTY(EditInstanceOnly, Category = "Coop Gate|Rules")
 	TArray<TObjectPtr<AmultiplayerPressurePlate>> RequiredPlates;
 
-	// 服务器在 BeginPlay 从 RequiredPlates 生成，避免空引用或重复引用改变规则含义。
+	// 服务器在 BeginPlay 从 RequiredPlates 生成。
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AmultiplayerPressurePlate>> RuntimeRequiredPlates;
 

@@ -45,9 +45,6 @@ class MULTIPLAYER_API AmultiplayerMovingPlatform : public AActor
 public:
 	AmultiplayerMovingPlatform();
 
-	// 防止编辑器配置零或负数后无需玩家也满足自身占用条件。
-	int32 GetRequiredOccupantCount() const { return FMath::Max(1, RequiredPlayers); }
-
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

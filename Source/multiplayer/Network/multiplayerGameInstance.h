@@ -22,8 +22,8 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerLeaveFailed, const FText&);
 
 /**
  * DS 地址连接、取消和有限重连；不承担房间发现、账号登录或匹配。
- * 状态跨地图保存在 GameInstance，进入客户端 PlayingState 才确认成功。
- * 先提交状态再通知；通知可能同步触发退出，Travel 前再次核对操作编号。
+ * 连接状态在进入游戏、重开和返回菜单期间保留；进入客户端 PlayingState 才确认成功。
+ * 状态提交统一更新操作编号，通知后只检查本次操作是否被取消或替换。
  */
 UCLASS()
 class MULTIPLAYER_API UmultiplayerGameInstance : public UGameInstance
@@ -70,7 +70,7 @@ private:
 	bool OwnsFailure(const UWorld* World, const UNetDriver* Driver) const;
 
 	// 状态提交与公共清理。
-	void SetConnectionState(EMultiplayerConnectionState State, const FText& Message);
+	uint64 SetConnectionState(EMultiplayerConnectionState State, const FText& Message);
 	void ClearConnectionTimers();
 
 	FmultiplayerGameplayConfig GameplayConfig;
@@ -78,7 +78,7 @@ private:
 	FText ConnectionMessage;
 	FString LastServerAddress;
 	int32 ReconnectAttempt = 0;
-	// 使已取消流程的回调失效，也用于同步通知后的重入检查。
+	// 仅由 SetConnectionState 递增，使旧回调和通知中被替换的操作失效。
 	uint64 OperationRevision = 0;
 	FTimerHandle ConnectTimeoutHandle;
 	FTimerHandle ReconnectTimerHandle;

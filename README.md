@@ -179,7 +179,7 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 
 - [网络性能与验证报告](Docs/Performance.md)：实验设计、参数对照、DS 复核和 Move 时间戳分析。
 - [历史性能数据](Tests/Evidence/2026-09-27/performance.json)：42 轮规模对照、构建指纹与采样结果。
-- [历史玩法回归](Tests/Evidence/2026-09-27/regression.json)：Listen 构建的逐场景断言及退出结果。
+- [历史玩法回归](Tests/Evidence/2026-09-27/regression-final.json)：Listen 构建 B 的逐场景断言及退出结果。
 - [DS 迁移与验证记录](Tests/Evidence/2026-09-29/DSMigration.json)：DS 与两个远端客户端的回归与短规模复核。
 - [公开实验摘要](Tests/Evidence/)：脱敏报告、断言和选定测量；完整本机 CSV、日志与时间线位于 `Saved/NetworkValidation/`。
 

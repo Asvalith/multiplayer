@@ -31,6 +31,7 @@ class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerControlle
 	GENERATED_BODY()
 
 public:
+	// 对外操作与状态查询。
 	/** 请求服务器重开；GameMode 再次检查胜利状态与重复请求。 */
 	UFUNCTION(BlueprintCallable, Category = "Coop|Flow")
 	void RequestRestartCurrentRound();
@@ -45,11 +46,13 @@ public:
 	/** GameMode 在旧 World 内恢复失败时，通知实际提交请求的所属客户端。 */
 	void NotifyRestartFailed(const FText& Reason);
 
+	// 蓝图表现扩展。
 	// 默认 C++ UI 已能完成流程；该事件只用于项目后续替换动画、音效或美术样式。
 	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Victory", meta = (DisplayName = "On Coop Game Won"))
 	void ReceiveCoopGameWon();
 
 protected:
+	// 控制器生命周期与引擎通知。
 	// 本地进入 PlayingState 后同时确认连接成功，并重新绑定可能刚创建/替换的 GameState。
 	virtual void BeginPlayingState() override;
 	/** 控制器退出当前 World 时移除视口界面、释放引用并还原输入模式。 */
@@ -58,6 +61,7 @@ protected:
 	virtual void ClientReturnToMainMenuWithTextReason_Implementation(
 		const FText& ReturnReason) override;
 
+	// 所属客户端与服务器之间的操作请求及回执。
 	/** 低频的重开请求通过可靠 RPC 发给服务器；是否允许重开仍由 GameMode 检查。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestRestartCurrentRound();
@@ -67,10 +71,10 @@ protected:
 	void ClientRestartFailed(const FText& Reason);
 
 private:
+	// 胜利状态订阅与界面流程。
 	/** 切换订阅并补读当前胜利状态；同一局重绑不重复通知 UI。 */
 	void RefreshVictoryBinding();
 	void ClearVictoryBinding();
-	void HandleGameStateSet(AGameStateBase* GameState);
 
 	/** 只向本地视口展示一次，再通知可选蓝图表现。 */
 	UFUNCTION()
@@ -79,8 +83,12 @@ private:
 	/** 清除本地界面与焦点状态；可重复调用，不修改共享胜利结果。 */
 	void RemoveVictoryScreen();
 	void SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message);
+
+	// 外部状态变化回调。
+	void HandleGameStateSet(AGameStateBase* GameState);
 	void HandleLeaveFailed(const FText& Reason);
 
+	// 本地操作状态与服务器请求门禁。
 	ECoopVictoryAction VictoryAction = ECoopVictoryAction::Idle;
 	// 单请求在途，失败回执只发一次；当前没有超时取消，不需要另维护请求编号。
 	bool bServerRestartPending = false;

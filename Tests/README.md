@@ -25,7 +25,7 @@ RunLocalDedicatedServer 不带 -Play 时，转发到统一入口的 DedicatedSmo
 | --- | --- |
 | 通用 | DS 无本地玩家、Partner 收到角色/共享状态；三端分别完成且正常退出 |
 | DedicatedSmoke | 直接连接 DS；检查两个真实远端的网络角色、共享状态与独立回执。不等待其他场景的 Partner 预置步骤，不含在 All 中 |
-| Flow | 真实钥匙重叠、不同玩家计数、门开关、控制权/Pawn 清理、载人平台、双端胜利、失败重开恢复、双端重开、Client 退出后 DS 与 Partner 保持 |
+| Flow | 真实钥匙重叠、不同玩家计数、触发体重绑定清空/恢复/同人数换成员、门开关、控制权/Pawn 清理、载人平台、双端胜利、失败重开恢复、双端重开、Client 退出后 DS 与 Partner 保持 |
 | Keys | 触碰预绑定钥匙自动归位、缺绑定与安装失败保留原地、重试与重复触碰去重、目标满后拒绝、提交重入保护、远端附着收敛 |
 | LateJoin | Partner 先改变目标和休眠机关；Client 后加入读取状态及归位附着 |
 | Reconnect | 仅阻断 Client 连接的 DS 出站包直到真实超时；DS 和 Partner 保留；Client 有限重连并恢复进度 |

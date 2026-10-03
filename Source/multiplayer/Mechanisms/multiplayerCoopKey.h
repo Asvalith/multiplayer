@@ -24,14 +24,14 @@ class MULTIPLAYER_API AmultiplayerCoopKey : public AActor
 public:
 	AmultiplayerCoopKey();
 
+	/** 仅服务器调用。附着失败不改变钥匙状态；成功后不可再次拾取。 */
+	bool InstallAtSocket(USceneComponent* SocketPoint);
+
 	// 仅未安装时旋转展示网格，不修改根组件位置。
 	virtual void Tick(float DeltaSeconds) override;
 
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
-	/** 仅服务器调用。附着失败不改变钥匙状态；成功后不可再次拾取。 */
-	bool InstallAtSocket(USceneComponent* SocketPoint);
 
 protected:
 	virtual void BeginPlay() override;

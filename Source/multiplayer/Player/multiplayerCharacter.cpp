@@ -67,19 +67,27 @@ void AmultiplayerCharacter::NotifyControllerChanged()
 
 	// (*) 输入映射属于本地玩家配置，因此添加到 LocalPlayer 子系统，而不是放到服务器逻辑中。
 	// (**) 服务器或非本地角色没有 LocalPlayer，必须逐层判空。
-	if (DefaultMappingContext != nullptr)
+	if (DefaultMappingContext == nullptr)
 	{
-		if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
-		{
-			if (ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer())
-			{
-				if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
-					ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(LocalPlayer))
-				{
-					Subsystem->AddMappingContext(DefaultMappingContext, 0);
-				}
-			}
-		}
+		return;
+	}
+
+	APlayerController* PlayerController = Cast<APlayerController>(Controller);
+	if (PlayerController == nullptr)
+	{
+		return;
+	}
+
+	ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer();
+	if (LocalPlayer == nullptr)
+	{
+		return;
+	}
+
+	if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
+		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(LocalPlayer))
+	{
+		Subsystem->AddMappingContext(DefaultMappingContext, 0);
 	}
 }
 
@@ -100,7 +108,6 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AmultiplayerCharacter::Move);
 
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AmultiplayerCharacter::Look);
-
 	}
 	else
 	{

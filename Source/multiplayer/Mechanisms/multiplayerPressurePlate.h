@@ -41,15 +41,15 @@ class MULTIPLAYER_API AmultiplayerPressurePlate : public AActor
 public:
 	AmultiplayerPressurePlate();
 
-	virtual void Tick(float DeltaSeconds) override;
-	virtual void GetLifetimeReplicatedProps(
-		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
 	// 返回本机当前状态：服务器为规则真相，客户端为最近一次收到的复制快照。
 	bool IsPlateActive() const { return bPlateActive; }
 
 	// 追加有效不同角色，供门合并多个压力板的玩家集合。
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
+
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void GetLifetimeReplicatedProps(
+		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// 状态变化的本机事件。依赖权威结果的机关只在服务器绑定，客户端可用于非规则表现。
 	FOnPressurePlateActiveChanged OnPlateActiveChanged;
@@ -61,6 +61,10 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	// 只扩展材质、音效等表现，不允许蓝图从这里反向修改 bPlateActive 或共享进度。
+	UFUNCTION(BlueprintImplementableEvent, Category = "Pressure Plate", meta = (DisplayName = "On Plate Visual State Changed"))
+	void ReceivePlateVisualStateChanged(bool bIsActive);
+
 	UFUNCTION()
 	void HandleOccupancyChanged(int32 PlayerCount);
 
@@ -70,18 +74,15 @@ protected:
 	UFUNCTION()
 	void OnRep_PlateActive();
 
-	// 只扩展材质、音效等表现，不允许蓝图从这里反向修改 bPlateActive 或共享进度。
-	UFUNCTION(BlueprintImplementableEvent, Category = "Pressure Plate", meta = (DisplayName = "On Plate Visual State Changed"))
-	void ReceivePlateVisualStateChanged(bool bIsActive);
-
 private:
 	// 服务器唯一判定入口：组合锁存、目标前置条件和区域是否有人。
 	void EvaluatePlateState();
 	// 服务器直接写入与客户端 OnRep 的公共出口，保证两端触发相同表现和事件。
 	void HandlePlateActiveChanged();
-	FVector GetMeshTargetLocation() const;
 	// bSnapToTarget 用于初始状态恢复；运行期变化则打开 Tick 做平滑过渡。
 	void ApplyPlateState(bool bSnapToTarget);
+
+	FVector GetMeshTargetLocation() const;
 
 	UPROPERTY(VisibleAnywhere, Category = "Pressure Plate|Components")
 	TObjectPtr<USceneComponent> SceneRoot;

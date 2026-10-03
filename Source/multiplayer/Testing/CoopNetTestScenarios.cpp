@@ -209,6 +209,30 @@ void UCoopNetTestDriver::ScenarioServerTick(UWorld* World)
 	{
 		const bool bBothActive = Cast<AmultiplayerPressurePlate>(Fixture[0])->IsPlateActive() && Cast<AmultiplayerPressurePlate>(Fixture[1])->IsPlateActive();
 		Assert(TEXT("PlateDistinctPlayers"), bBothActive && !Flag(Fixture[2].Get(), TEXT("bGateOpen")), TEXT("One player covers two plates but cannot open a two-player gate"));
+		if (bDone) return;
+		// 重绑走公开接口与真实重叠表，检查清空、恢复以及人数相同但成员变化的通知。
+		auto* Occupancy = Fixture[0]->FindComponentByClass<UmultiplayerPlayerOccupancyComponent>();
+		auto* OriginalTrigger = Fixture[0]->FindComponentByClass<UBoxComponent>();
+		Occupancy->BindTrigger(nullptr);
+		Assert(TEXT("OccupancyRebindClears"), Occupancy->GetPlayerCount() == 0
+			&& !Cast<AmultiplayerPressurePlate>(Fixture[0])->IsPlateActive());
+		if (bDone) return;
+		Occupancy->BindTrigger(OriginalTrigger);
+		Occupancy->BindTrigger(OriginalTrigger);
+		Assert(TEXT("OccupancyRebindRestores"), Occupancy->GetPlayerCount() == 1
+			&& Cast<AmultiplayerPressurePlate>(Fixture[0])->IsPlateActive()
+			&& !Flag(Fixture[2].Get(), TEXT("bGateOpen")), TEXT("Repeated binding rebuilds existing overlap without counting the same player twice"));
+		if (bDone) return;
+		auto* OtherPlate = World->SpawnActor<AmultiplayerPressurePlate>(TestOrigin + FVector(0, -3000, 0), FRotator::ZeroRotator);
+		if (!OtherPlate) { Assert(TEXT("OccupancyRebindMembership"), false, TEXT("Could not create rebind fixture")); return; }
+		Place(Remote->GetCharacter(), OtherPlate->GetActorLocation() + FVector(0, 0, 100));
+		Occupancy->BindTrigger(OtherPlate->FindComponentByClass<UBoxComponent>());
+		const bool bReplacementOpenedGate = Occupancy->GetPlayerCount() == 1 && Flag(Fixture[2].Get(), TEXT("bGateOpen"));
+		Occupancy->BindTrigger(OriginalTrigger);
+		Assert(TEXT("OccupancyRebindMembership"), bReplacementOpenedGate && Occupancy->GetPlayerCount() == 1
+			&& !Flag(Fixture[2].Get(), TEXT("bGateOpen")), TEXT("Same count, different player: both rebind directions notify the gate"));
+		OtherPlate->Destroy();
+		if (bDone) return;
 		Place(Remote->GetCharacter(), TestOrigin + FVector(50, 90, 100));
 		SetCommand(TEXT("GateOpen"));
 	}

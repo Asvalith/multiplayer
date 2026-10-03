@@ -65,6 +65,16 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	// 绑定与成员维护：重绑定先静默清理，再重建，最后由 BindTrigger 通知最终状态。
+	void UnbindTriggerInternal();
+	void RebuildOccupantsFromCurrentOverlaps();
+	void ClearOccupants();
+	// 增加该角色的重叠组件计数，首次进入时监听销毁和控制器变化。
+	void AddOccupant(AActor* OtherActor);
+	// 减少重叠组件计数，最后一个组件离开时才移除角色。
+	void RemoveOccupant(AActor* OtherActor);
+
+	// 引擎事件入口；统一交给成员维护流程处理。
 	UFUNCTION()
 	void HandleBeginOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -90,21 +100,11 @@ private:
 	// 先记录物理重叠候选，不在此排除未被玩家控制的角色，否则原地 Possess 无法补入人数。
 	ACharacter* GetOverlapCandidate(AActor* OtherActor) const;
 	bool CanCountAsPlayer(const ACharacter* Character) const;
-	void UnbindOccupant(ACharacter* Character);
-	// 增加该角色的重叠组件计数，首次进入时监听销毁和控制器变化。
-	void AddOccupant(AActor* OtherActor);
 	// 只登记一条有效角色重叠，不广播；实时进入和初始重建共用相同计数、解绑配对规则。
 	void RecordOccupantOverlap(ACharacter* Character);
-	// 减少重叠组件计数，最后一个组件离开时才移除角色。
-	void RemoveOccupant(AActor* OtherActor);
+	void UnbindOccupant(ACharacter* Character);
 	// 屏蔽“组件数变化但不同玩家数不变”的噪声事件。
 	void BroadcastIfPlayerCountChanged(int32 PreviousPlayerCount);
-	// 从触发体已经维护的组件重叠表恢复计数，避免绑定前已站在区域内的玩家被漏掉。
-	void RebuildOccupantsFromCurrentOverlaps();
-	// 只做底层解绑与清表，不广播；BindTrigger 用它把重绑定合并成一次状态变化。
-	void UnbindTriggerInternal();
-	// 移除角色的销毁和控制器回调后清表，不能只 Reset 容器而遗留外部 Delegate。
-	void ClearOccupants();
 
 	// 运行期绑定对象，不应被保存进关卡或复制给客户端。
 	UPROPERTY(Transient)

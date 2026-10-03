@@ -59,6 +59,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	// 对外状态查询与权威写入。
 	// 只读暴露当前快照，外部规则不能绕过 ApplyAuthoritativeState 直接修改字段。
 	const FmultiplayerCoopObjectiveState& GetObjectiveState() const
 	{
@@ -82,6 +83,7 @@ public:
 	void ApplyAuthoritativeState(
 		const FmultiplayerCoopObjectiveState& NewObjectiveState);
 
+	// 对外本地事件。
 	// 本机进度刷新事件：服务器写入和客户端 OnRep 都会触发，监听者无需区分数据来源。
 	FmultiplayerObjectiveProgressEvent OnObjectiveProgressChanged;
 

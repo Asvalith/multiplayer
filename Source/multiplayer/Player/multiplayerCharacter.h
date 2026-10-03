@@ -37,17 +37,20 @@ public:
 	AmultiplayerCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
+	// 控制权和输入初始化。
 	// 控制器发生变化时重新判断本地所有权，并为本地玩家安装输入映射上下文。
 	virtual void NotifyControllerChanged() override;
 	// 将输入 Action 绑定到移动、观察和 ACharacter 自带跳跃接口。
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 private:
+	// 本地输入回调。
 	// 将二维输入投影到仅含控制器 Yaw 的水平前/右方向，避免镜头俯仰影响地面移动。
 	void Move(const FInputActionValue& Value);
 	// 修改 Controller 的 Yaw/Pitch；镜头通过 SpringArm 使用控制器旋转。
 	void Look(const FInputActionValue& Value);
 
+	// 相机组件。
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USpringArmComponent> CameraBoom;
 

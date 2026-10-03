@@ -39,61 +39,54 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 		}
 	}
 
-	const auto BroadcastRebindIfChanged =
-		[this, &PreviousOccupants]()
-		{
-			const int32 NewPlayerCount = GetPlayerCount();
-			bool bMembershipChanged = NewPlayerCount != PreviousOccupants.Num();
-			if (!bMembershipChanged)
-			{
-				for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
-				{
-					if (Entry.Key.IsValid()
-						&& Entry.Value.OverlapCount > 0 && Entry.Value.bCountsAsPlayer
-						&& !PreviousOccupants.Contains(Entry.Key))
-					{
-						bMembershipChanged = true;
-						break;
-					}
-				}
-			}
-
-			if (bMembershipChanged)
-			{
-				// 人数相同但成员从 A 换成 B 时，依赖玩家身份集合的机关仍必须重新求值。
-				OnOccupancyChanged.Broadcast(NewPlayerCount);
-			}
-		};
-
 	UnbindTriggerInternal();
 	BoundTrigger = InTrigger;
 	bRequirePlayerControlledCharacter = bInRequirePlayerControlledCharacter;
 
 	AActor* Owner = GetOwner();
-	if (BoundTrigger == nullptr || Owner == nullptr)
+	if (BoundTrigger != nullptr && Owner != nullptr)
 	{
-		BroadcastRebindIfChanged();
-		return;
+		if (Owner->HasAuthority())
+		{
+			BoundTrigger->OnComponentBeginOverlap.AddUniqueDynamic(
+				this,
+				&UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap);
+			BoundTrigger->OnComponentEndOverlap.AddUniqueDynamic(
+				this,
+				&UmultiplayerPlayerOccupancyComponent::HandleEndOverlap);
+
+			// Delegate 绑定前角色可能已经在区域内；按真实重叠组件重建，不能只按 Actor 记一次。
+			RebuildOccupantsFromCurrentOverlaps();
+		}
+		else
+		{
+			// 客户端不参与规则统计，关闭碰撞可减少重复 Overlap 和本地误判。
+			BoundTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
 	}
 
-	if (!Owner->HasAuthority())
+	// 空触发体、客户端与服务器重建共用一个通知出口，重绑定最多广播一次最终成员状态。
+	const int32 NewPlayerCount = GetPlayerCount();
+	bool bMembershipChanged = NewPlayerCount != PreviousOccupants.Num();
+	if (!bMembershipChanged)
 	{
-		// 客户端不参与规则统计，关闭碰撞可减少重复 Overlap 和本地误判。
-		BoundTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		BroadcastRebindIfChanged();
-		return;
+		for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
+		{
+			if (Entry.Key.IsValid()
+				&& Entry.Value.OverlapCount > 0 && Entry.Value.bCountsAsPlayer
+				&& !PreviousOccupants.Contains(Entry.Key))
+			{
+				bMembershipChanged = true;
+				break;
+			}
+		}
 	}
 
-	BoundTrigger->OnComponentBeginOverlap.AddUniqueDynamic(
-		this,
-		&UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap);
-	BoundTrigger->OnComponentEndOverlap.AddUniqueDynamic(
-		this,
-		&UmultiplayerPlayerOccupancyComponent::HandleEndOverlap);
-
-	// Delegate 绑定前角色可能已经在区域内；按真实重叠组件重建，不能只按 Actor 记一次。
-	RebuildOccupantsFromCurrentOverlaps();
-	BroadcastRebindIfChanged();
+	if (bMembershipChanged)
+	{
+		// 人数相同但成员从 A 换成 B 时，依赖玩家身份集合的机关仍必须重新求值。
+		OnOccupancyChanged.Broadcast(NewPlayerCount);
+	}
 }
 
 /** 对外解除绑定并清空区域成员；若原先有人，最后统一广播人数归零。 */

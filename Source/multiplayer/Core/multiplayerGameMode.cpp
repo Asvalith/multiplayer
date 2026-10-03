@@ -145,7 +145,7 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 	if (!HasAuthority()
 		|| World == nullptr || World->bIsTearingDown || GameSession == nullptr
 		|| RequestingController == nullptr
-		|| RequestingController->GetWorld() != GetWorld()
+		|| RequestingController->GetWorld() != World
 		|| CoopState == nullptr
 		|| !CoopState->GetObjectiveState().bGameWon
 		|| PendingRestart.bRequested

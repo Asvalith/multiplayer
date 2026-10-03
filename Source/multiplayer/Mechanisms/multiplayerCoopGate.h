@@ -25,11 +25,11 @@ class MULTIPLAYER_API AmultiplayerCoopGate : public AActor
 public:
 	AmultiplayerCoopGate();
 
-	virtual void Tick(float DeltaSeconds) override;
-	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
 	// 返回关卡配置要求；运行时有效且去重后的压力板数量不足时保持失败关闭，不能偷偷降低门槛。
 	int32 GetRequiredPlateCount() const;
+
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
 	virtual void BeginPlay() override;
@@ -51,6 +51,11 @@ protected:
 	void OnRep_GateOpen();
 
 private:
+	// 统计激活板数和不同玩家数，并组合可选的钥匙目标前置条件。
+	void EvaluateGateState();
+	// 服务器写入与客户端 OnRep 共用；初始对齐目标，后续仅过渡阶段启用 Tick。
+	void ApplyGateState(bool bSnapToTarget);
+
 	// 从关卡配置生成有效且不重复的运行时依赖集合；之后所有绑定和计数都只使用该集合。
 	void RebuildRuntimeRequiredPlates();
 	// 仅服务器绑定外部压力板，客户端不重复执行规则组合。
@@ -59,11 +64,8 @@ private:
 	void UnbindRequiredPlates();
 	// 关卡卸载和单块板销毁共用解绑顺序；调用方保证指针可用，允许销毁回调中的板进入。
 	void UnbindRequiredPlate(AmultiplayerPressurePlate* Plate);
-	// 统计激活板数和不同玩家数，并组合可选的钥匙目标前置条件。
-	void EvaluateGateState();
+
 	FVector GetMeshTargetLocation() const;
-	// 服务器写入与客户端 OnRep 共用；初始对齐目标，后续仅过渡阶段启用 Tick。
-	void ApplyGateState(bool bSnapToTarget);
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
 	TObjectPtr<USceneComponent> SceneRoot;

@@ -130,7 +130,7 @@ function Get-RequiredAssertions {
     param([string]$Mode)
     switch ($Mode) {
         'DedicatedSmoke' { return @('TwoRemotePlayers', 'TwoClientReceipts', 'DedicatedClientState') }
-        'Flow' { return @('Join', 'ClientInputReady', 'OverlapKeys', 'PlateDistinctPlayers', 'GateRules', 'GateOpen', 'GateClosed', 'OccupancyUnpossess', 'OccupancyRepossess', 'OccupancyUncontrolledEntry', 'OccupancyLatePossess', 'DestroyedPawnCleanup', 'PlatformEndpoint', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'RestartFailureRecovery', 'Restart', 'ClientRestart', 'ClientLeave', 'ServerSurvivesClientLeave', 'PartnerVictory', 'PartnerRestart') }
+        'Flow' { return @('Join', 'ClientInputReady', 'OverlapKeys', 'PlateDistinctPlayers', 'OccupancyRebindClears', 'OccupancyRebindRestores', 'OccupancyRebindMembership', 'GateRules', 'GateOpen', 'GateClosed', 'OccupancyUnpossess', 'OccupancyRepossess', 'OccupancyUncontrolledEntry', 'OccupancyLatePossess', 'DestroyedPawnCleanup', 'PlatformEndpoint', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'RestartFailureRecovery', 'Restart', 'ClientRestart', 'ClientLeave', 'ServerSurvivesClientLeave', 'PartnerVictory', 'PartnerRestart') }
         'Keys' { return @('Join', 'KeyMissingDestinationRetainsKey', 'KeyInstallFailureRollback', 'KeyCommitReentryBlocked', 'KeyInstalledOnce', 'ClientKeyInstalled', 'KeySecondOverlapCommitted', 'KeyInstallRejectedRetainsKey') }
         'LateJoin' { return @('LateJoinState', 'LateJoinKeyAttachments') }
         'Reconnect' { return @('OutageApplied', 'ConnectionLostDetected', 'ServerConnectionRetained', 'ReconnectAfterOutage', 'ReconnectStateRestored') }

@@ -1,0 +1,365 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "sanitized-network-validation-excerpt",
+  "description": "自动脱敏摘录，不是原始完整报告；状态和指标直接来自原报告，未补写通过结果。",
+  "extractedAtUtc": "2026-09-27T05:20:49.9335641Z",
+  "sourceReport": {
+    "fileName": "report.json",
+    "sha256": "7c4d3defffaf8b3f4713d7291c5af0a36491404afd1eac4c05a7ce69f0c80fc7",
+    "runId": "20260927-051838-033451d8",
+    "generatedAtUtc": "2026-09-27T05:19:20.9097665Z",
+    "status": "passed",
+    "omitted": [
+      "机器名、本机绝对路径",
+      "启动命令与原始日志",
+      "gitStatus 与源码文件清单（含工具缓存路径）",
+      "STAGE/READY/RECEIPT 等过程事件"
+    ]
+  },
+  "environment": {
+    "engineAssociation": "5.5",
+    "executableVersion": "++UE5+Release-5.5-CL-40574608",
+    "executableSha256": "f85102a960bda9e33c86bb791a29677299bbb784f363edaae27245c052a5deac",
+    "projectModule": {
+      "sha256": "7fbe6e58f591bca60145c0ddced1f2f2360afc7015f3523db0e1519fb575376d",
+      "resolution": "editor-project-module-on-disk",
+      "loadedByRuntimeVerified": false
+    },
+    "buildKind": "editor-game",
+    "map": "/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo",
+    "nullRhi": true,
+    "topology": "One local listen host and one separate local client process",
+    "visualValidation": false,
+    "runtimeGameplayConfig": {
+      "sha256": "97b67b8238706e2f2765446c93b512dbcb39153a3e32676bc7c5b9316f8c0ce0",
+      "matchesSource": true,
+      "resolution": "editor-project-content",
+      "loadedByRuntimeVerified": false
+    }
+  },
+  "provenance": {
+    "gitCommit": "05b7cf1077b708367a90f63fe152e467abb6e7b5",
+    "dirty": true,
+    "sourceFingerprintSha256": "83219676f24b4bdee04a1e8978c334923536ef19fccf9cca07f09461f60bb8d5",
+    "gameplayConfigSha256": "97b67b8238706e2f2765446c93b512dbcb39153a3e32676bc7c5b9316f8c0ce0"
+  },
+  "measurementInterpretation": {
+    "bandwidth": "OutTotalBytes/OutTotalPackets 是引擎发送计数。UE 5.5 字节计数由发送缓冲字节数加配置的 PacketOverhead 累计，非网卡抓包、非物理链路流量，也非已成功到达客户端的字节数。B/s 为该计数差除以采样秒数。",
+    "frameTiming": "derivedFrameTiming 仅在原服务器 CSV 的 SHA-256 校验通过后计算；estimatedFPS=1000/FrameTime均值，不把 60 FPS 上限当成实际帧率。",
+    "gameThread": "GameThreadTime 全零表示该运行配置下计数不可用于 CPU 成本结论；原始零值和摘要保留作追溯，不代表 CPU 开销为零。",
+    "errata": [
+      "部分旧二进制 metrics.counterSource 中的 wire packets, not pre-compression bytes 描述过强；摘录保留原标签和计数，解释以本节为准。"
+    ]
+  },
+  "scope": [
+    "Assertions represent the driver checks, not manual visual acceptance.",
+    "PktLag values are emulator parameters applied to both peers, not measured RTT.",
+    "Scale tests use synthetic actors and two processes, not player-capacity certification.",
+    "RideMotion retains per-role, per-phase runtime measurements; they do not certify rendered smoothness.",
+    "Historical 22.17% bandwidth data is not a result of this run.",
+    "Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.",
+    "案例通过仅指原报告中的具体自动断言，不表示人工完整通关、全部蓝图配置或画面验收。",
+    "Flow 使用真实 Overlap，但角色由测试放置，并包含合成机关；ClientRide 不证明视觉平滑，VictoryWidget 入 Viewport 不证明按钮点击和像素正确。",
+    "SessionRetry 和首次重开失败使用开发注入；Reconnect 使用进程内真实断包和缩短的连接超时，不是物理网络故障穷举。",
+    "同机双进程会竞争 CPU；NullRHI 不测渲染。合成对象数量不等于玩家容量，100 Hz 设置不等于实测发送频率。",
+    "带宽是服务器总出站；CPU 缺失或全零需保留限制。正式对照每组至少三次，单次成功不等于正式性能结论。",
+    "runtimeGameplayConfig.loadedByRuntimeVerified=false 时只证明磁盘文件指纹，不能据此声称运行时已加载该配置。",
+    "RideMotion 的 motionMetrics 按角色与阶段保留实际采样；平台逐帧位移、角色相对位移和历史 Move 校正误差不是同一指标。基座变化的校正另计，Host 校正字段不适用；动作通过不代表视觉平滑。",
+    "projectModule.loadedByRuntimeVerified=false 时只记录磁盘上的项目模块指纹，未在运行进程内验证加载模块的哈希。"
+  ],
+  "cases": [
+    {
+      "id": "001-Flow-Normal-0-1-Combined-1",
+      "mode": "Flow",
+      "matrix": "Regression",
+      "profile": "Normal",
+      "iteration": 1,
+      "staticCount": 0,
+      "movingCount": 1,
+      "optimization": "Combined",
+      "platformNetHz": null,
+      "platformSyncMode": null,
+      "warmupSeconds": 5,
+      "sampleSeconds": 30,
+      "samplingDurationSource": "metrics.sampleSeconds where available",
+      "outageSeconds": 25,
+      "startedAtUtc": "2026-09-27T05:18:38.7092853Z",
+      "durationSeconds": 42.12,
+      "status": "passed",
+      "requiredAssertions": [
+        "Join",
+        "OverlapKeys",
+        "PlateDistinctPlayers",
+        "GateRules",
+        "GateOpen",
+        "GateClosed",
+        "DestroyedPawnCleanup",
+        "PlatformEndpoint",
+        "ClientRide",
+        "ClientVictoryState",
+        "RestartFailureRecovery",
+        "Restart",
+        "ClientRestart",
+        "ClientLeave",
+        "HostLeave"
+      ],
+      "errors": [],
+      "metrics": null,
+      "motionMetrics": [],
+      "cpuMetrics": null,
+      "csvSha256": null,
+      "measurementWarnings": [],
+      "events": [
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Real remote PlayerController with possessed character",
+          "elapsed": 17.854045499116182
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "Freeze",
+          "assertion": "OverlapKeys",
+          "passed": true,
+          "detail": "Real overlap on 4 prebound map keys; two server moves in one tick=1; progress once per socket",
+          "elapsed": 17.954246997833252
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "OnePlayer",
+          "assertion": "PlateDistinctPlayers",
+          "passed": true,
+          "detail": "One player covers two plates but cannot open a two-player gate",
+          "elapsed": 19.053619597107172
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "GateOpen",
+          "assertion": "GateRules",
+          "passed": true,
+          "detail": "Occupancy changes while both active flags remain true; gate reevaluates",
+          "elapsed": 20.753645196557045
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "GateClosed",
+          "assertion": "GateReclosed",
+          "passed": true,
+          "detail": "Leaving player closes gate although host still activates both plates",
+          "elapsed": 22.45368629693985
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "GateClosed",
+          "assertion": "GateReopened",
+          "passed": true,
+          "detail": "",
+          "elapsed": 22.45385279878974
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "GateClosed",
+          "assertion": "DestroyedPawnCleanup",
+          "passed": true,
+          "detail": "Destroy actual remote pawn while overlapping; remaining host counts once and gate closes",
+          "elapsed": 22.4549813978374
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "Ride",
+          "assertion": "PlatformEndpoint",
+          "passed": true,
+          "detail": "Server platform reached configured endpoint",
+          "elapsed": 27.85404769703746
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "Victory",
+          "assertion": "RestartFailureRecovery",
+          "passed": true,
+          "detail": "Synthetic old-world travel failure releases restart lock and restores match state",
+          "elapsed": 27.95507299900055
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "Restart",
+          "assertion": "Restart",
+          "passed": true,
+          "detail": "New World, reset objectives and rejoined remote player",
+          "elapsed": 33.7323795966804
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "ASSERT",
+          "phase": "HostLeaving",
+          "assertion": "HostLeave",
+          "passed": true,
+          "detail": "",
+          "elapsed": 35.94620279967785
+        },
+        {
+          "mode": "Flow",
+          "role": "Host",
+          "status": "DONE",
+          "phase": "HostLeaving",
+          "passed": true,
+          "detail": "",
+          "elapsed": 35.946236196905375
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Join",
+          "passed": true,
+          "detail": "Remote-owned replicated test probe received after Find/Join",
+          "elapsed": 8.97124170139432
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Freeze",
+          "passed": true,
+          "detail": "Client input frozen; server teleports drive real overlaps",
+          "elapsed": 8.97129249945283
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "GateOpen",
+          "passed": true,
+          "detail": "Client state and local door mesh converged after dormancy flush",
+          "elapsed": 11.771143898367882
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "GateClosed",
+          "passed": true,
+          "detail": "Client state and local door mesh converged after dormancy flush",
+          "elapsed": 13.471118498593569
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "RidePrepare",
+          "passed": true,
+          "detail": "Release local movement for actual moving-base test",
+          "elapsed": 13.571465499699116
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Joining",
+          "assertion": "Boarding",
+          "passed": true,
+          "detail": "Client resolved platform and actually stands on its movement base",
+          "elapsed": 13.77116459980607
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Ride",
+          "assertion": "ClientRide",
+          "passed": true,
+          "detail": "Real CMC base samples=51/51; max horizontal offset=0.0 cm; no visual smoothness claim",
+          "elapsed": 18.871188301593065
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Ride",
+          "assertion": "ClientVictoryState",
+          "passed": true,
+          "detail": "Remote GameState won and real local VictoryWidget added to viewport; not pixel validation",
+          "elapsed": 18.971947200596333
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Restarting",
+          "assertion": "ClientRestart",
+          "passed": true,
+          "detail": "Client loaded replacement world and received new server probe",
+          "elapsed": 24.818977098912
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Leaving",
+          "assertion": "ClientLeave",
+          "passed": true,
+          "detail": "",
+          "elapsed": 24.93307650089264
+        },
+        {
+          "mode": "Flow",
+          "role": "Client",
+          "status": "DONE",
+          "phase": "Leaving",
+          "passed": true,
+          "detail": "",
+          "elapsed": 24.93310860171914
+        }
+      ]
+    }
+  ],
+  "summaries": [
+    {
+      "group": "Flow, Regression, Normal, 0, 1, Combined",
+      "matrix": "Regression",
+      "attempted": 1,
+      "passed": 1,
+      "measuredSamples": 0,
+      "minimumThreeMeasuredSamples": false,
+      "medianBytesPerSecond": null,
+      "minBytesPerSecond": null,
+      "maxBytesPerSecond": null,
+      "cpuMeasuredSamples": 0,
+      "gameThreadMeasuredSamples": 0,
+      "medianReplicateMeanMs": null,
+      "medianReplicateP95Ms": null,
+      "medianGameThreadMeanMs": null,
+      "medianGameThreadP95Ms": null,
+      "gameThreadAllZeroRuns": 0,
+      "medianFullyDormantActorsMean": null
+    }
+  ]
+}

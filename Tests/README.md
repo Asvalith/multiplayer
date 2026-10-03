@@ -38,8 +38,8 @@ $env:UE_EDITOR = 'C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/Unrea
 | 场景 | 检查内容 |
 | --- | --- |
 | DedicatedSmoke | DS 无 LocalPlayer、两个真实远端、网络角色与独立回执 |
-| Flow | 重叠归位、协作门、占用清理、平台、双端胜利、失败重开恢复、客户端退出后 DS 保持 |
-| Keys | 持有、安装、消费、失败保留、重入保护、销毁与重新拾取 |
+| Flow | 重叠归位、协作门、触发体重绑定与成员变化、占用清理、平台、双端胜利、失败重开恢复、客户端退出后 DS 保持 |
+| Keys | 触碰后自动归位、缺绑定与安装失败保留、重试与重复触碰去重、进度上限、提交重入保护、远端附着 |
 | LateJoin | 已有目标、休眠机关与钥匙附着的状态恢复 |
 | Reconnect | 单连接真实超时、有限重连、另一连接保持、共享进度恢复 |
 | ConnectionRetry | 不可达地址失败后恢复 Idle，再连接有效地址 |
@@ -47,7 +47,7 @@ $env:UE_EDITOR = 'C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/Unrea
 | RideMotion | 站立、行走、反向、自由跳跃，两端四阶段指标及历史 Move |
 | Scale | 实际对象数、客户端观察、服务器发送计数与复制 CPU |
 
-`All` 包含 Flow、Keys、LateJoin、Reconnect、ConnectionRetry、Ride、RideMotion。DedicatedSmoke 单独调用。Flow/Keys 由测试驱动放置角色触发真实 Overlap；胜利 UI 检查客户端 Widget 加入 Viewport。可视运行用于进一步观察操作和画面。
+`All` 包含 Flow、Keys、LateJoin、Reconnect、ConnectionRetry、Ride、RideMotion。DedicatedSmoke 单独调用。Flow/Keys 由测试驱动放置角色触发真实 Overlap；胜利 UI 检查客户端 Widget 加入 Viewport。可视运行用于进一步观察操作和画面。历史 Keys 报告对应当时的携带流程，当前关卡与自动用例采用触碰后自动归位，证据按各自构建解释。
 
 ## 网络模拟
 

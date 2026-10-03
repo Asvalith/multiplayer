@@ -26,6 +26,7 @@ class MULTIPLAYER_API UmultiplayerVictoryWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	// 控制器使用的界面接口。
 	// UIOnly 输入模式必须聚焦真正支持键盘焦点的控件，不能把根 Overlay 当作焦点目标。
 	TSharedPtr<SWidget> GetInitialFocusWidget() const;
 
@@ -33,6 +34,7 @@ public:
 	void SetActionFeedback(bool bActionsEnabled, const FText& Message);
 
 protected:
+	// Slate 控件树生命周期。
 	/** 创建标题与两个按钮的 Slate 树，保留重开按钮以提供可靠的初始焦点。 */
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	/** 释放本类额外保存的 Slate 引用，再让父类清理底层控件树。 */
@@ -41,6 +43,8 @@ protected:
 private:
 	// 测试驱动调用真实按钮处理函数，不新增可供玩法绕过权限的测试入口。
 	friend class UCoopNetTestDriver;
+
+	// 按钮回调。
 	/** 返回 Handled 仅表示输入已处理；权限、重复提交和失败恢复统一交给控制器。 */
 	FReply HandleRestartClicked();
 	/** 转交退出意图，不直接操作网络连接。 */

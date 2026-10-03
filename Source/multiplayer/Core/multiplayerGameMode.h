@@ -26,11 +26,13 @@ class AmultiplayerGameMode : public AGameMode
 	GENERATED_BODY()
 
 public:
+	// 构造与引擎初始化。
 	AmultiplayerGameMode();
 
 	// 在接收玩家前设置实际登录容量；地图直接启动或重开时同样使用 JSON 人数上限。
 	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
 
+	// 合作目标的权威提交入口。
 	/**
 	 * 校验进度后，同步执行插槽提供的钥匙操作；操作成功才增加进度并通知外部。
 	 *
@@ -51,6 +53,7 @@ public:
 	 */
 	bool TryCompleteCoopGame(int32 CurrentPlayers, int32 RequiredPlayers);
 
+	// 当前回合重开与失败恢复。
 	/**
 	 * 仅在比赛已经胜利时接受一次重开请求，并使用 AGameMode::RestartGame 重新加载当前 URL。
 	 * 这不会选择或自动切换到另一张玩法地图。
@@ -64,6 +67,12 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
+	/**
+	 * 以关卡实际摆放的插槽数量作为目标数量。
+	 * 这样增加或删除插槽后无需同步修改另一份配置；没有插槽时使用回退值。
+	 */
+	int32 ResolveRequiredKeys() const;
+
 	// 钥匙附着、销毁和进度通知可能同步触发其他事件，拒绝提交期间的嵌套登记。
 	bool bRegisteringKey = false;
 
@@ -76,12 +85,6 @@ private:
 		FString TravelURL;
 		TWeakObjectPtr<AController> Requester;
 	};
-
-	/**
-	 * 以关卡实际摆放的插槽数量作为目标数量。
-	 * 这样增加或删除插槽后无需同步修改另一份配置；没有插槽时使用回退值。
-	 */
-	int32 ResolveRequiredKeys() const;
 
 	// 无插槽时的回退数量；有插槽的关卡优先使用 ResolveRequiredKeys 的统计结果。
 	int32 RequiredKeys = 4;

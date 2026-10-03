@@ -6,25 +6,14 @@
 #include "GameFramework/Actor.h"
 #include "multiplayerKeySocket.generated.h"
 
-class ACharacter;
 class AmultiplayerCoopKey;
-class UBoxComponent;
 class USceneComponent;
 class UStaticMeshComponent;
 
 /**
- * 在服务器消耗玩家携带的钥匙，并记录插槽是否已经激活。
- *
- * 当前存在两个兼容入口：玩家携带钥匙进入触发区时消费并销毁钥匙；旧关卡中钥匙预绑定
- * DestinationSocket 时则把钥匙安装到 KeyDisplayPoint。两条路径最终都只能经过一次
- * CommitServerActivation，再由 GameMode 增加共享进度。
- * 预绑定路径是“触碰钥匙后自动归位到指定插槽”，不是先携带再归位；普通路径才会读取角色的
- * 携带槽，并在角色进入本触发区后消费钥匙。
- *
- * (*) Actor 保持网络权威身份，但不再复制 bActivated；客户端只需要 GameState 中的共享目标进度。
- * 这也意味着当前实现不提供“逐个插槽的客户端激活表现”，不能把 bActivated 当成可复制 UI 数据。
- * (**) Overlap 和外部直接安装都可能到达提交函数，因此提交前还要再次检查 bActivated，
- * 不能只依赖入口处的一次判断。
+ * 接收预绑定钥匙的自动归位请求，成功后通过 GameMode 登记一次目标进度。
+ * 插槽不检测玩家碰撞；钥匙安装位置由原生附件复制恢复，共享进度由 GameState 复制。
+ * bActivated 仅作服务器防重复提交标记，不另复制一份 UI 状态。
  */
 UCLASS()
 class MULTIPLAYER_API AmultiplayerKeySocket : public AActor
@@ -35,31 +24,12 @@ public:
 	AmultiplayerKeySocket();
 
 	/**
-	 * 兼容由钥匙直接指定插槽的旧关卡数据：安装到显示点后提交目标。
-	 * 仅服务器调用；成功会改变钥匙安装状态、锁定本插槽并推进共享进度。
-	 * @return 只有权威端、未激活且钥匙成功进入 Installed 状态时返回 true。
+	 * 仅服务器调用。先校验共享进度，再安装钥匙；失败解锁插槽，钥匙保留原位。
+	 * @return 钥匙安装且进度登记成功时返回 true；重复请求返回 false。
 	 */
 	bool StoreCollectedKey(AmultiplayerCoopKey* Key);
 
-protected:
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
-	UFUNCTION()
-	void HandleSocketOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		int32 OtherBodyIndex,
-		bool bFromSweep,
-		const FHitResult& SweepResult);
-
 private:
-	// 同时核对 CarryComponent::CarriedKey 与 Key::Holder，避免任一侧迟到清理导致误消费。
-	AmultiplayerCoopKey* FindCarriedKey(ACharacter* Character) const;
-	// 两种入口共用提交点：先检查进度，再安装或消费；失败解锁且不丢失钥匙。
-	bool CommitServerActivation(AmultiplayerCoopKey* Key, bool bInstall);
-
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
 	TObjectPtr<USceneComponent> SceneRoot;
 
@@ -68,9 +38,6 @@ private:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Key Socket", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USceneComponent> KeyDisplayPoint;
-
-	UPROPERTY(VisibleAnywhere, Category = "Coop|Key Socket")
-	TObjectPtr<UBoxComponent> ActivationTrigger;
 
 	// 服务器本地的一次性门闩，不复制；共享结果由 GameState 的 ActivatedKeys 表达。
 	bool bActivated = false;

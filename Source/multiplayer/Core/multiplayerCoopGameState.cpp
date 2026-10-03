@@ -16,6 +16,7 @@ void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
 	// UPROPERTY(ReplicatedUsing) 只描述通知方式，DOREPLIFETIME 才真正把属性注册进网络复制列表。
 	DOREPLIFETIME(AmultiplayerCoopGameState, ObjectiveState);
 }
+
 /*
  * 服务器唯一写入口。提交前统一修正字段关系，相同快照直接忽略；成功提交会立即通知
  * 服务器本地规则监听者，并请求尽快复制给远端客户端。

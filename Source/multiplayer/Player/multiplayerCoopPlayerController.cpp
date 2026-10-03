@@ -3,20 +3,11 @@
 #include "Player/multiplayerCoopPlayerController.h"
 
 #include "Network/multiplayerGameInstance.h"
+#include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameMode.h"
 #include "Core/multiplayerLog.h"
-#include "UI/multiplayerVictoryPresenterComponent.h"
+#include "Engine/World.h"
 #include "UI/multiplayerVictoryWidget.h"
-
-/*
- * 本地控制器接收胜利结果并管理视口；重开沿 Controller RPC 交给服务器规则层，
- * 退出则交给跨 World 存活的 GameInstance。Widget 不直接承担这些网络职责。
- */
-AmultiplayerCoopPlayerController::AmultiplayerCoopPlayerController()
-{
-	// 使用默认子组件保证服务器和客户端控制器具有一致结构；组件内部会自行筛选 LocalController。
-	VictoryPresenter = CreateDefaultSubobject<UmultiplayerVictoryPresenterComponent>(TEXT("VictoryPresenter"));
-}
 
 void AmultiplayerCoopPlayerController::BeginPlayingState()
 {
@@ -39,16 +30,14 @@ void AmultiplayerCoopPlayerController::BeginPlayingState()
 		}
 	}
 
-	// GameState 可能在 Travel 后被替换，每次进入 PlayingState 都刷新绑定；组件内部负责去重和旧引用清理。
-	if (VictoryPresenter != nullptr)
-	{
-		VictoryPresenter->RefreshBinding();
-	}
+	RefreshVictoryBinding();
 }
 
 void AmultiplayerCoopPlayerController::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
+	ClearVictoryBinding();
+	bVictoryNotified = false;
 	if (UmultiplayerGameInstance* GameInstance = GetGameInstance<UmultiplayerGameInstance>())
 	{
 		GameInstance->OnLeaveFailed.RemoveAll(this);
@@ -57,14 +46,78 @@ void AmultiplayerCoopPlayerController::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
-/** 创建一次本地胜利界面，并把输入焦点交给可交互按钮；重复通知复用已有展示结果。 */
-void AmultiplayerCoopPlayerController::PresentCoopVictory()
+void AmultiplayerCoopPlayerController::RefreshVictoryBinding()
 {
-	if (!IsLocalController() || VictoryWidget != nullptr)
+	AmultiplayerCoopGameState* PreviousGameState = CoopGameState;
+	ClearVictoryBinding();
+	if (!IsLocalController())
 	{
 		return;
 	}
 
+	UWorld* World = GetWorld();
+	CoopGameState = World != nullptr ? World->GetGameState<AmultiplayerCoopGameState>() : nullptr;
+	if (CoopGameState == nullptr)
+	{
+		// PlayingState 不保证 GameState 已到达，等待明确事件而非 Tick 轮询。
+		if (World != nullptr)
+		{
+			GameStateEventWorld = World;
+			GameStateSetEventHandle = World->GameStateSetEvent.AddUObject(
+				this, &AmultiplayerCoopPlayerController::HandleGameStateSet);
+		}
+		return;
+	}
+
+	if (CoopGameState != PreviousGameState)
+	{
+		bVictoryNotified = false;
+	}
+	CoopGameState->OnGameWon.AddUniqueDynamic(this, &AmultiplayerCoopPlayerController::PresentCoopVictory);
+	// 晚加入或晚绑定时，胜利通知可能已经发生，必须补读快照。
+	if (CoopGameState->GetObjectiveState().bGameWon)
+	{
+		PresentCoopVictory();
+	}
+}
+
+void AmultiplayerCoopPlayerController::ClearVictoryBinding()
+{
+	if (UWorld* BoundWorld = GameStateEventWorld.Get())
+	{
+		BoundWorld->GameStateSetEvent.Remove(GameStateSetEventHandle);
+	}
+	GameStateSetEventHandle.Reset();
+	GameStateEventWorld.Reset();
+	if (IsValid(CoopGameState))
+	{
+		CoopGameState->OnGameWon.RemoveDynamic(this, &AmultiplayerCoopPlayerController::PresentCoopVictory);
+	}
+	CoopGameState = nullptr;
+}
+
+void AmultiplayerCoopPlayerController::HandleGameStateSet(AGameStateBase* GameState)
+{
+	if (Cast<AmultiplayerCoopGameState>(GameState) != nullptr)
+	{
+		RefreshVictoryBinding();
+	}
+}
+
+/** 创建一次本地胜利界面，并把输入焦点交给可交互按钮；重复通知复用已有展示结果。 */
+void AmultiplayerCoopPlayerController::PresentCoopVictory()
+{
+	if (!IsLocalController() || bVictoryNotified)
+	{
+		return;
+	}
+
+	// 先标记再创建/广播，防止同步重入；创建失败的自动重试不在当前流程内。
+	bVictoryNotified = true;
+	if (VictoryWidget != nullptr)
+	{
+		return;
+	}
 	VictoryWidget = CreateWidget<UmultiplayerVictoryWidget>(
 		this,
 		UmultiplayerVictoryWidget::StaticClass());

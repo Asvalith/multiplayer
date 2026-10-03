@@ -29,17 +29,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	PlayerCount);
 
 /**
- * 由服务器判定激活状态的压力板。
- *
- * 完整链路为：PlayerOccupancy 在服务器统计不同角色 -> EvaluatePlateState 组合人数与目标条件 ->
- * 服务器写 bPlateActive -> RepNotify 让各客户端根据同一个离散状态播放压下/弹起表现。
- * 人数统计交给 PlayerOccupancy，本 Actor 只负责激活规则、状态复制和压下表现。
- * (*) 运行中仅复制 bPlateActive，速度在初始复制时另行提供；客户端插值网格，减少持续同步位置的开销。
- * 这种策略适合只需同步开关结果、过渡时序要求较低的机关；本地网格仍有碰撞，
- * 但服务器不根据客户端的压下进度判定激活。持续承载玩家的平台采用位置复制。
- * (**) Tick 只在视觉过渡期间开启，到达目标后立即关闭，避免静止机关长期空转。
- * (**) 玩家进入和钥匙目标完成的先后顺序不固定，所以人数变化和目标变化都要重新求值，
- * 不能假设一定先完成目标再踩板。
+ * PlayerOccupancy 统计不同角色，服务器结合人数、目标条件和锁存配置决定激活状态。
+ * 只复制开关及初始速度，各端播放网格按压过渡，静止时关闭 Tick。
+ * 本地网格有碰撞，但激活规则不依赖客户端按压进度。
  */
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerPressurePlate : public AActor
@@ -56,7 +48,7 @@ public:
 	// 返回本机当前状态：服务器为规则真相，客户端为最近一次收到的复制快照。
 	bool IsPlateActive() const { return bPlateActive; }
 
-	// 从共享 Occupancy 组件取得不同角色列表，供门进一步验证“不同玩家”数量。
+	// 追加有效不同角色，供门合并多个压力板的玩家集合。
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
 
 	// 状态变化的本机事件。依赖权威结果的机关只在服务器绑定，客户端可用于非规则表现。
@@ -87,6 +79,7 @@ private:
 	void EvaluatePlateState();
 	// 服务器直接写入与客户端 OnRep 的公共出口，保证两端触发相同表现和事件。
 	void HandlePlateActiveChanged();
+	FVector GetMeshTargetLocation() const;
 	// bSnapToTarget 用于初始状态恢复；运行期变化则打开 Tick 做平滑过渡。
 	void ApplyPlateState(bool bSnapToTarget);
 
@@ -121,7 +114,6 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Pressure Plate|Rules")
 	bool bRequireObjectiveComplete = false;
 
-	// 运行中复制的开关状态；网格位置不复制，速度另外在初始复制时提供。
 	UPROPERTY(ReplicatedUsing = OnRep_PlateActive)
 	bool bPlateActive = false;
 

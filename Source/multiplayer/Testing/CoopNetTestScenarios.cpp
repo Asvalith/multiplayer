@@ -2,6 +2,7 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Components/BoxComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameMode.h"
@@ -13,7 +14,6 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Mechanisms/multiplayerCoopGate.h"
-#include "Mechanisms/multiplayerCoopCarryComponent.h"
 #include "Mechanisms/multiplayerCoopKey.h"
 #include "Mechanisms/multiplayerKeySocket.h"
 #include "Mechanisms/multiplayerMovingPlatform.h"
@@ -22,7 +22,6 @@
 #include "Mechanisms/multiplayerTransporterComponent.h"
 #include "Mechanisms/multiplayerWinArea.h"
 #include "Player/multiplayerCoopPlayerController.h"
-#include "Player/multiplayerCharacter.h"
 #include "UI/multiplayerVictoryWidget.h"
 #include "UObject/UnrealType.h"
 
@@ -347,7 +346,23 @@ void UCoopNetTestDriver::KeyServerTick(UWorld* World)
 	ACharacter* Remote = RemotePC->GetCharacter();
 	auto* State = World->GetGameState<AmultiplayerCoopGameState>();
 	if (!Partner || !Remote || !State) return;
-	auto* Carry = Partner->FindComponentByClass<UmultiplayerCoopCarryComponent>();
+	// 与关卡配置一致：预绑定插槽在 BeginPlay 前赋值，测试只通过重叠触发自动归位。
+	auto SpawnKey = [World](const FVector& Location, AmultiplayerKeySocket* Socket)
+	{
+		const FTransform Transform(Location);
+		auto* Key = World->SpawnActorDeferred<AmultiplayerCoopKey>(AmultiplayerCoopKey::StaticClass(), Transform);
+		FindFProperty<FObjectPropertyBase>(Key->GetClass(), TEXT("DestinationSocket"))->SetObjectPropertyValue_InContainer(Key, Socket);
+		Key->bAlwaysRelevant = true;
+		Key->FinishSpawning(Transform);
+		return Key;
+	};
+	auto IsRetainedAt = [](AmultiplayerCoopKey* Key, const FVector& Location)
+	{
+		const auto* Trigger = IsValid(Key) ? Key->FindComponentByClass<USphereComponent>() : nullptr;
+		return Trigger && !Flag(Key, TEXT("bInstalled")) && !Key->GetAttachParentActor()
+			&& Key->GetActorLocation().Equals(Location, 1.f) && Trigger->GetGenerateOverlapEvents()
+			&& Trigger->GetCollisionEnabled() == ECollisionEnabled::QueryOnly;
+	};
 	if (Phase == TEXT("ScenarioStart")) SetCommand(TEXT("Freeze"));
 	if (Phase == TEXT("Freeze") && Receipts.Contains(TEXT("Freeze")))
 	{
@@ -356,30 +371,25 @@ void UCoopNetTestDriver::KeyServerTick(UWorld* World)
 		FmultiplayerCoopObjectiveState Initial;
 		Initial.RequiredKeys = 2;
 		State->ApplyAuthoritativeState(Initial);
-		auto* Key = World->SpawnActor<AmultiplayerCoopKey>(TestOrigin, FRotator::ZeroRotator);
+		auto* UnboundKey = SpawnKey(TestOrigin, nullptr);
+		Place(Partner, TestOrigin);
+		Assert(TEXT("KeyMissingDestinationRetainsKey"), IsRetainedAt(UnboundKey, TestOrigin)
+			&& State->GetObjectiveState().ActivatedKeys == 0, TEXT("Missing destination cannot install or remove the touched key"));
+		if (bDone) return;
+
 		auto* Socket = World->SpawnActor<AmultiplayerKeySocket>(TestOrigin + FVector(0, 500, 0), FRotator::ZeroRotator);
-		Key->bAlwaysRelevant = Socket->bAlwaysRelevant = true;
-		Fixture = {Key, Socket};
-		Probe->Subjects = {Key, Socket, Partner};
-		Place(Partner, Key->GetActorLocation());
-		Assert(TEXT("KeyHeld"), Key->IsHeldBy(Partner) && Carry && Carry->GetCarriedKey() == Key
-			&& Key->GetAttachParentActor() == Partner, TEXT("Real overlap acquires key and server carry slot"));
-		if (!bDone) SetCommand(TEXT("KeyHeld"));
-	}
-	if (Phase == TEXT("KeyHeld") && Receipts.Contains(TEXT("ClientKeyHeld")))
-	{
-		auto* Key = CastChecked<AmultiplayerCoopKey>(Fixture[0]);
-		auto* Socket = CastChecked<AmultiplayerKeySocket>(Fixture[1]);
-		// 仅替换测试配置，模拟无效安装目标；不直接改写 Holder、Installed 或激活状态。
+		auto* Key = SpawnKey(TestOrigin + FVector(600, 0, 0), Socket);
+		const FVector KeyLocation = Key->GetActorLocation();
+		Socket->bAlwaysRelevant = true;
+		Probe->Subjects = {Key, Socket};
+		// 故障注入只改显示点配置；Installed、插槽门闩与进度都由正式逻辑写入。
 		auto* DisplayProperty = FindFProperty<FObjectPropertyBase>(Socket->GetClass(), TEXT("KeyDisplayPoint"));
 		UObject* DisplayPoint = DisplayProperty->GetObjectPropertyValue_InContainer(Socket);
 		DisplayProperty->SetObjectPropertyValue_InContainer(Socket, Key->GetRootComponent());
-		const bool bRejected = !Socket->StoreCollectedKey(Key);
+		Place(Partner, KeyLocation);
 		DisplayProperty->SetObjectPropertyValue_InContainer(Socket, DisplayPoint);
-		Assert(TEXT("KeyInstallFailureRollback"), bRejected && Key->IsHeldBy(Partner)
-			&& Carry->GetCarriedKey() == Key && Key->GetAttachParentActor() == Partner
-			&& State->GetObjectiveState().ActivatedKeys == 0 && !Flag(Key, TEXT("bInstalled")),
-			TEXT("Failed key operation preserves holder, attachment, inventory and progress"));
+		Assert(TEXT("KeyInstallFailureRollback"), IsRetainedAt(Key, KeyLocation)
+			&& State->GetObjectiveState().ActivatedKeys == 0, TEXT("Failed overlap installation preserves position, pickup collision and progress"));
 		if (bDone) return;
 		bool bNestedOperationRan = false;
 		auto* GM = World->GetAuthGameMode<AmultiplayerGameMode>();
@@ -391,55 +401,31 @@ void UCoopNetTestDriver::KeyServerTick(UWorld* World)
 		Assert(TEXT("KeyCommitReentryBlocked"), !bOuterCommitted && !bNestedOperationRan
 			&& State->GetObjectiveState().ActivatedKeys == 0);
 		if (bDone) return;
-		const bool bInstalled = Socket->StoreCollectedKey(Key);
-		Assert(TEXT("KeyInstalledOnce"), bInstalled && Flag(Key, TEXT("bInstalled"))
-			&& Carry->GetCarriedKey() == nullptr && Key->GetAttachParentActor() == Socket
-			&& !Socket->StoreCollectedKey(Key) && State->GetObjectiveState().ActivatedKeys == 1);
+		// 离开后重新进入，证明失败没有锁死插槽；第二玩家和重复提交不能再次计数。
+		Place(Partner, TestOrigin + FVector(-1000, 0, 0));
+		Place(Partner, KeyLocation);
+		Place(Remote, KeyLocation);
+		Assert(TEXT("KeyInstalledOnce"), Flag(Key, TEXT("bInstalled")) && Key->GetAttachParentActor() == Socket
+			&& !Socket->StoreCollectedKey(Key) && State->GetObjectiveState().ActivatedKeys == 1,
+			TEXT("Retry by real overlap installs once; second player and repeated submission cannot duplicate progress"));
 		if (!bDone) SetCommand(TEXT("KeyInstalled"));
 	}
 	if (Phase == TEXT("KeyInstalled") && Receipts.Contains(TEXT("ClientKeyInstalled")))
 	{
-		auto* Key = World->SpawnActor<AmultiplayerCoopKey>(TestOrigin + FVector(600, 0, 0), FRotator::ZeroRotator);
-		auto* Socket = World->SpawnActor<AmultiplayerKeySocket>(TestOrigin + FVector(1000, 0, 0), FRotator::ZeroRotator);
+		auto* Socket = World->SpawnActor<AmultiplayerKeySocket>(TestOrigin + FVector(2000, 0, 0), FRotator::ZeroRotator);
+		auto* Key = SpawnKey(TestOrigin + FVector(1600, 0, 0), Socket);
 		Place(Partner, Key->GetActorLocation());
-		Place(Partner, Socket->GetActorLocation());
-		Assert(TEXT("KeyConsumeCommitted"), !IsValid(Key) && Carry->GetCarriedKey() == nullptr
-			&& State->GetObjectiveState().ActivatedKeys == 2, TEXT("Socket overlap consumes key and clears carry slot"));
+		Assert(TEXT("KeySecondOverlapCommitted"), Flag(Key, TEXT("bInstalled")) && Key->GetAttachParentActor() == Socket
+			&& State->GetObjectiveState().ActivatedKeys == 2, TEXT("Second prebound key overlap completes the objective"));
 		if (bDone) return;
-		Key = World->SpawnActor<AmultiplayerCoopKey>(TestOrigin + FVector(1600, 0, 0), FRotator::ZeroRotator);
-		Socket = World->SpawnActor<AmultiplayerKeySocket>(TestOrigin + FVector(2000, 0, 0), FRotator::ZeroRotator);
-		Assert(TEXT("KeyInstallRejectedRetainsKey"), !Socket->StoreCollectedKey(Key)
-			&& IsValid(Key) && !Flag(Key, TEXT("bInstalled")) && Key->GetAttachParentActor() == nullptr,
-			TEXT("Completed objective refuses installation before changing the key"));
-		if (bDone) return;
-		Place(Partner, Key->GetActorLocation());
-		Place(Partner, Socket->GetActorLocation());
-		Assert(TEXT("KeyConsumeRejectedRetainsKey"), IsValid(Key) && Key->IsHeldBy(Partner)
-			&& Carry->GetCarriedKey() == Key && Key->GetAttachParentActor() == Partner
-			&& Socket->FindComponentByClass<UBoxComponent>()->GetCollisionEnabled() == ECollisionEnabled::QueryOnly
-			&& State->GetObjectiveState().ActivatedKeys == 2, TEXT("Rejected progress cannot consume the held key"));
-		if (bDone) return;
-		Key->Destroy();
-		Assert(TEXT("KeyDestroyClearsCarry"), Carry->GetCarriedKey() == nullptr);
-		if (bDone) return;
-		// 用临时 Pawn 验证真实 OnDestroyed；恢复原协作玩家 Pawn，不破坏连接。
-		auto* TemporaryHolder = World->SpawnActor<AmultiplayerCharacter>(TestOrigin + FVector(2600, 0, 0), FRotator::ZeroRotator);
-		PartnerPC->Possess(TemporaryHolder);
-		Key = World->SpawnActor<AmultiplayerCoopKey>(TestOrigin + FVector(3000, 0, 0), FRotator::ZeroRotator);
-		Key->bAlwaysRelevant = true;
-		Place(TemporaryHolder, Key->GetActorLocation());
-		const bool bWasHeld = Key->IsHeldBy(TemporaryHolder);
-		Place(Remote, Key->GetActorLocation());
-		TemporaryHolder->Destroy();
-		PartnerPC->Possess(Partner);
-		const auto* RemoteCarry = Remote->FindComponentByClass<UmultiplayerCoopCarryComponent>();
-		Assert(TEXT("KeyDropRepick"), bWasHeld && Key->IsHeldBy(Remote) && RemoteCarry
-			&& RemoteCarry->GetCarriedKey() == Key && Key->GetAttachParentActor() == Remote,
-			TEXT("Collision restoration repicks immediately; old drop path must not detach new holder"));
-		Probe->Subjects = {Key, Socket, Remote};
-		if (!bDone) SetCommand(TEXT("KeyRepicked"));
+		Socket = World->SpawnActor<AmultiplayerKeySocket>(TestOrigin + FVector(3000, 0, 0), FRotator::ZeroRotator);
+		const FVector RejectedLocation = TestOrigin + FVector(2600, 0, 0);
+		Key = SpawnKey(RejectedLocation, Socket);
+		Place(Partner, RejectedLocation);
+		Assert(TEXT("KeyInstallRejectedRetainsKey"), IsRetainedAt(Key, RejectedLocation)
+			&& State->GetObjectiveState().ActivatedKeys == 2, TEXT("Completed objective rejects overlap installation without removing the key"));
+		if (!bDone) SetCommand(TEXT("Complete"));
 	}
-	if (Phase == TEXT("KeyRepicked") && Receipts.Contains(TEXT("ClientKeyRepicked"))) SetCommand(TEXT("Complete"));
 }
 
 void UCoopNetTestDriver::ScenarioClientTick(UWorld* World)
@@ -469,20 +455,14 @@ void UCoopNetTestDriver::ScenarioClientTick(UWorld* World)
 		Character->GetCharacterMovement()->DisableMovement();
 		SendReceipt(Command, true, TEXT("Client input frozen; server teleports drive real overlaps"));
 	}
-	if (Mode == TEXT("Keys") && Probe->Subjects.Num() == 3)
+	if (Mode == TEXT("Keys") && Probe->Subjects.Num() == 2)
 	{
 		auto* Key = Cast<AmultiplayerCoopKey>(Probe->Subjects[0]);
 		auto* Socket = Cast<AmultiplayerKeySocket>(Probe->Subjects[1]);
-		auto* Holder = Cast<ACharacter>(Probe->Subjects[2]);
-		if (Key && Holder && Key->IsHeldBy(Holder) && Key->GetAttachParentActor() == Holder)
-		{
-			if (Command == TEXT("KeyHeld")) SendReceipt(TEXT("ClientKeyHeld"), true, TEXT("Client resolves held key and native attachment"));
-			if (Command == TEXT("KeyRepicked")) SendReceipt(TEXT("ClientKeyRepicked"), true, TEXT("Client resolves new holder after destruction and repick"));
-		}
 		if (Command == TEXT("KeyInstalled") && Key && Socket && Flag(Key, TEXT("bInstalled"))
-			&& !Key->IsHeldBy(Holder) && Key->GetAttachParentActor() == Socket
+			&& Key->GetAttachParentActor() == Socket
 			&& Key->GetActorLocation().Equals(Socket->GetActorLocation() + FVector(0, 0, 75), 3))
-			SendReceipt(TEXT("ClientKeyInstalled"), true, TEXT("Held-to-installed converges through native attachment replication"));
+			SendReceipt(TEXT("ClientKeyInstalled"), true, TEXT("Automatic installation converges through native attachment replication"));
 	}
 	if (Command == TEXT("LateJoinState") && Probe->Subject)
 	{

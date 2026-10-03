@@ -11,7 +11,6 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
-#include "Mechanisms/multiplayerCoopCarryComponent.h"
 #include "Core/multiplayerLog.h"
 
 /*
@@ -53,9 +52,6 @@ AmultiplayerCharacter::AmultiplayerCharacter(const FObjectInitializer& ObjectIni
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
-
-	CarryComponent = CreateDefaultSubobject<UmultiplayerCoopCarryComponent>(
-		TEXT("CarryComponent"));
 
 	// 网格体和动画蓝图由派生角色蓝图配置，避免 C++ 直接依赖可替换的美术资源。
 }

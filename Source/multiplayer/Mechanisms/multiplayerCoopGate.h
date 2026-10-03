@@ -13,19 +13,9 @@ class USceneComponent;
 class UStaticMeshComponent;
 
 /**
- * 由服务器判定、在所需压力板激活后开启的合作门。
- *
- * 压力板负责检测玩家，门只组合多个压力板的结果。关卡设计者可摆放任意数量的压力板，
- * 再通过 RequiredPlates 建立引用，避免门和具体触发区域绑死。
- *
- * 服务器监听每块压力板以及可选的目标进度变化，重新计算 bGateOpen；客户端收到开关状态和初始速度，
- * 使用相同的 ClosedPoint/OpenPoint 插值门网格。各端碰撞随本地门网格移动，角色最终位置仍以服务器为准。
- * 这里没有同步动画起始时间，也没有预测或回滚；网络延迟下，两端门的过渡进度可能暂时不同。
- *
- * (*) 门只复制开关状态，各端根据相同端点播放表现；相比持续复制门的位置，网络开销更小。
- * (**) 判定时同时检查激活压力板数量和不同玩家数量，防止一个玩家同时压住多块板绕过双人条件。
- * (**) RequiredPlates 是关卡实例引用，EndPlay 对每个外部 Delegate 对称解绑，明确结束依赖关系；
- * 不把 UObject 委托的失效对象保护当作日常清理流程。
+ * 服务器组合 RequiredPlates 的激活板数、不同玩家数和可选目标条件，决定门的开关。
+ * 只复制开关及初始速度，各端在 ClosedPoint/OpenPoint 之间移动门网格，静止时关闭 Tick。
+ * 未同步动画起始时间，延迟下各端过渡进度可能不同；角色最终位置仍以服务器为准。
  */
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerCoopGate : public AActor
@@ -71,9 +61,8 @@ private:
 	void UnbindRequiredPlate(AmultiplayerPressurePlate* Plate);
 	// 统计激活板数和不同玩家数，并组合可选的钥匙目标前置条件。
 	void EvaluateGateState();
-	// 服务器写入与客户端 OnRep 的共同表现出口。
-	void HandleGateStateChanged();
-	// 初始加载时直接对齐目标；状态改变后只在过渡阶段启用 Tick。
+	FVector GetMeshTargetLocation() const;
+	// 服务器写入与客户端 OnRep 共用；初始对齐目标，后续仅过渡阶段启用 Tick。
 	void ApplyGateState(bool bSnapToTarget);
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop Gate|Components")
@@ -108,12 +97,10 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Coop Gate|Rules")
 	bool bRequireObjectiveComplete = false;
 
-	// (*) 使用新的运行期字段和 0 初值，合法速度始终大于 0，确保初始复制不会因等于旧蓝图默认值而省略。
-	// 不读取旧关卡保存的 DoorMoveSpeed；客户端只采用服务器发来的速度。
+	// 独立运行期字段不读取旧蓝图速度；0 为未就绪，保证服务器正速度进入初始复制。
 	UPROPERTY(VisibleInstanceOnly, Transient, Replicated, Category = "Coop Gate|Movement")
 	float RuntimeDoorMoveSpeed = 0.0f;
 
-	// 只复制逻辑开关，不复制门网格的每帧位置。
 	UPROPERTY(ReplicatedUsing = OnRep_GateOpen)
 	bool bGateOpen = false;
 

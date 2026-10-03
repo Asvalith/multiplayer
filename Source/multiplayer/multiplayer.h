@@ -6,7 +6,7 @@
 
 /*
  * 项目阅读顺序：GameInstance 管连接；GameMode 判规则；GameState 复制共享结果；
- * Key/Socket、Plate/Gate、Platform/Transporter 负责具体机关；Controller/Presenter/Widget 负责本地表现。
+ * Key/Socket、Plate/Gate、Platform/Transporter 负责具体机关；Controller/Widget 负责本地表现。
  *
  * 注释约定：
  * (*)  表示常见面试考点和架构选择，例如 GameMode/GameState 分工、RPC 与属性复制的区别。

@@ -12,16 +12,20 @@
 | 对象 | 服务器负责 | 客户端获得什么 |
 | --- | --- | --- |
 | Character | CharacterMovement 校验和移动处理 | 引擎的移动同步、预测和校正 |
-| CoopKey / KeySocket | 玩家重叠触发、归位、一次性登记 | 宝物完成状态、Actor 附着/位置；总进度见 GameState |
+| CoopKey / KeySocket | 玩家触碰钥匙，自动归位到预绑定插槽并登记一次进度 | 安装状态、Actor 附着/位置；总进度见 GameState |
 | PressurePlate | 不同玩家统计、目标条件、开关 | 开关状态和初始速度，本地播放压下/弹起 |
 | CoopGate | 合并压力板状态与不同玩家集合 | 开关状态和初始速度，本地播放开关门 |
 | MovingPlatform | 启停条件与固定轨道运动 | Actor 位置复制，默认更新频率上限 30 Hz |
 | CoopGameState | 保存 GameMode 提交的目标结果 | 目标进度、目标总数、胜利状态的一份快照 |
-| PlayerController / Presenter | 重开请求交 GameMode 校验 | 监听当前状态，补读晚到的胜利结果并显示本地 UI |
+| PlayerController | 重开请求交 GameMode 校验 | 直接订阅 GameState，补读晚到的胜利结果并显示本地 UI |
 
 属性复制表达的是当前结果，不保证客户端逐次观察到所有中间变化。
 客户端表现必须可以从当前状态恢复，不能依赖“曾收到过一次开门 RPC”。
 不同 Actor 的更新不是跨对象原子事务，不能要求宝物、插槽和 GameState 在同一帧全部到达。
+
+钥匙只保留关卡实际使用的自动归位流程。每把钥匙在关卡中设置 `DestinationSocket`，
+插槽保留 `KeyDisplayPoint` 作为安装位置；缺少绑定或安装失败时钥匙留在原地，不增加进度。
+没有角色携带槽、丢弃或走入插槽交付分支，客户端 UI 仍以 GameState 的共享结果为准。
 
 ## 静止机关的网络休眠
 

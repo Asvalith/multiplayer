@@ -131,7 +131,7 @@ function Get-RequiredAssertions {
     switch ($Mode) {
         'DedicatedSmoke' { return @('TwoRemotePlayers', 'TwoClientReceipts', 'DedicatedClientState') }
         'Flow' { return @('Join', 'ClientInputReady', 'OverlapKeys', 'PlateDistinctPlayers', 'GateRules', 'GateOpen', 'GateClosed', 'OccupancyUnpossess', 'OccupancyRepossess', 'OccupancyUncontrolledEntry', 'OccupancyLatePossess', 'DestroyedPawnCleanup', 'PlatformEndpoint', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'RestartFailureRecovery', 'Restart', 'ClientRestart', 'ClientLeave', 'ServerSurvivesClientLeave', 'PartnerVictory', 'PartnerRestart') }
-        'Keys' { return @('Join', 'KeyHeld', 'ClientKeyHeld', 'KeyInstallFailureRollback', 'KeyCommitReentryBlocked', 'KeyInstalledOnce', 'ClientKeyInstalled', 'KeyConsumeCommitted', 'KeyInstallRejectedRetainsKey', 'KeyConsumeRejectedRetainsKey', 'KeyDestroyClearsCarry', 'KeyDropRepick', 'ClientKeyRepicked') }
+        'Keys' { return @('Join', 'KeyMissingDestinationRetainsKey', 'KeyInstallFailureRollback', 'KeyCommitReentryBlocked', 'KeyInstalledOnce', 'ClientKeyInstalled', 'KeySecondOverlapCommitted', 'KeyInstallRejectedRetainsKey') }
         'LateJoin' { return @('LateJoinState', 'LateJoinKeyAttachments') }
         'Reconnect' { return @('OutageApplied', 'ConnectionLostDetected', 'ServerConnectionRetained', 'ReconnectAfterOutage', 'ReconnectStateRestored') }
         'ConnectionRetry' { return @('ConnectionFailureRecovered', 'ConnectionRetrySucceeded') }
@@ -166,7 +166,7 @@ function Get-CaseVerdict {
         $roles = if ($name -eq 'Join') { @('Server', 'Client') }
             elseif ($name -eq 'DedicatedClientState') { @('Partner', 'Client') }
             elseif ($name -like 'Partner*') { @('Partner') }
-            elseif ($name -in @('ClientInputReady', 'GateOpen', 'GateClosed', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'ClientRestart', 'ClientLeave', 'ConnectionFailureRecovered', 'ClientKeyHeld', 'ClientKeyInstalled', 'ClientKeyRepicked', 'LateJoinState', 'LateJoinKeyAttachments', 'ConnectionLostDetected', 'ReconnectStateRestored', 'ScaleClientLoad', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse')) { @('Client') }
+            elseif ($name -in @('ClientInputReady', 'GateOpen', 'GateClosed', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'ClientRestart', 'ClientLeave', 'ConnectionFailureRecovered', 'ClientKeyInstalled', 'LateJoinState', 'LateJoinKeyAttachments', 'ConnectionLostDetected', 'ReconnectStateRestored', 'ScaleClientLoad', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse')) { @('Client') }
             else { @('Server') }
         foreach ($role in $roles) {
             $passes = @($Events | Where-Object { $_.status -eq 'ASSERT' -and (Get-PropertyValue $_ 'assertion' '') -eq $name -and (Get-PropertyValue $_ 'role' '') -ceq $role -and (Get-PropertyValue $_ 'passed' $false) -ceq $true })
@@ -304,7 +304,7 @@ if ($SelfTest) {
     $wrongRoleEvents = @(ConvertFrom-CoopLog ($fixture.Replace('"Example"', '"ScaleClientLoad"')) -Token 'current' -Role 'Server' -Mode 'Flow') +
         @($events | Where-Object { $_.role -eq 'Client' })
     if ((Get-CaseVerdict $wrongRoleEvents @('ScaleClientLoad') 'Flow').status -ne 'failed') { throw 'Server assertion incorrectly satisfied a client-only load check' }
-    foreach ($clientAssertion in @('ClientInputReady', 'ClientRestartFailureRecovery', 'ConnectionFailureRecovered')) {
+    foreach ($clientAssertion in @('ClientInputReady', 'ClientRestartFailureRecovery', 'ConnectionFailureRecovered', 'ClientKeyInstalled')) {
         $clientEvents = @($events | Where-Object status -eq 'DONE') +
             @([pscustomobject]@{ status = 'ASSERT'; role = 'Client'; assertion = $clientAssertion; passed = $true })
         if ((Get-CaseVerdict $clientEvents @($clientAssertion) 'Flow').status -ne 'passed') { throw "Client assertion rejected: $clientAssertion" }

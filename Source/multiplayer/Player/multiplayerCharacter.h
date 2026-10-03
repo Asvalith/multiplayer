@@ -9,12 +9,11 @@
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
-class UmultiplayerCoopCarryComponent;
 class USpringArmComponent;
 struct FInputActionValue;
 
 /**
- * 第三人称联机角色，负责本地输入、摄像机以及携带钥匙的能力。
+ * 第三人称联机角色，负责本地输入、摄像机和移动。
  *
  * 本类只把本地 Enhanced Input 转换为 AddMovementInput / 控制器旋转，不自行发送位置 RPC。
  * ACharacter 内置的 CharacterMovement 会让 AutonomousProxy 做移动预测、把输入结果提交给服务器，
@@ -27,7 +26,7 @@ struct FInputActionValue;
  * 本地控制器；服务器上的远端 Pawn 和客户端看到的其他玩家都不能绑定本地输入。
  *
  * 职责边界：本类不判断钥匙进度、机关条件或胜利结果；这些状态由服务器玩法 Actor 和
- * GameMode 维护，角色只提供移动能力以及服务器可查询的携带组件。
+ * GameMode 维护。
  */
 UCLASS(config = Game)
 class AmultiplayerCharacter : public ACharacter
@@ -54,9 +53,6 @@ private:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCameraComponent> FollowCamera;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Carry", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UmultiplayerCoopCarryComponent> CarryComponent;
 
 	// 输入映射和动作保留为可配置资源，便于在蓝图中替换按键方案而不改 C++。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))

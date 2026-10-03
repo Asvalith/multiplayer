@@ -26,7 +26,7 @@ RunLocalDedicatedServer 不带 -Play 时，转发到统一入口的 DedicatedSmo
 | 通用 | DS 无本地玩家、Partner 收到角色/共享状态；三端分别完成且正常退出 |
 | DedicatedSmoke | 直接连接 DS；检查两个真实远端的网络角色、共享状态与独立回执。不等待其他场景的 Partner 预置步骤，不含在 All 中 |
 | Flow | 真实钥匙重叠、不同玩家计数、门开关、控制权/Pawn 清理、载人平台、双端胜利、失败重开恢复、双端重开、Client 退出后 DS 与 Partner 保持 |
-| Keys | 持有/安装/消费、提交失败不丢物、重入去重、销毁与立即重拾、远端附着收敛 |
+| Keys | 触碰预绑定钥匙自动归位、缺绑定与安装失败保留原地、重试与重复触碰去重、目标满后拒绝、提交重入保护、远端附着收敛 |
 | LateJoin | Partner 先改变目标和休眠机关；Client 后加入读取状态及归位附着 |
 | Reconnect | 仅阻断 Client 连接的 DS 出站包直到真实超时；DS 和 Partner 保留；Client 有限重连并恢复进度 |
 | ConnectionRetry | 真实连接不可达端口，项目期限到达后恢复 Idle，再连接正确地址；不是历史 CreateSession 注入 |
@@ -34,7 +34,7 @@ RunLocalDedicatedServer 不带 -Play 时，转发到统一入口的 DedicatedSmo
 | RideMotion | 原生 CMC 站立、行走、反向、自由跳跃；保存 Server/Client 四阶段指标和 Move 时间戳 |
 | Scale | 实际对象计数、客户端收齐与运动证据、服务器出站计数和 CPU CSV |
 
-Flow/Keys 由服务器放置角色触发真实 Overlap，不模拟系统键鼠。胜利 UI 检查真实 Widget 加入视口，不检查像素。使用网络身份跨重开区分两人，不依赖登录顺序。
+Flow/Keys 由服务器放置角色触发真实 Overlap，不模拟系统键鼠。胜利 UI 检查真实 Widget 加入视口，不检查像素。使用网络身份跨重开区分两人，不依赖登录顺序。历史 Keys 报告保留当时的携带路径结果，不替代当前自动归位流程的重测。
 
 Normal=0/0/0；Moderate=PktLag 100、Variance 20、Loss 2%；Harsh=200、50、5%。参数施加到三个进程，不是测得的 RTT。Reconnect 额外阻断单连接出站包，并将被测客户端 ConnectionTimeout 缩短为 5 秒；不是全服务器断网或公网 NAT 验收。
 

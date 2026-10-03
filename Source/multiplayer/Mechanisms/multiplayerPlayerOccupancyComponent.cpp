@@ -29,8 +29,7 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 	UPrimitiveComponent* InTrigger,
 	bool bInRequirePlayerControlledCharacter)
 {
-	// 保存旧人数与成员、静默清理，最后只广播最终结果；这是事件层面的合并，并非线程同步原子操作。
-	const int32 PreviousPlayerCount = GetPlayerCount();
+	// 保存旧成员、静默清理，最后只广播最终结果；这是事件层面的合并，并非线程同步原子操作。
 	TSet<TWeakObjectPtr<ACharacter>> PreviousOccupants;
 	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 	{
@@ -41,10 +40,10 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 	}
 
 	const auto BroadcastRebindIfChanged =
-		[this, PreviousPlayerCount, &PreviousOccupants]()
+		[this, &PreviousOccupants]()
 		{
 			const int32 NewPlayerCount = GetPlayerCount();
-			bool bMembershipChanged = NewPlayerCount != PreviousPlayerCount;
+			bool bMembershipChanged = NewPlayerCount != PreviousOccupants.Num();
 			if (!bMembershipChanged)
 			{
 				for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)

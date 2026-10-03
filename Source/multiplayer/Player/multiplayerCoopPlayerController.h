@@ -6,7 +6,8 @@
 #include "GameFramework/PlayerController.h"
 #include "multiplayerCoopPlayerController.generated.h"
 
-class UmultiplayerVictoryPresenterComponent;
+class AGameStateBase;
+class AmultiplayerCoopGameState;
 class UmultiplayerVictoryWidget;
 
 /** 互斥的本地界面操作；不复制，服务器规则仍由 GameMode 决定。 */
@@ -21,14 +22,8 @@ enum class ECoopVictoryAction : uint8
 };
 
 /**
- * 承接所属客户端的本地合作 UI。
- *
- * PlayerController 在服务器和它所属的客户端存在，但其他客户端不会拥有这名玩家的
- * PlayerController，因此很适合放“只属于该玩家”的输入和 UI 桥接。本项目把共享胜利结果放在
- * GameState，再由 VictoryPresenter 仅在 IsLocalController() 的实例上调用界面入口。
- *
- * (**) 本项目在 BeginPlayingState 确认客户端进入游戏；这并不保证所有复制 Actor 都已就绪，
- * 所以胜利状态的监听仍需由 Presenter 单独处理 GameState 的到达时序。
+ * 管理所属玩家的输入、胜利界面和操作请求；服务器规则仍由 GameMode 决定。
+ * 本地进入 PlayingState 后监听 GameState；状态晚到则等待就绪，绑定后补读当前结果。
  */
 UCLASS()
 class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerController
@@ -36,17 +31,7 @@ class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerControlle
 	GENERATED_BODY()
 
 public:
-	/** 创建本地表现桥接组件；是否执行界面逻辑由组件在运行时检查控制器归属。 */
-	AmultiplayerCoopPlayerController();
-
-	/** 显示项目自带的胜利界面，再通知可选蓝图表现扩展。只允许本地控制器调用。 */
-	void PresentCoopVictory();
-
-	/**
-	 * 请求服务器重新加载当前合作关卡。
-	 * (*) 客户端没有改写比赛的权限，因此本地入口只负责发送 Server RPC，GameMode 会再次检查
-	 * 当前是否已经胜利以及是否已有重开请求。
-	 */
+	/** 请求服务器重开；GameMode 再次检查胜利状态与重复请求。 */
 	UFUNCTION(BlueprintCallable, Category = "Coop|Flow")
 	void RequestRestartCurrentRound();
 
@@ -82,6 +67,15 @@ protected:
 	void ClientRestartFailed(const FText& Reason);
 
 private:
+	/** 切换订阅并补读当前胜利状态；同一局重绑不重复通知 UI。 */
+	void RefreshVictoryBinding();
+	void ClearVictoryBinding();
+	void HandleGameStateSet(AGameStateBase* GameState);
+
+	/** 只向本地视口展示一次，再通知可选蓝图表现。 */
+	UFUNCTION()
+	void PresentCoopVictory();
+
 	/** 清除本地界面与焦点状态；可重复调用，不修改共享胜利结果。 */
 	void RemoveVictoryScreen();
 	void SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message);
@@ -91,9 +85,12 @@ private:
 	// 单请求在途，失败回执只发一次；当前没有超时取消，不需要另维护请求编号。
 	bool bServerRestartPending = false;
 
-	// 仅本地使用的表现桥梁，不需要复制，也不参与服务器规则。
-	UPROPERTY(VisibleAnywhere, Category = "Coop|Victory")
-	TObjectPtr<UmultiplayerVictoryPresenterComponent> VictoryPresenter;
+	// 保存外部订阅目标，重绑及 EndPlay 时对称解绑；均不复制。
+	UPROPERTY(Transient)
+	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
+	TWeakObjectPtr<UWorld> GameStateEventWorld;
+	FDelegateHandle GameStateSetEventHandle;
+	bool bVictoryNotified = false;
 
 	// 只存在于本地视口，不复制，也不参与胜利规则。
 	UPROPERTY(Transient)

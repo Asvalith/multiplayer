@@ -68,7 +68,7 @@ void AmultiplayerGameMode::BeginPlay()
 }
 
 /*
- * 先校验进度，再同步完成钥匙操作，最后发布进度；不能先销毁钥匙再发现本局不接受目标。
+ * 先校验进度，再同步安装钥匙，最后发布进度；拒绝的请求不能先改变钥匙状态。
  * 插槽负责自身去重，本函数阻止提交期间的嵌套登记；这不是跨网络的原子事务。
  */
 bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
@@ -88,7 +88,7 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 		return false;
 	}
 
-	// 借用的回调仅在本栈帧执行；拒绝和操作失败都不发布进度，也不会提前消耗钥匙。
+	// 借用的回调仅在本栈帧执行；拒绝或安装失败都不发布进度。
 	TGuardValue<bool> RegisterGuard(bRegisteringKey, true);
 	if (!CommitKey())
 	{

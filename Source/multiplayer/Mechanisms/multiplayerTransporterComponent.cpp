@@ -145,17 +145,6 @@ void UmultiplayerTransporterComponent::ConfigureWorldTargets(
 	}
 }
 
-/** 根据期望激活状态选起点或终点；不读取跟随平台移动的端点组件。 */
-FVector UmultiplayerTransporterComponent::GetTargetLocation() const
-{
-	if (!bTransportActive)
-	{
-		return StartLocation;
-	}
-
-	return ActiveLocation;
-}
-
 /** 只结束运动调度，不修改位置；之后新的激活通知仍可重新开启 Tick。 */
 void UmultiplayerTransporterComponent::FinishMovement()
 {

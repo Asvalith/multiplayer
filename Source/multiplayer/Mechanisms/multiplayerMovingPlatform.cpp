@@ -155,16 +155,10 @@ void AmultiplayerMovingPlatform::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
-/** 仅自身占用模式消费人数变化；重新读当前人数后更新平台期望端点。 */
+/** 人数变化后按当前激活来源更新平台期望端点。 */
 void AmultiplayerMovingPlatform::HandleOccupancyChanged(int32 /*玩家数量*/)
 {
-	if (!HasAuthority()
-		|| ActivationSource != EMovingPlatformActivationSource::PlatformOccupancy)
-	{
-		return;
-	}
-
-	// 不直接相信事件参数，重新读取完整当前状态，统一所有触发来源的计算路径。
+	// 权威和激活来源统一由 RefreshActivation 检查；参数可能已被重入通知更新。
 	RefreshActivation();
 }
 
@@ -203,6 +197,6 @@ void AmultiplayerMovingPlatform::RefreshActivation()
 	const bool bShouldActivate =
 		ActivationSource == EMovingPlatformActivationSource::ExternalPressurePlate
 			? ActivationPlate != nullptr && ActivationPlate->IsPlateActive()
-			: PlayerOccupancy->GetPlayerCount() >= GetRequiredOccupantCount();
+			: PlayerOccupancy->GetPlayerCount() >= RequiredPlayers;
 	Transporter->SetTransportActive(bShouldActivate);
 }

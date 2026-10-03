@@ -47,7 +47,7 @@ public:
 
 private:
 	// 根据当前激活状态选择目标；端点由平台 BeginPlay 在开始移动前缓存为固定世界坐标。
-	FVector GetTargetLocation() const;
+	FVector GetTargetLocation() const { return bTransportActive ? ActiveLocation : StartLocation; }
 	// 仅清除运动标记并关闭 Tick；移动与最终位置对齐由调用方负责。
 	void FinishMovement();
 

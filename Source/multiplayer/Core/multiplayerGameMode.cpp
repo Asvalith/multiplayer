@@ -57,7 +57,16 @@ void AmultiplayerGameMode::BeginPlay()
 		GetGameState<AmultiplayerCoopGameState>())
 	{
 		FmultiplayerCoopObjectiveState InitialState;
-		InitialState.RequiredKeys = ResolveRequiredKeys();
+		for (TActorIterator<AmultiplayerKeySocket> SocketIt(GetWorld()); SocketIt; ++SocketIt)
+		{
+			++InitialState.RequiredKeys;
+		}
+		// 无插槽时保留原有回退目标，避免空关卡被当作目标已完成。
+		if (InitialState.RequiredKeys == 0)
+		{
+			constexpr int32 FallbackRequiredKeys = 4;
+			InitialState.RequiredKeys = FallbackRequiredKeys;
+		}
 		CoopState->ApplyAuthoritativeState(InitialState);
 		UE_LOG(
 			LogMultiplayer,
@@ -73,8 +82,7 @@ void AmultiplayerGameMode::BeginPlay()
  */
 bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 {
-	// 即使当前函数通常由服务器插槽调用，仍保留 Authority 检查，防止以后新增入口时破坏写权限边界。
-	if (!HasAuthority() || bRegisteringKey)
+	if (bRegisteringKey)
 	{
 		return false;
 	}
@@ -95,7 +103,7 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 		return false;
 	}
 
-	// 复制旧快照、只推进一个字段，再通过唯一写入口提交；不会遗漏 RequiredKeys 或错误重置胜利状态。
+	// 保留其余快照字段，只推进钥匙进度。
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	++NewState.ActivatedKeys;
 	CoopState->ApplyAuthoritativeState(NewState);
@@ -110,8 +118,7 @@ bool AmultiplayerGameMode::TryCompleteCoopGame(
 	int32 CurrentPlayers,
 	int32 RequiredPlayers)
 {
-	// 区域只提供当前观测人数，最终门槛在 GameMode 再检查；RequiredPlayers 至少按 1 处理。
-	if (!HasAuthority() || CurrentPlayers < FMath::Max(1, RequiredPlayers))
+	if (CurrentPlayers < FMath::Max(1, RequiredPlayers))
 	{
 		return false;
 	}
@@ -125,7 +132,6 @@ bool AmultiplayerGameMode::TryCompleteCoopGame(
 		return false;
 	}
 
-	// bGameWon 只允许从 false 单向推进到 true；重复区域事件会在上面的既有状态检查中返回。
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	NewState.bGameWon = true;
 	CoopState->ApplyAuthoritativeState(NewState);
@@ -142,8 +148,7 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 	UWorld* World = GetWorld();
 	AmultiplayerCoopGameState* CoopState =
 		GetGameState<AmultiplayerCoopGameState>();
-	if (!HasAuthority()
-		|| World == nullptr || World->bIsTearingDown || GameSession == nullptr
+	if (World == nullptr || World->bIsTearingDown || GameSession == nullptr
 		|| RequestingController == nullptr
 		|| RequestingController->GetWorld() != World
 		|| CoopState == nullptr
@@ -194,7 +199,7 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 {
 	UWorld* World = GetWorld();
-	if (!HasAuthority() || !PendingRestart.bRequested || World == nullptr || World->bIsTearingDown
+	if (!PendingRestart.bRequested || World == nullptr || World->bIsTearingDown
 		|| World->GetAuthGameMode() != this)
 	{
 		return false;
@@ -240,23 +245,4 @@ bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 		Requester->NotifyRestartFailed(Message);
 	}
 	return true;
-}
-
-/*
- * 服务器在开局扫描实际摆放的插槽数量，避免“关卡有三处目标、配置却写四”导致无法完成。
- * 没有插槽时回退到配置值；当前调用链只在开局扫描一次，不形成运行期轮询成本。
- */
-int32 AmultiplayerGameMode::ResolveRequiredKeys() const
-{
-	// (**) 优先按关卡实际摆放数量计算，避免配置值与插槽数量不一致导致永远无法胜利。
-	int32 PlacedSocketCount = 0;
-	for (TActorIterator<AmultiplayerKeySocket> SocketIt(GetWorld()); SocketIt; ++SocketIt)
-	{
-		++PlacedSocketCount;
-	}
-
-	return PlacedSocketCount > 0
-		? PlacedSocketCount
-		// 无插槽时保留非零目标，避免空关卡被直接判为目标完成。
-		: FMath::Max(1, RequiredKeys);
 }

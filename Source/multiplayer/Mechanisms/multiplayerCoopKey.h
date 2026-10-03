@@ -51,8 +51,6 @@ protected:
 	void OnRep_Installed();
 
 private:
-	void RefreshKeyState();
-
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
 	TObjectPtr<USceneComponent> SceneRoot;
 

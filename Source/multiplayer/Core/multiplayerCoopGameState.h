@@ -40,14 +40,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FmultiplayerGameWonEvent);
 
 /**
  * 向所有客户端复制的合作目标状态。
- * (*) GameMode 只存在于服务器，GameState 会复制给客户端，因此规则由 GameMode 判定，
- * 共享进度由 GameState 发布。
- * (*) 将进度和胜利放进同一个快照复制，可避免多个属性分批到达时出现短暂的矛盾状态。
- * (**) 属性复制保证客户端最终得到服务器的最新状态，但不承诺每一个中间值都被逐次观察到；
- * 因此界面和机关表现应根据“当前快照”刷新，不能依赖收到过所有历史变化。
- *
- * OnObjectiveProgressChanged 与 OnGameWon 是每台机器上的本地通知，不是 RPC；服务器赋值和
- * 客户端 RepNotify 分别触发它们，监听者只能消费结果，不能借事件绕过服务器写权限。
+ * GameMode 判定规则并写入快照；客户端根据最新快照刷新，不依赖收到每个中间值。
+ * 两个委托都是本地通知，不是 RPC；服务器主动调用 OnRep，客户端由复制触发。
  */
 UCLASS()
 class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameState
@@ -55,7 +49,6 @@ class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameState
 	GENERATED_BODY()
 
 public:
-	// 注册 ObjectiveState 的复制规则；仅声明 ReplicatedUsing 并不会自动进入复制列表。
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -73,13 +66,7 @@ public:
 			&& ObjectiveState.ActivatedKeys >= ObjectiveState.RequiredKeys;
 	}
 
-	/**
-	 * 权威状态的唯一写入口。
-	 *
-	 * 写入前统一修正范围并拒绝完全相同的快照，防止无效广播、无意义的 UI 刷新和额外网络更新。
-	 * (**) RepNotify 会在客户端收到复制时执行，但服务器修改属性后不会自动执行，
-	 * 所以服务器主动通知本地规则监听者；远端客户端通过 OnRep 更新自己的表现。
-	 */
+	/** 服务器唯一写入口：修正范围，忽略相同快照，提交后通知本地监听者并请求复制。 */
 	void ApplyAuthoritativeState(
 		const FmultiplayerCoopObjectiveState& NewObjectiveState);
 
@@ -91,14 +78,11 @@ public:
 	FmultiplayerGameWonEvent OnGameWon;
 
 protected:
-	// 客户端收到 ObjectiveState 后的复制通知，转入两端共用的 HandleObjectiveStateChanged。
+	// 两端共用的通知出口；广播前保存快照，避免监听者同步改状态造成重复胜利通知。
 	UFUNCTION()
 	void OnRep_ObjectiveState();
 
 private:
-	// 统一发布进度和胜利事件；内部先保存不可变快照，避免进度监听者同步改状态造成重入误报。
-	void HandleObjectiveStateChanged();
-
 	// GameMode 写、GameState 复制；客户端不能通过本对象提交玩法结果。
 	UPROPERTY(ReplicatedUsing = OnRep_ObjectiveState)
 	FmultiplayerCoopObjectiveState ObjectiveState;

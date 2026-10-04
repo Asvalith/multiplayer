@@ -2,6 +2,9 @@
 
 #include "UI/multiplayerVictoryWidget.h"
 
+#include "Core/multiplayerCoopGameState.h"
+#include "Core/multiplayerLog.h"
+#include "Engine/World.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/SOverlay.h"
@@ -107,4 +110,113 @@ FReply UmultiplayerVictoryWidget::HandleLeaveClicked()
 		PlayerController->LeaveCoopSession();
 	}
 	return FReply::Handled();
+}
+
+void AmultiplayerCoopHUD::BeginPlay()
+{
+	Super::BeginPlay();
+	if (PlayerOwner == nullptr || !PlayerOwner->IsLocalController())
+	{
+		return;
+	}
+
+	//菜单的 UIOnly 修改的是共享视口；换控制器后显式恢复，不能依赖旧菜单析构。
+	// HUD 初始化时恢复一次，Controller 再次进入 PlayingState 不会覆盖已有胜利界面的焦点。
+	PlayerOwner->bShowMouseCursor = false;
+	PlayerOwner->SetInputMode(FInputModeGameOnly());
+	UWorld* World = GetWorld();
+	RefreshVictoryBinding(World != nullptr ? World->GetGameState() : nullptr);
+}
+
+void AmultiplayerCoopHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ClearVictoryBinding();
+	if (VictoryWidget != nullptr)
+	{
+		if (AmultiplayerCoopPlayerController* Controller = Cast<AmultiplayerCoopPlayerController>(PlayerOwner))
+		{
+			Controller->OnVictoryActionChanged.RemoveAll(VictoryWidget.Get());
+		}
+		VictoryWidget->RemoveFromParent();
+		VictoryWidget = nullptr;
+	}
+	if (PlayerOwner != nullptr && PlayerOwner->IsLocalController())
+	{
+		PlayerOwner->bShowMouseCursor = false;
+		PlayerOwner->SetInputMode(FInputModeGameOnly());
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void AmultiplayerCoopHUD::RefreshVictoryBinding(AGameStateBase* GameState)
+{
+	ClearVictoryBinding();
+	CoopGameState = Cast<AmultiplayerCoopGameState>(GameState);
+	if (CoopGameState == nullptr)
+	{
+		// PlayingState 不保证 GameState 已到达，等待明确事件而非 Tick 轮询。
+		if (UWorld* World = GetWorld())
+		{
+			GameStateEventWorld = World;
+			GameStateSetEventHandle = World->GameStateSetEvent.AddUObject(
+				this, &AmultiplayerCoopHUD::RefreshVictoryBinding);
+		}
+		return;
+	}
+
+	CoopGameState->OnGameWon.AddUniqueDynamic(this, &AmultiplayerCoopHUD::PresentCoopVictory);
+	// 晚加入或晚绑定时，胜利通知可能已经发生，必须补读快照。
+	if (CoopGameState->GetObjectiveState().bGameWon)
+	{
+		PresentCoopVictory();
+	}
+}
+
+void AmultiplayerCoopHUD::ClearVictoryBinding()
+{
+	if (UWorld* BoundWorld = GameStateEventWorld.Get())
+	{
+		BoundWorld->GameStateSetEvent.Remove(GameStateSetEventHandle);
+	}
+	GameStateSetEventHandle.Reset();
+	GameStateEventWorld.Reset();
+	if (IsValid(CoopGameState))
+	{
+		CoopGameState->OnGameWon.RemoveDynamic(this, &AmultiplayerCoopHUD::PresentCoopVictory);
+	}
+	CoopGameState = nullptr;
+}
+
+/** 创建一次本地胜利界面，并把输入焦点交给可交互按钮；重复通知复用已有展示结果。 */
+void AmultiplayerCoopHUD::PresentCoopVictory()
+{
+	AmultiplayerCoopPlayerController* Controller = Cast<AmultiplayerCoopPlayerController>(PlayerOwner);
+	if (Controller == nullptr || !Controller->IsLocalController() || VictoryWidget != nullptr)
+	{
+		return;
+	}
+
+	// 先保存实例再展示/广播，防止同步重入；不再另存一份“已经通知”标记。
+	VictoryWidget = CreateWidget<UmultiplayerVictoryWidget>(Controller, UmultiplayerVictoryWidget::StaticClass());
+	if (VictoryWidget == nullptr)
+	{
+		UE_LOG(LogMultiplayer, Error, TEXT("Victory UI could not be created."));
+		return;
+	}
+	VictoryWidget->AddToViewport(100);
+	Controller->OnVictoryActionChanged.AddUObject(VictoryWidget.Get(), &UmultiplayerVictoryWidget::SetActionFeedback);
+	VictoryWidget->SetActionFeedback(Controller->GetVictoryAction() == ECoopVictoryAction::Idle, FText::GetEmpty());
+	// 胜利界面接管输入，避免点击按钮的同时继续操纵角色；EndPlay 时对称恢复。
+	Controller->bShowMouseCursor = true;
+	FInputModeUIOnly InputMode;
+	if (const TSharedPtr<SWidget> InitialFocus = VictoryWidget->GetInitialFocusWidget(); InitialFocus.IsValid())
+	{
+		InputMode.SetWidgetToFocus(InitialFocus);
+	}
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	Controller->SetInputMode(InputMode);
+	UE_LOG(LogMultiplayer, Log, TEXT("Victory UI displayed with restart and leave actions."));
+
+	// 蓝图事件是可选的表现扩展，不再承担“是否存在胜利界面”的基础职责。
+	Controller->ReceiveCoopGameWon();
 }

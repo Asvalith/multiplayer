@@ -4,11 +4,14 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "GameFramework/HUD.h"
 #include "multiplayerVictoryWidget.generated.h"
 
 class SButton;
 class STextBlock;
 class SWidget;
+class AGameStateBase;
+class AmultiplayerCoopGameState;
 
 /**
  * 无需蓝图即可工作的胜利界面。
@@ -26,7 +29,7 @@ class MULTIPLAYER_API UmultiplayerVictoryWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	// 控制器使用的界面接口。
+	// HUD 使用的界面接口；控制器只发布操作反馈，不持有 Widget。
 	// UIOnly 输入模式必须聚焦真正支持键盘焦点的控件，不能把根 Overlay 当作焦点目标。
 	TSharedPtr<SWidget> GetInitialFocusWidget() const;
 
@@ -53,4 +56,39 @@ private:
 	// Slate 引用用于事件驱动刷新；在 ReleaseSlateResources 中与控件树一起释放。
 	TSharedPtr<SButton> RestartButton;
 	TSharedPtr<STextBlock> ActionMessage;
+};
+
+/**
+ * 本地胜利展示：监听 GameState，创建 Widget，并管理输入模式。
+ * 状态晚到则等待就绪，绑定后补读当前结果；不判断胜利规则，不执行玩家请求。
+ */
+UCLASS()
+class MULTIPLAYER_API AmultiplayerCoopHUD : public AHUD
+{
+	GENERATED_BODY()
+
+protected:
+	// 本地 UI 生命周期，与 Controller 的请求生命周期分开。
+	virtual void BeginPlay() override;
+	/** 退出当前 World 时移除视口界面、释放引用并还原输入模式。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+private:
+	/** 切换订阅并补读当前胜利状态；同一局重绑不重复通知 UI。 */
+	void RefreshVictoryBinding(AGameStateBase* GameState);
+	void ClearVictoryBinding();
+
+	/** 只向本地视口展示一次，再通知可选蓝图表现。 */
+	UFUNCTION()
+	void PresentCoopVictory();
+
+	// 保存外部订阅目标，重绑及 EndPlay 时对称解绑；均不复制。
+	UPROPERTY(Transient)
+	TObjectPtr<AmultiplayerCoopGameState> CoopGameState;
+	TWeakObjectPtr<UWorld> GameStateEventWorld;
+	FDelegateHandle GameStateSetEventHandle;
+
+	// 只存在于本地视口，不复制，也不参与胜利规则。
+	UPROPERTY(Transient)
+	TObjectPtr<UmultiplayerVictoryWidget> VictoryWidget;
 };

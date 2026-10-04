@@ -73,8 +73,29 @@ void AmultiplayerCoopGate::BeginPlay()
 		return;
 	}
 
-	RebuildRuntimeRequiredPlates();
-	BindRequiredPlates();
+	// 只绑定有效且去重的依赖；建立运行时列表时一并订阅，无需再次遍历。
+	RuntimeRequiredPlates.Reset();
+	RuntimeRequiredPlates.Reserve(RequiredPlates.Num());
+	for (AmultiplayerPressurePlate* Plate : RequiredPlates)
+	{
+		if (!IsValid(Plate) || Plate->IsActorBeingDestroyed() || RuntimeRequiredPlates.Contains(Plate))
+		{
+			continue;
+		}
+		RuntimeRequiredPlates.Add(Plate);
+		// 激活状态变化覆盖普通开关条件；占用变化覆盖“仍激活但不同玩家集合已改变”。
+		Plate->OnPlateActiveChanged.AddUniqueDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateChanged);
+		Plate->OnPlateOccupancyChanged.AddUniqueDynamic(
+			this, &AmultiplayerCoopGate::HandleRequiredPlateOccupancyChanged);
+		Plate->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateDestroyed);
+	}
+	if (RuntimeRequiredPlates.Num() < GetRequiredPlateCount())
+	{
+		UE_LOG(LogMultiplayer, Error,
+			TEXT("CoopGate[%s] invalid setup: Required=%d UniqueValidPlates=%d."),
+			*GetName(), GetRequiredPlateCount(), RuntimeRequiredPlates.Num());
+	}
+
 	if (bRequireObjectiveComplete)
 	{
 		CoopGameState = GetWorld()->GetGameState<AmultiplayerCoopGameState>();
@@ -89,7 +110,13 @@ void AmultiplayerCoopGate::BeginPlay()
 
 void AmultiplayerCoopGate::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	UnbindRequiredPlates();
+	for (AmultiplayerPressurePlate* Plate : RuntimeRequiredPlates)
+	{
+		if (IsValid(Plate))
+		{
+			UnbindRequiredPlate(Plate);
+		}
+	}
 	RuntimeRequiredPlates.Reset();
 	if (CoopGameState != nullptr)
 	{
@@ -115,59 +142,6 @@ void AmultiplayerCoopGate::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 
 	DOREPLIFETIME(AmultiplayerCoopGate, bGateOpen);
 	DOREPLIFETIME_CONDITION(AmultiplayerCoopGate, RuntimeDoorMoveSpeed, COND_InitialOnly);
-}
-
-int32 AmultiplayerCoopGate::GetRequiredPlateCount() const
-{
-	return FMath::Max(1, RequiredActivePlateCount);
-}
-
-void AmultiplayerCoopGate::RebuildRuntimeRequiredPlates()
-{
-	RuntimeRequiredPlates.Reset();
-	RuntimeRequiredPlates.Reserve(RequiredPlates.Num());
-	for (AmultiplayerPressurePlate* Plate : RequiredPlates)
-	{
-		if (IsValid(Plate)
-			&& !Plate->IsActorBeingDestroyed()
-			&& !RuntimeRequiredPlates.Contains(Plate))
-		{
-			RuntimeRequiredPlates.Add(Plate);
-		}
-	}
-
-	if (RuntimeRequiredPlates.Num() < GetRequiredPlateCount())
-	{
-		UE_LOG(LogMultiplayer, Error,
-			TEXT("CoopGate[%s] invalid setup: Required=%d UniqueValidPlates=%d."),
-			*GetName(), GetRequiredPlateCount(), RuntimeRequiredPlates.Num());
-	}
-}
-
-void AmultiplayerCoopGate::BindRequiredPlates()
-{
-	for (AmultiplayerPressurePlate* Plate : RuntimeRequiredPlates)
-	{
-		if (IsValid(Plate))
-		{
-			// 激活状态变化覆盖普通开关条件；占用变化覆盖“仍激活但不同玩家集合已改变”。
-			Plate->OnPlateActiveChanged.AddUniqueDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateChanged);
-			Plate->OnPlateOccupancyChanged.AddUniqueDynamic(
-				this, &AmultiplayerCoopGate::HandleRequiredPlateOccupancyChanged);
-			Plate->OnDestroyed.AddUniqueDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateDestroyed);
-		}
-	}
-}
-
-void AmultiplayerCoopGate::UnbindRequiredPlates()
-{
-	for (AmultiplayerPressurePlate* Plate : RuntimeRequiredPlates)
-	{
-		if (IsValid(Plate))
-		{
-			UnbindRequiredPlate(Plate);
-		}
-	}
 }
 
 void AmultiplayerCoopGate::UnbindRequiredPlate(AmultiplayerPressurePlate* Plate)
@@ -233,13 +207,10 @@ void AmultiplayerCoopGate::EvaluateGateState()
 
 		Plate->GetOccupyingCharacters(PlateOccupants);
 	}
-	// GetOccupyingCharacters 追加到同一数组，再跨板去重。
+	// GetOccupyingCharacters 只追加有效角色，再跨板去重。
 	for (ACharacter* Occupant : PlateOccupants)
 	{
-		if (Occupant != nullptr)
-		{
-			DistinctPlayers.Add(Occupant);
-		}
+		DistinctPlayers.Add(Occupant);
 	}
 
 	const int32 RequiredCount = GetRequiredPlateCount();

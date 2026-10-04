@@ -32,7 +32,8 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 		}
 	}
 
-	UnbindTriggerInternal();
+	// 静默清理供普通解绑和重绑定复用，由调用方统一通知最终状态。
+	UnbindTrigger(false);
 	BoundTrigger = InTrigger;
 	bRequirePlayerControlledCharacter = bInRequirePlayerControlledCharacter;
 
@@ -86,15 +87,9 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 	}
 }
 
-void UmultiplayerPlayerOccupancyComponent::UnbindTrigger()
+void UmultiplayerPlayerOccupancyComponent::UnbindTrigger(bool bNotifyChange)
 {
-	const int32 PreviousPlayerCount = GetPlayerCount();
-	UnbindTriggerInternal();
-	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
-}
-
-void UmultiplayerPlayerOccupancyComponent::UnbindTriggerInternal()
-{
+	const int32 PreviousPlayerCount = bNotifyChange ? GetPlayerCount() : 0;
 	// 先解除触发体回调，再清角色回调；避免清理过程中又收到新的 Begin/EndOverlap。
 	if (BoundTrigger != nullptr)
 	{
@@ -115,6 +110,10 @@ void UmultiplayerPlayerOccupancyComponent::UnbindTriggerInternal()
 		}
 	}
 	Occupants.Reset();
+	if (bNotifyChange)
+	{
+		BroadcastIfPlayerCountChanged(PreviousPlayerCount);
+	}
 }
 
 int32 UmultiplayerPlayerOccupancyComponent::GetPlayerCount() const

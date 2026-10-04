@@ -22,26 +22,18 @@ inline bool MoveTo(USceneComponent& Mesh, const FVector& TargetLocation,
 	const bool bWorldSpace = Space == ESpace::World;
 	const FVector CurrentLocation = bWorldSpace ? Mesh.GetComponentLocation() : Mesh.GetRelativeLocation();
 	const FVector NewLocation = FMath::VInterpConstantTo(CurrentLocation, TargetLocation, DeltaSeconds, Speed);
-	const auto SetLocation = [&Mesh, bWorldSpace](const FVector& Location)
+	const bool bReachedTarget = NewLocation.Equals(TargetLocation, Tolerance);
+	// 先确定最终位置，再提交一次变换，避免到位帧先移动、又贴合端点。
+	const FVector FinalLocation = bReachedTarget ? TargetLocation : NewLocation;
+	if (bWorldSpace)
 	{
-		if (bWorldSpace)
-		{
-			Mesh.SetWorldLocation(Location);
-		}
-		else
-		{
-			Mesh.SetRelativeLocation(Location);
-		}
-	};
-
-	SetLocation(NewLocation);
-	if (!NewLocation.Equals(TargetLocation, Tolerance))
-	{
-		return false;
+		Mesh.SetWorldLocation(FinalLocation);
 	}
-
-	SetLocation(TargetLocation);
-	return true;
+	else
+	{
+		Mesh.SetRelativeLocation(FinalLocation);
+	}
+	return bReachedTarget;
 }
 
 }

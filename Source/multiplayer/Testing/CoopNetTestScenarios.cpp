@@ -7,6 +7,7 @@
 #include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameMode.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/NetDriver.h"
 #include "Engine/NetConnection.h"
 #include "Engine/World.h"
@@ -534,16 +535,29 @@ void UCoopNetTestDriver::ScenarioClientTick(UWorld* World)
 				FString::Printf(TEXT("Real CMC base samples=%d/%d; max horizontal offset=%.1f cm; no visual smoothness claim"), RideBasedSamples, RideSamples, RideMaxOffset));
 		}
 	}
-	if (Command == TEXT("Victory") && State->GetObjectiveState().bGameWon)
+	if (Command == TEXT("Victory") && State->GetObjectiveState().bGameWon && !SentReceipts.Contains(TEXT("ClientVictoryState")))
 	{
-		const FObjectPropertyBase* WidgetProperty = FindFProperty<FObjectPropertyBase>(PC->GetClass(), TEXT("VictoryWidget"));
-		auto* Widget = WidgetProperty ? Cast<UUserWidget>(WidgetProperty->GetObjectPropertyValue_InContainer(PC)) : nullptr;
-		if (Widget && Widget->IsInViewport()) SendReceipt(TEXT("ClientVictoryState"), true, TEXT("Remote GameState won and real local VictoryWidget added to viewport; not pixel validation"));
+		AHUD* HUD = PC->GetHUD();
+		const FObjectPropertyBase* WidgetProperty = HUD ? FindFProperty<FObjectPropertyBase>(HUD->GetClass(), TEXT("VictoryWidget")) : nullptr;
+		auto* Widget = WidgetProperty ? Cast<UUserWidget>(WidgetProperty->GetObjectPropertyValue_InContainer(HUD)) : nullptr;
+		if (Widget && Widget->IsInViewport())
+		{
+			// 不写胜利状态；重复本地通知和重新进入 Playing 均不能重建 UI 或夺走界面焦点。
+			State->OnGameWon.Broadcast();
+			State->OnGameWon.Broadcast();
+			PC->ChangeState(NAME_Spectating);
+			PC->ChangeState(NAME_Playing);
+			SendReceipt(TEXT("ClientVictoryState"), WidgetProperty->GetObjectPropertyValue_InContainer(HUD) == Widget
+				&& Widget->IsInViewport() && PC->bShowMouseCursor && World->GetGameViewport()
+				&& World->GetGameViewport()->IgnoreInput(),
+				TEXT("HUD owns one victory widget; duplicate notifications and Playing re-entry preserve UI input; not pixel validation"));
+		}
 	}
 	if (Command == TEXT("Restart") && Phase != TEXT("Restarting"))
 	{
-		const FObjectPropertyBase* WidgetProperty = FindFProperty<FObjectPropertyBase>(PC->GetClass(), TEXT("VictoryWidget"));
-		auto* Widget = WidgetProperty ? Cast<UmultiplayerVictoryWidget>(WidgetProperty->GetObjectPropertyValue_InContainer(PC)) : nullptr;
+		AHUD* HUD = PC->GetHUD();
+		const FObjectPropertyBase* WidgetProperty = HUD ? FindFProperty<FObjectPropertyBase>(HUD->GetClass(), TEXT("VictoryWidget")) : nullptr;
+		auto* Widget = WidgetProperty ? Cast<UmultiplayerVictoryWidget>(WidgetProperty->GetObjectPropertyValue_InContainer(HUD)) : nullptr;
 		if (Widget == nullptr) return;
 		PreviousWorld = World; SetPhase(TEXT("Restarting"));
 		Widget->HandleRestartClicked();
@@ -551,14 +565,20 @@ void UCoopNetTestDriver::ScenarioClientTick(UWorld* World)
 	}
 	if (Command == TEXT("RestartFailure"))
 	{
-		const FObjectPropertyBase* WidgetProperty = FindFProperty<FObjectPropertyBase>(PC->GetClass(), TEXT("VictoryWidget"));
-		auto* Widget = WidgetProperty ? Cast<UmultiplayerVictoryWidget>(WidgetProperty->GetObjectPropertyValue_InContainer(PC)) : nullptr;
+		AHUD* HUD = PC->GetHUD();
+		const FObjectPropertyBase* WidgetProperty = HUD ? FindFProperty<FObjectPropertyBase>(HUD->GetClass(), TEXT("VictoryWidget")) : nullptr;
+		auto* Widget = WidgetProperty ? Cast<UmultiplayerVictoryWidget>(WidgetProperty->GetObjectPropertyValue_InContainer(HUD)) : nullptr;
 		if (Widget == nullptr) return;
 		if (!SentReceipts.Contains(TEXT("RestartFailureClick")))
 		{
 			SentReceipts.Add(TEXT("RestartFailureClick"));
 			Widget->HandleRestartClicked();
 			Widget->HandleRestartClicked(); // 重复点击不能提交第二次有效请求。
+			GameInstance->OnLeaveFailed.Broadcast(FText::FromString(TEXT("Unrelated leave failure during restart")));
+			Assert(TEXT("RestartIgnoresUnrelatedFailure"),
+				CastChecked<AmultiplayerCoopPlayerController>(PC)->GetVictoryAction() == ECoopVictoryAction::RestartPending
+				&& !Widget->GetIsEnabled(), TEXT("Leave failure cannot unlock a pending restart"));
+			if (bDone) return;
 		}
 		if (CastChecked<AmultiplayerCoopPlayerController>(PC)->GetVictoryAction() == ECoopVictoryAction::Idle)
 		{

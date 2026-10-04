@@ -17,7 +17,8 @@
 | CoopGate | 合并压力板状态与不同玩家集合 | 开关状态和初始速度，本地播放开关门 |
 | MovingPlatform | 启停条件与固定轨道运动 | Actor 位置复制，默认更新频率上限 30 Hz |
 | CoopGameState | 保存 GameMode 提交的目标结果 | 目标进度、目标总数、胜利状态的一份快照 |
-| PlayerController | 重开请求交 GameMode 校验 | 直接订阅 GameState，补读晚到的胜利结果并显示本地 UI |
+| PlayerController | 重开请求交 GameMode 校验，失败回复所属客户端 | 管理重开 / 退出操作状态，通过本地委托向 Widget 发布反馈 |
+| CoopHUD / VictoryWidget | 无共享规则 | HUD 订阅 GameState 并补读胜利结果，创建 / 清理界面与管理输入；Widget 展示反馈、转交按钮意图 |
 
 属性复制表达的是当前结果，不保证客户端逐次观察到所有中间变化。
 客户端表现必须可以从当前状态恢复，不能依赖“曾收到过一次开门 RPC”。

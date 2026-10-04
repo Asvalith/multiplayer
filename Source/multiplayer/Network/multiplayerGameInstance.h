@@ -31,6 +31,10 @@ class MULTIPLAYER_API UmultiplayerGameInstance : public UGameInstance
 	GENERATED_BODY()
 
 public:
+	// 生命周期：读取配置、绑定全局事件；结束时清理计时器与订阅。
+	virtual void Init() override;
+	virtual void Shutdown() override;
+
 	// 连接请求与成功确认。拒绝请求不覆盖现有连接数据。
 	// 仅接受 hostname/IPv4:port，不允许地图路径、URL 参数或 listen 选项混入。
 	UFUNCTION(BlueprintCallable, Category = "Network")
@@ -50,10 +54,6 @@ public:
 
 	FMultiplayerConnectionChanged OnConnectionChanged;
 	FMultiplayerLeaveFailed OnLeaveFailed;
-
-	// 生命周期：读取配置、绑定全局事件；结束时清理计时器与订阅。
-	virtual void Init() override;
-	virtual void Shutdown() override;
 
 private:
 	// 连接执行与重试流程。

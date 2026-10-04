@@ -20,32 +20,34 @@
 AmultiplayerCharacter::AmultiplayerCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	// 胶囊体负责角色移动碰撞，尺寸与默认第三人称模型匹配。
+	//胶囊体负责角色移动碰撞，尺寸与默认第三人称模型匹配。
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
-	// 控制器旋转只驱动镜头，角色朝向交给移动方向，避免移动时被镜头强行带转。
+	//身体不直接跟随鼠标旋转
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
 
-	// (*) 使用 CharacterMovement 的移动预测与服务器校正，不手动复制角色位置。
-	GetCharacterMovement()->bOrientRotationToMovement = true;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
+	//身体朝向由移动组件控制，移动时自动旋转到输入方向。
+	UCharacterMovementComponent* Movement = GetCharacterMovement();
+	Movement->bOrientRotationToMovement = true;
+	Movement->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
 
 	// 手感参数保留在构造默认值中，也可以在角色蓝图里覆盖，调试时无需反复编译 C++。
-	GetCharacterMovement()->JumpZVelocity = 700.f;
-	GetCharacterMovement()->AirControl = 0.35f;
-	GetCharacterMovement()->MaxWalkSpeed = 500.f;
-	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
-	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
+	Movement->JumpZVelocity = 700.f;
+	Movement->AirControl = 0.35f;
+	Movement->MaxWalkSpeed = 500.f;
+	Movement->MinAnalogWalkSpeed = 20.f;
+	Movement->BrakingDecelerationWalking = 2000.f;
 	// (**) 平台起跳会继承基座水平速度；空中无输入时强制刹车会很快抵消这份惯性，
 	// 即使网络完全正常也会落在平台后方。保留惯性，方向调整仍由 AirControl 处理。
-	GetCharacterMovement()->BrakingDecelerationFalling = 0.0f;
+	Movement->BrakingDecelerationFalling = 0.0f;
 
-	// 弹簧臂会在遮挡时自动收缩，比直接把摄像机挂到角色上更适合第三人称视角。
+	//弹簧臂会在遮挡时自动收缩，比直接把摄像机挂到角色上更适合第三人称视角。
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
 	CameraBoom->TargetArmLength = 400.0f;
+	//让弹簧臂随控制器旋转，摄像机位置会跟随旋转，但不直接叠加到角色本身。
 	CameraBoom->bUsePawnControlRotation = true;
 
 	// 摄像机跟随弹簧臂末端，本身不再叠加控制器旋转。
@@ -84,6 +86,7 @@ void AmultiplayerCharacter::NotifyControllerChanged()
 		return;
 	}
 
+	//从本地玩家子系统中获取 Enhanced Input 子系统，并添加默认输入映射上下文。
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
 		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(LocalPlayer))
 	{

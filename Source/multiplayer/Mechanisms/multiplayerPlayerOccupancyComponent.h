@@ -35,7 +35,8 @@ public:
 		bool bInRequirePlayerControlledCharacter = true);
 
 	// 对称移除重叠、销毁、控制器变化 Delegate，并清空临时计数；可安全重复调用。
-	void UnbindTrigger();
+	// 默认通知人数变化；重绑定时传 false，静默清理后由 BindTrigger 统一通知最终成员变化。
+	void UnbindTrigger(bool bNotifyChange = true);
 
 	// 返回有效弱引用的数量，不把同一角色的多个碰撞组件重复算作多个玩家。
 	int32 GetPlayerCount() const;
@@ -49,9 +50,6 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	// 静默清理供普通解绑和重绑定复用，由调用方统一通知最终状态。
-	void UnbindTriggerInternal();
-
 	// 这些监听只由 BindTrigger 的服务器分支安装；事件直接更新成员记录。
 	UFUNCTION()
 	void HandleBeginOverlap(

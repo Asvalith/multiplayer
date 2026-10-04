@@ -15,6 +15,8 @@ struct MULTIPLAYER_API FmultiplayerGameplayConfig
 
 	// 配置数据及整套回退默认值。
 	int32 SessionMaxPlayers = 2;
+	// 本关需要完成的插槽数量，由服务器写入 GameState；与关卡中的有效钥匙和插槽配套配置。
+	int32 RequiredKeys = 4;
 	int32 WinRequiredPlayers = 2;
 	int32 PlatformRequiredPlayers = 1;
 	float PlatformMoveSpeed = 150.f;

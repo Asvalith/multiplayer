@@ -5,7 +5,9 @@
 #include "Misc/CoreDelegates.h"
 #include "Testing/CoopNetTestDriver.h"
 
-class FMultiplayerModule : public FDefaultGameModuleImpl
+
+//测试安全性
+ class FMultiplayerModule : public FDefaultGameModuleImpl
 {
 public:
 	virtual void StartupModule() override

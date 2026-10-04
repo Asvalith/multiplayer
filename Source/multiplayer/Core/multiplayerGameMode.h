@@ -22,7 +22,8 @@ public:
 	AmultiplayerGameMode();
 
 	// 在接收玩家前设置实际登录容量；地图直接启动或重开时同样使用 JSON 人数上限。
-	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+	// GameSession 和 GameState 创建后，统一应用内存中的配置并初始化目标快照。
+	virtual void InitGameState() override;
 
 	// 合作目标的权威提交入口。
 	/**
@@ -54,9 +55,6 @@ public:
 
 	// Travel 失败且本 GameMode/World 仍可用时解除本次重开锁；成功切图由新 World 初始化。
 	bool RecoverFailedRestart(const FString& FailureReason);
-
-protected:
-	virtual void BeginPlay() override;
 
 private:
 	// 钥匙附着、销毁和进度通知可能同步触发其他事件，拒绝提交期间的嵌套登记。

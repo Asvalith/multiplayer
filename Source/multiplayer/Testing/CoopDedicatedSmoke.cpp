@@ -19,6 +19,9 @@ void UCoopNetTestDriver::DedicatedTick(UWorld* World)
 				&& GameInstance->GetLocalPlayers().IsEmpty(),
 				TEXT("Dedicated server, authoritative GameMode/GameState, zero local players"));
 			if (bDone) return;
+			Assert(TEXT("ConfiguredObjective"), State->GetObjectiveState().RequiredKeys == GameInstance->GetGameplayConfig().RequiredKeys,
+				FString::Printf(TEXT("State=%d Config=%d"), State->GetObjectiveState().RequiredKeys, GameInstance->GetGameplayConfig().RequiredKeys));
+			if (bDone) return;
 			SetPhase(TEXT("WaitingForTwoClients"));
 			Emit(TEXT("READY"));
 		}

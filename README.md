@@ -6,7 +6,7 @@
 
 ## 项目亮点
 
-- **服务器权威的合作玩法**：服务器处理钥匙触碰与安装、不同玩家计数、机关激活和胜利判定；客户端接收结果并更新表现。GameMode、GameState、PlayerController 与机关 Actor 分工明确，分别管理连接就绪与玩法状态就绪。
+- **服务器权威的合作玩法**：服务器处理钥匙触碰与安装、不同玩家计数、机关激活和胜利判定；客户端接收结果并更新表现。GameMode、GameState、PlayerController、HUD 与机关 Actor 分工明确，分别管理连接就绪与玩法状态就绪。
 - **状态同步与晚加入恢复**：目标进度和胜利组成一份业务快照；门、压力板和钥匙分别复制必要状态。界面在绑定事件后补读当前结果，GameState 尚未到达时等待就绪事件，避免依赖某一次历史广播。
 - **交互一致性与生命周期治理**：共用占用组件处理多碰撞体重叠、控制权变化、Pawn 销毁和触发体重绑定；合作门合并不同玩家集合。钥匙安装采用提交保护和失败恢复，目标通知防同步重入，重开请求经过服务器校验和去重。
 - **DS 连接与失败恢复**：GameInstance 管理地址校验、连接期限、取消、有限重连和退出；按 World / NetDriver 过滤全局失败事件，用操作编号拒绝失效流程。某个玩家退出不关闭服务器，重连后重新获取仍在运行的 DS 保存的共享状态。
@@ -18,7 +18,7 @@
 
 ~~~text
 Config/                                  引擎、地图、输入与打包配置
-Content/Config/Gameplay.json              人数、机关速度与重连等待参数
+Content/Config/Gameplay.json              目标数量、人数、机关速度与重连等待参数
 Content/UI/DSMenu.umap                    地址连接菜单关卡
 Content/ThirdPerson/                      角色、输入与机关蓝图
 Source/
@@ -30,7 +30,7 @@ Source/
     Network/                             GameInstance 连接生命周期
     Player/                              第三人称输入、CMC 与所属玩家请求
     Mechanisms/                          钥匙、插槽、压力板、门、平台与终点
-    UI/                                  原生连接菜单与胜利界面
+    UI/                                  原生连接菜单、胜利 HUD 与界面
     Testing/                             三进程回归、连接单测与移动诊断
 Scripts/
   RunLocalDedicatedServer.ps1             可操作双客户端 / 连接冒烟入口
@@ -50,11 +50,13 @@ Docs/Reports/                            分阶段实验、数据附录与问题
 flowchart LR
     subgraph CLIENT["每个远端客户端"]
         CC["Character + CMC：输入、移动预测"]
-        PC["PlayerController：请求与本地界面入口"]
+        PC["PlayerController：请求、RPC 与操作状态"]
         CGS["GameState 副本：共享结果"]
+        HUD["CoopHUD：胜利订阅与界面管理"]
         VIEW["机关表现与本地 UI"]
-        CGS -->|状态通知与绑定后补读| VIEW
-        PC -->|创建本地界面| VIEW
+        CGS -->|状态通知与绑定后补读| HUD
+        HUD -->|创建界面与管理输入| VIEW
+        PC -->|本地操作反馈| VIEW
     end
 
     subgraph SERVER["Dedicated Server"]
@@ -84,9 +86,10 @@ GameInstance 位于每个进程，管理配置与连接生命周期；合作进�
 | 模块 | 保存 / 判定什么 | 客户端如何使用 |
 | --- | --- | --- |
 | GameMode | 目标登记、终点人数规则、胜利复核、合法重开 | 客户端通过 GameState 共享快照获取结果 |
-| CoopGameState | 目标总数、已完成数量、胜利状态 | 属性复制与 RepNotify；UI 绑定后补读 |
+| CoopGameState | 目标总数、已完成数量、胜利状态 | 属性复制与 RepNotify；HUD 绑定后补读 |
 | GameInstance | 配置、服务器地址、连接阶段、重试计时与操作编号 | 本地菜单显示连接状态与操作反馈 |
-| PlayerController | 所属玩家请求、重开等待、本地胜利展示状态 | Server RPC 提交请求，Client RPC 接收失败；只创建本地 UI |
+| PlayerController | 所属玩家请求、重开 / 退出操作状态 | Server RPC 提交请求，Client RPC 接收失败；本地委托发布操作反馈 |
+| CoopHUD / VictoryWidget | 本地胜利订阅、界面生命周期与输入模式 | HUD 等待 GameState 并补读胜利快照；Widget 展示反馈、转交按钮意图 |
 | 机关 Actor | 服务器端安装、开关、激活条件和运动状态 | 复制必要结果，客户端重建对应表现 |
 | PlayerOccupancyComponent | 服务器区域内的角色重叠记录与玩家资格 | 占用表留在服务器，由机关发布最终结果 |
 | TransporterComponent | 服务器轨道位移、方向与根组件速度 | 由平台 Actor 的移动复制传递 |
@@ -103,9 +106,9 @@ GameInstance 位于每个进程，管理配置与连接生命周期；合作进�
 
 GameMode 完成规则判断后，通过 GameState 的唯一权威入口写入 `FmultiplayerCoopObjectiveState`。进度与胜利使用同一份业务快照及通知入口，减少对多个 OnRep 执行顺序的依赖；其他机关与附着状态通过各自复制路径更新。
 
-服务器写入和客户端 OnRep 分别触发本机通知。广播前保存本次快照及胜利转换，避免监听者同步重入造成重复胜利广播。PlayerController 等待 GameState 就绪，订阅后补读当前结果，独立创建本地胜利界面。
+服务器写入和客户端 OnRep 分别触发本机通知。广播前保存本次快照及胜利转换，避免监听者同步重入造成重复胜利广播。GameMode 指定的 CoopHUD 等待 GameState 就绪，订阅后补读当前结果，负责本地胜利界面的创建、清理与输入模式。
 
-重开由所属 Controller 提交可靠 Server RPC，GameMode 校验条件并去重；失败释放请求状态并反馈所属客户端。主动退出交回 GameInstance，统一停止重连、断开连接并返回菜单。
+重开由所属 Controller 提交可靠 Server RPC，GameMode 校验条件并去重；失败释放请求状态并反馈所属客户端。Controller 通过本地 `OnVictoryActionChanged` 委托向 Widget 发布操作反馈。主动退出交回 GameInstance，统一停止重连、断开连接并返回菜单。
 
 ### 角色与移动平台
 
@@ -192,7 +195,7 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 | 目标登记、胜利与重开 | [GameMode](Source/multiplayer/Core/multiplayerGameMode.cpp) |
 | 共享快照与通知重入保护 | [CoopGameState](Source/multiplayer/Core/multiplayerCoopGameState.cpp) |
 | 玩家输入与原生移动接入 | [Character](Source/multiplayer/Player/multiplayerCharacter.cpp) |
-| 所属玩家 RPC 与胜利展示 | [CoopPlayerController](Source/multiplayer/Player/multiplayerCoopPlayerController.cpp) |
+| 所属玩家 RPC 与操作状态 | [CoopPlayerController](Source/multiplayer/Player/multiplayerCoopPlayerController.cpp) |
 | 钥匙触碰与安装提交 | [CoopKey](Source/multiplayer/Mechanisms/multiplayerCoopKey.cpp)、[KeySocket](Source/multiplayer/Mechanisms/multiplayerKeySocket.cpp) |
 | 占用记录与生命周期 | [PlayerOccupancyComponent](Source/multiplayer/Mechanisms/multiplayerPlayerOccupancyComponent.cpp) |
 | 合作门与压力板 | [CoopGate](Source/multiplayer/Mechanisms/multiplayerCoopGate.cpp)、[PressurePlate](Source/multiplayer/Mechanisms/multiplayerPressurePlate.cpp) |
@@ -201,7 +204,7 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 | 终点条件汇合 | [WinArea](Source/multiplayer/Mechanisms/multiplayerWinArea.cpp) |
 | 连接、取消与有限重连 | [GameInstance](Source/multiplayer/Network/multiplayerGameInstance.cpp) |
 | JSON 校验与配置读取 | [GameplayConfig](Source/multiplayer/Core/multiplayerGameplayConfig.cpp) |
-| 菜单与胜利界面 | [ConnectionMenu](Source/multiplayer/UI/multiplayerConnectionMenu.cpp)、[VictoryWidget](Source/multiplayer/UI/multiplayerVictoryWidget.cpp) |
+| 菜单、胜利 HUD 与界面 | [ConnectionMenu](Source/multiplayer/UI/multiplayerConnectionMenu.cpp)、[CoopHUD / VictoryWidget](Source/multiplayer/UI/multiplayerVictoryWidget.cpp) |
 | 自动场景与移动诊断 | [Testing](Source/multiplayer/Testing/)、[统一测试入口](Scripts/RunMultiplayerNetworkTests.ps1) |
 
 函数按生命周期、对外业务入口、引擎事件和内部清理组织。共同机制抽到占用组件与网格移动辅助函数；机关各自保留规则，连接状态不承担合作玩法结算。
@@ -214,6 +217,7 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 | --- | ---: | --- |
 | SchemaVersion | 1 | 配置格式版本 |
 | SessionMaxPlayers | 2 | 兼容字段名，表示 DS 远端玩家上限，不包含服务器 |
+| RequiredKeys | 4 | 本关需要完成的插槽数量，正整数；服务器写入 GameState 后复制给客户端 |
 | WinRequiredPlayers | 2 | 终点所需不同玩家数 |
 | PlatformRequiredPlayers | 1 | 平台自身占用模式的人数要求 |
 | PlatformMoveSpeed | 150 | 平台速度，cm/s |
@@ -221,7 +225,7 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 | PlateMoveSpeed | 80 | 压力板速度，cm/s |
 | ReconnectDelaysSeconds | [1, 2, 4] | 重试等待秒数；空数组关闭自动重连 |
 
-模型、碰撞、轨道端点、压力板关联和钥匙目标插槽由蓝图 / 关卡配置。JSON 随包作为外置配置部署，修改后重启生效；人数参数与关卡出生点、机关条件配套配置。
+模型、碰撞、轨道端点、压力板关联和钥匙目标插槽由蓝图 / 关卡配置。JSON 随包作为外置配置部署，修改后重启生效；人数参数与关卡出生点、机关条件配套配置。`RequiredKeys` 是胜利所需的目标数量，不再自动统计场景插槽；应与关卡可完成的钥匙 / 插槽配套，填大可能无法通关，填小会提前达到目标。
 
 ## 构建与验证
 

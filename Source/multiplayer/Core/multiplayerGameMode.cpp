@@ -2,15 +2,13 @@
 
 #include "Core/multiplayerGameMode.h"
 
-#include "EngineUtils.h"
-#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameplayConfig.h"
 #include "GameFramework/GameSession.h"
 #include "GameFramework/GameState.h"
 #include "Player/multiplayerCoopPlayerController.h"
-#include "Mechanisms/multiplayerKeySocket.h"
+#include "UI/multiplayerVictoryWidget.h"
 #include "Core/multiplayerLog.h"
 #include "UObject/ConstructorHelpers.h"
 #if !UE_BUILD_SHIPPING
@@ -18,16 +16,14 @@
 #include "Misc/Parse.h"
 #endif
 
-/*
- * GameMode 只在服务器存在，这里指定共享 GameState、玩家控制器和默认角色类型。
- * C++ 负责规则，角色模型和动画由派生蓝图组合；这里仍通过固定资源路径指定默认角色蓝图。
- */
+//获取类
 AmultiplayerGameMode::AmultiplayerGameMode()
 {
 	GameStateClass = AmultiplayerCoopGameState::StaticClass();
 	PlayerControllerClass = AmultiplayerCoopPlayerController::StaticClass();
+	HUDClass = AmultiplayerCoopHUD::StaticClass();
 
-	// 只在这里选定角色蓝图，不在规则函数中查找网格、动画等具体资源。
+	//static 只在构造函数第一次执行时查找资源，避免每次创建 GameMode 都重复查找。
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter"));
 	if (PlayerPawnBPClass.Class != nullptr)
 	{
@@ -35,74 +31,48 @@ AmultiplayerGameMode::AmultiplayerGameMode()
 	}
 }
 
-/*
- * 父类先创建引擎 GameSession，再写入 JSON 容量；直连和重开使用同一入场上限。
- */
-void AmultiplayerGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
+//获取已加载的配置，初始化规则；JSON 已由 GameInstance 读取，这里不再读文件。
+void AmultiplayerGameMode::InitGameState()
 {
-	Super::InitGame(MapName, Options, ErrorMessage);
+	Super::InitGameState();
+	const FmultiplayerGameplayConfig& Config = FmultiplayerGameplayConfig::Get(this);
+
 	if (GameSession != nullptr)
 	{
-		GameSession->MaxPlayers = FmultiplayerGameplayConfig::Get(this).SessionMaxPlayers;
-		UE_LOG(LogMultiplayer, Log, TEXT("Server player capacity configured: %d"), GameSession->MaxPlayers);
+		GameSession->MaxPlayers = Config.SessionMaxPlayers;
 	}
-}
 
-/** 目标数量仍按实际插槽统计，并走 GameState 的统一写入口生成初始快照。 */
-void AmultiplayerGameMode::BeginPlay()
-{
-	Super::BeginPlay();
-
-	if (AmultiplayerCoopGameState* CoopState =
-		GetGameState<AmultiplayerCoopGameState>())
+	//游戏开始前：初始化共享目标状态。
+	if (AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>())
 	{
 		FmultiplayerCoopObjectiveState InitialState;
-		for (TActorIterator<AmultiplayerKeySocket> SocketIt(GetWorld()); SocketIt; ++SocketIt)
-		{
-			++InitialState.RequiredKeys;
-		}
-		// 无插槽时保留原有回退目标，避免空关卡被当作目标已完成。
-		if (InitialState.RequiredKeys == 0)
-		{
-			constexpr int32 FallbackRequiredKeys = 4;
-			InitialState.RequiredKeys = FallbackRequiredKeys;
-		}
+		// 从 Config 读取目标数量；加载失败时已由 Config 回退，这里不再遍历插槽或另设回退目标。
+		InitialState.RequiredKeys = Config.RequiredKeys;
 		CoopState->ApplyAuthoritativeState(InitialState);
-		UE_LOG(
-			LogMultiplayer,
-			Log,
-			TEXT("Coop objective configured: RequiredKeys=%d"),
-			InitialState.RequiredKeys);
 	}
+	UE_LOG(LogMultiplayer, Log, TEXT("Game rules configured: MaxPlayers=%d, RequiredKeys=%d"),
+		Config.SessionMaxPlayers, Config.RequiredKeys);
 }
 
-/*
- * 先校验进度，再同步安装钥匙，最后发布进度；拒绝的请求不能先改变钥匙状态。
- * 插槽负责自身去重，本函数阻止提交期间的嵌套登记；这不是跨网络的原子事务。
- */
+//装钥匙
 bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 {
+	//防重入与状态校验
 	if (bRegisteringKey)
 	{
 		return false;
 	}
-
-	AmultiplayerCoopGameState* CoopState =
-		GetGameState<AmultiplayerCoopGameState>();
-	if (CoopState == nullptr
-		|| CoopState->GetObjectiveState().bGameWon
-		|| CoopState->IsObjectiveComplete())
+	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
+	if (CoopState == nullptr || CoopState->GetObjectiveState().bGameWon || CoopState->IsObjectiveComplete())
 	{
 		return false;
 	}
-
-	// 借用的回调仅在本栈帧执行；拒绝或安装失败都不发布进度。
+	//标记安装
 	TGuardValue<bool> RegisterGuard(bRegisteringKey, true);
 	if (!CommitKey())
 	{
 		return false;
 	}
-
 	// 保留其余快照字段，只推进钥匙进度。
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	++NewState.ActivatedKeys;
@@ -110,44 +80,30 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 	return true;
 }
 
-/*
- * 胜利区域提交当前人数后，由服务器集中复核人数、钥匙目标和既有胜利状态。
- * 成功只把 GameState 从未胜利推进到胜利一次；UI、音效等表现不在 GameMode 中直接执行。
- */
-bool AmultiplayerGameMode::TryCompleteCoopGame(
-	int32 CurrentPlayers,
-	int32 RequiredPlayers)
+//判胜利
+bool AmultiplayerGameMode::TryCompleteCoopGame(int32 CurrentPlayers, int32 RequiredPlayers)
 {
 	if (CurrentPlayers < FMath::Max(1, RequiredPlayers))
 	{
 		return false;
 	}
-
-	AmultiplayerCoopGameState* CoopState =
-		GetGameState<AmultiplayerCoopGameState>();
-	if (CoopState == nullptr
-		|| CoopState->GetObjectiveState().bGameWon
-		|| !CoopState->IsObjectiveComplete())
+	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
+	if (CoopState == nullptr || CoopState->GetObjectiveState().bGameWon || !CoopState->IsObjectiveComplete())
 	{
 		return false;
 	}
-
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	NewState.bGameWon = true;
 	CoopState->ApplyAuthoritativeState(NewState);
 	return true;
 }
 
-/*
- * 接受玩家控制器发来的重开请求。调用者必须属于当前 World，且本局已经胜利；
- * 成功后先设置一次性标记，再让 AGameMode 重新加载当前 URL，防止两名玩家重复发起 Travel。
- */
-bool AmultiplayerGameMode::RequestRestartCurrentRound(
-	AController* RequestingController)
+//重新开始
+bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingController)
 {
+	//前置校验
 	UWorld* World = GetWorld();
-	AmultiplayerCoopGameState* CoopState =
-		GetGameState<AmultiplayerCoopGameState>();
+	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
 	if (World == nullptr || World->bIsTearingDown || GameSession == nullptr
 		|| RequestingController == nullptr
 		|| RequestingController->GetWorld() != World
@@ -196,11 +152,11 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(
 	return true;
 }
 
+//重开失败恢复
 bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 {
 	UWorld* World = GetWorld();
-	if (!PendingRestart.bRequested || World == nullptr || World->bIsTearingDown
-		|| World->GetAuthGameMode() != this)
+	if (!PendingRestart.bRequested || World == nullptr || World->bIsTearingDown || World->GetAuthGameMode() != this)
 	{
 		return false;
 	}
@@ -208,41 +164,32 @@ bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 	// 先取出快照并释放旧请求，再恢复状态和通知外部，避免通知期间重入旧请求。
 	const FPendingRestart FailedRestart = MoveTemp(PendingRestart);
 	PendingRestart = FPendingRestart{};
-	AmultiplayerCoopPlayerController* Requester =
-		Cast<AmultiplayerCoopPlayerController>(FailedRestart.Requester.Get());
-	const FText Message = NSLOCTEXT("Multiplayer", "RestartTravelFailed", "重开失败，可以重试或退出房间。");
-
 	// 引擎已中止比赛或其他跳转接管时，不覆盖引擎自己的错误恢复。
-	if (GetMatchState() == MatchState::Aborted
-		|| (!World->NextURL.IsEmpty() && World->NextURL != FailedRestart.TravelURL))
+	const bool bCanRestoreWorld = GetMatchState() != MatchState::Aborted
+		&& (World->NextURL.IsEmpty() || World->NextURL == FailedRestart.TravelURL);
+	if (bCanRestoreWorld)
 	{
-		if (Requester != nullptr)
-		{
-			Requester->NotifyRestartFailed(Message);
-		}
-		return false;
-	}
-	if (World->NextURL == FailedRestart.TravelURL)
-	{
+		// 上面已排除其他跳转接管；引擎也可能先清空本次失败 URL，因此两种情况都恢复本次快照。
 		World->NextURL.Empty();
-	}
-	// 上面已排除其他跳转接管；引擎也可能先清空本次失败 URL，因此两种情况都恢复本次快照。
-	// 重试仍需保留客户端接收 Travel RPC 的时间，不能把切图倒计时清零。
-	World->NextSwitchCountdown = FailedRestart.PreviousSwitchCountdown;
-	if (GetMatchState() == MatchState::LeavingMap && !FailedRestart.PreviousMatchState.IsNone())
-	{
-		// 恢复已有比赛而非再次开赛，避免 SetMatchState 重复执行 HandleMatchHasStarted。
-		MatchState = FailedRestart.PreviousMatchState;
-		if (AGameState* FullGameState = GetGameState<AGameState>())
+		// 重试仍需保留客户端接收 Travel RPC 的时间，不能把切图倒计时清零。
+		World->NextSwitchCountdown = FailedRestart.PreviousSwitchCountdown;
+		if (GetMatchState() == MatchState::LeavingMap && !FailedRestart.PreviousMatchState.IsNone())
 		{
-			FullGameState->SetMatchState(MatchState);
+			// 恢复已有比赛而非再次开赛，避免 SetMatchState 重复执行 HandleMatchHasStarted。
+			MatchState = FailedRestart.PreviousMatchState;
+			if (AGameState* FullGameState = GetGameState<AGameState>())
+			{
+				FullGameState->SetMatchState(MatchState);
+			}
 		}
+		UE_LOG(LogMultiplayer, Warning, TEXT("Restart failure recovered in the existing world; retry unlocked. Reason=%s"),
+			*FailureReason);
 	}
-	UE_LOG(LogMultiplayer, Warning, TEXT("Restart failure recovered in the existing world; retry unlocked. Reason=%s"),
-		*FailureReason);
-	if (Requester != nullptr)
+
+	// 无论是否能恢复旧 World，本次请求都已结束，只向请求者发送一次失败回执。
+	if (AmultiplayerCoopPlayerController* Requester = Cast<AmultiplayerCoopPlayerController>(FailedRestart.Requester.Get()))
 	{
-		Requester->NotifyRestartFailed(Message);
+		Requester->NotifyRestartFailed(NSLOCTEXT("Multiplayer", "RestartTravelFailed", "重开失败，可以重试或退出房间。"));
 	}
-	return true;
+	return bCanRestoreWorld;
 }

@@ -1,6 +1,7 @@
 {
   "SchemaVersion": 1,
   "SessionMaxPlayers": 2,
+  "RequiredKeys": 4,
   "WinRequiredPlayers": 2,
   "PlatformRequiredPlayers": 1,
   "PlatformMoveSpeed": 150,

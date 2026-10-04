@@ -74,7 +74,7 @@ public:
 	// 本机进度刷新事件：服务器写入和客户端 OnRep 都会触发，监听者无需区分数据来源。
 	FmultiplayerObjectiveProgressEvent OnObjectiveProgressChanged;
 
-	// 仅本机观察到 false -> true 的胜利状态转换时广播一次；具体 UI 仍由本地 PlayerController 负责。
+	// 仅本机观察到 false -> true 的胜利状态转换时广播一次；具体 UI 由本地 HUD 负责。
 	FmultiplayerGameWonEvent OnGameWon;
 
 protected:

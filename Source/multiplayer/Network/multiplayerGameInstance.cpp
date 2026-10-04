@@ -145,9 +145,11 @@ void UmultiplayerGameInstance::LeaveGame()
 
 void UmultiplayerGameInstance::HandlePostLoadMap(UWorld* World)
 {
-	if (!World || World->GetGameInstance() != this || World->GetNetMode() != NM_Standalone) return;
-	if (ConnectionState == EMultiplayerConnectionState::Leaving)
+	if (World && World->GetGameInstance() == this && World->GetNetMode() == NM_Standalone
+		&& ConnectionState == EMultiplayerConnectionState::Leaving)
+	{
 		SetConnectionState(EMultiplayerConnectionState::Idle, FText::GetEmpty());
+	}
 }
 
 bool UmultiplayerGameInstance::OwnsFailure(const UWorld* World, const UNetDriver* Driver) const
@@ -189,13 +191,18 @@ void UmultiplayerGameInstance::HandleTravelFailure(UWorld* World, ETravelFailure
 	if (auto* GM = World->GetAuthGameMode<AmultiplayerGameMode>())
 		if (GM->RecoverFailedRestart(Error)) return;
 	if (World->GetNetMode() == NM_DedicatedServer) { UE_LOG(LogMultiplayer, Error, TEXT("DS travel failed: %s"), *Error); return; }
-	if (ConnectionState == EMultiplayerConnectionState::Leaving)
+	if (ConnectionState == EMultiplayerConnectionState::Reconnecting)
 	{
-		FailConnection(Error);
+		ScheduleReconnect();
+		return;
+	}
+	// 失败清理会改状态并通知外部；先保存本次是否退出，再共用清理出口。
+	const bool bWasLeaving = ConnectionState == EMultiplayerConnectionState::Leaving;
+	FailConnection(Error);
+	if (bWasLeaving)
+	{
 		OnLeaveFailed.Broadcast(NSLOCTEXT("Multiplayer", "LeaveFailed", "返回菜单失败，请重试退出。"));
 	}
-	else if (ConnectionState == EMultiplayerConnectionState::Reconnecting) ScheduleReconnect();
-	else FailConnection(Error);
 }
 
 void UmultiplayerGameInstance::FailConnection(const FString& Reason)

@@ -26,7 +26,7 @@ public:
 	AmultiplayerCoopGate();
 
 	// 保留配置门槛，即使有效压力板不足也不下调。
-	int32 GetRequiredPlateCount() const;
+	int32 GetRequiredPlateCount() const { return FMath::Max(1, RequiredActivePlateCount); }
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -53,10 +53,6 @@ protected:
 private:
 	void EvaluateGateState();
 
-	// 绑定和计数只使用有效且去重的运行时依赖。
-	void RebuildRuntimeRequiredPlates();
-	void BindRequiredPlates();
-	void UnbindRequiredPlates();
 	// 调用方保证指针可用，包括正在执行销毁回调的板。
 	void UnbindRequiredPlate(AmultiplayerPressurePlate* Plate);
 

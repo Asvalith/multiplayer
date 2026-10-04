@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Network/multiplayerGameInstance.h"
+#include "Player/multiplayerCoopPlayerController.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
@@ -46,6 +47,28 @@ bool FCoopConnectionStateTest::RunTest(const FString&)
 	GI->ScheduleReconnect();
 	TestTrue(TEXT("Bounded reconnect returns idle"), GI->ConnectionState == EMultiplayerConnectionState::Idle && GI->LastServerAddress.IsEmpty());
 	TestFalse(TEXT("Other world failure ignored"), GI->OwnsFailure(nullptr, nullptr));
+	// 强制退出也必须先占用 Leaving；直接调用项目故障处理，不广播引擎全局错误。
+	// Dummy World 尚未进入玩法，必须初始化 Actor 才会执行 RPC 和完整销毁生命周期。
+	GI->GetWorld()->InitializeActorsForPlay(FURL());
+	auto* Controller = GI->GetWorld()->SpawnActor<AmultiplayerCoopPlayerController>();
+	if (TestNotNull(TEXT("Request controller"), Controller))
+	{
+		Controller->DispatchBeginPlay();
+		bool bInjectedLeaveFailure = false;
+		const auto FailLeaveHandle = GI->OnConnectionChanged.AddLambda([this, GI, Controller, &bInjectedLeaveFailure]()
+		{
+			if (GI->ConnectionState != EMultiplayerConnectionState::Leaving) return;
+			bInjectedLeaveFailure = true;
+			TestTrue(TEXT("Forced leave updates request state first"), Controller->GetVictoryAction() == ECoopVictoryAction::Leaving);
+			GI->HandleTravelFailure(GI->GetWorld(), ETravelFailure::ClientTravelFailure, TEXT("Synthetic return-to-menu failure"));
+		});
+		Controller->ClientReturnToMainMenuWithTextReason(FText::FromString(TEXT("Test server return request")));
+		TestTrue(TEXT("Forced leave failure reached"), bInjectedLeaveFailure);
+		TestTrue(TEXT("Forced leave failure restores Idle"), Controller->GetVictoryAction() == ECoopVictoryAction::Idle);
+		GI->OnConnectionChanged.Remove(FailLeaveHandle);
+		Controller->Destroy();
+		TestFalse(TEXT("Controller EndPlay removes leave subscription"), GI->OnLeaveFailed.IsBound());
+	}
 	GI->Shutdown();
 	if (UWorld* World = GI->GetWorld()) { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); }
 	GI->RemoveFromRoot();

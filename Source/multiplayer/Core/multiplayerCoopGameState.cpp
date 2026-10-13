@@ -1,66 +1,65 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Core/multiplayerCoopGameState.h"
-
-#include "Core/multiplayerLog.h"
 #include "Net/UnrealNetwork.h"
 
-void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(
-	TArray<FLifetimeProperty>& OutLifetimeProps) const
+/// <summary>
+/// 保存目标状态，并在变化时通知别人
+/// </summary>
+
+
+//注册要同步的状态
+void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	//属性同步注册
 	DOREPLIFETIME(AmultiplayerCoopGameState, ObjectiveState);
 }
 
-void AmultiplayerCoopGameState::ApplyAuthoritativeState(
-	const FmultiplayerCoopObjectiveState& NewObjectiveState)
+//服务器更新状态
+void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopObjectiveState& NewObjectiveState)
 {
 	if (!HasAuthority())
 	{
 		return;
 	}
 
+	//净化输入
 	FmultiplayerCoopObjectiveState SanitizedState = NewObjectiveState;
-	// 没有目标时不允许胜利，进度限制在目标范围内。
 	SanitizedState.RequiredKeys = FMath::Max(0, SanitizedState.RequiredKeys);
-	SanitizedState.ActivatedKeys = FMath::Clamp(
-		SanitizedState.ActivatedKeys,
-		0,
-		SanitizedState.RequiredKeys);
+	SanitizedState.ActivatedKeys = FMath::Clamp(SanitizedState.ActivatedKeys,0,SanitizedState.RequiredKeys);
 	if (SanitizedState.RequiredKeys == 0)
 	{
 		SanitizedState.bGameWon = false;
 	}
-
+	//跳过无意义的更新
 	if (ObjectiveState.ActivatedKeys == SanitizedState.ActivatedKeys
 		&& ObjectiveState.RequiredKeys == SanitizedState.RequiredKeys
 		&& ObjectiveState.bGameWon == SanitizedState.bGameWon)
 	{
 		return;
 	}
-
+	//更新
 	ObjectiveState = SanitizedState;
+	//广播
 	OnRep_ObjectiveState();
+	//强制网络更新同步
 	ForceNetUpdate();
 }
 
-/*
- * 进度监听者可能同步触发判胜。先保存本次快照和胜利转换，避免外层重复广播内层的胜利。
- */
+//状态变化时通知别人
 void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 {
+	//保存快照
 	const FmultiplayerCoopObjectiveState StateSnapshot = ObjectiveState;
-	const bool bBecameGameWon =
-		!bLastNotifiedGameWon && StateSnapshot.bGameWon;
+	//计算胜利（边沿触发）
+	const bool bBecameGameWon = !bLastNotifiedGameWon && StateSnapshot.bGameWon;
 	bLastNotifiedGameWon = StateSnapshot.bGameWon;
-
-	OnObjectiveProgressChanged.Broadcast(
-		StateSnapshot.ActivatedKeys,
-		StateSnapshot.RequiredKeys);
-
+	//广播进度变化
+	OnObjectiveProgressChanged.Broadcast(StateSnapshot.ActivatedKeys,StateSnapshot.RequiredKeys);
+	//广播胜利事件
 	if (bBecameGameWon)
 	{
-		UE_LOG(LogMultiplayer, Log, TEXT("Coop objective: victory transition broadcast."));
 		OnGameWon.Broadcast();
 	}
 }

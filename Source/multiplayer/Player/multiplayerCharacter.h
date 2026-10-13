@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Character.h"
+#include "Combat/multiplayerCombatCharacter.h"
 #include "multiplayerCharacter.generated.h"
 
 class UCameraComponent;
@@ -27,9 +27,10 @@ struct FInputActionValue;
  *
  * 职责边界：本类不判断钥匙进度、机关条件或胜利结果；这些状态由服务器玩法 Actor 和
  * GameMode 维护。
+ * 战斗能力由 CombatCharacter 父类提供，本类只增加对应的本地按键绑定。
  */
 UCLASS(config = Game)
-class AmultiplayerCharacter : public ACharacter
+class AmultiplayerCharacter : public AmultiplayerCombatCharacter
 {
 	GENERATED_BODY()
 

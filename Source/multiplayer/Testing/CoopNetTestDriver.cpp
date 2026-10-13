@@ -1,26 +1,19 @@
 #include "Testing/CoopNetTestDriver.h"
 #include "Testing/CoopPlatformRideProbe.h"
 
+#include "Core/multiplayerCoopGameState.h"
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
-#include "Engine/GameViewportClient.h"
-#include "Engine/NetDriver.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "Core/multiplayerCoopGameState.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "HAL/PlatformMisc.h"
-#include "Mechanisms/multiplayerMovingPlatform.h"
-#include "Mechanisms/multiplayerPressurePlate.h"
-#include "Mechanisms/multiplayerTransporterComponent.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
-#include "Misc/Paths.h"
 #include "Net/UnrealNetwork.h"
-#include "ProfilingDebugging/CsvProfiler.h"
 #include "Serialization/JsonSerializer.h"
 
 namespace
@@ -43,8 +36,6 @@ void ACoopNetTestProbe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ACoopNetTestProbe, Stage);
 	DOREPLIFETIME(ACoopNetTestProbe, Subject);
-	DOREPLIFETIME(ACoopNetTestProbe, Endpoint);
-	DOREPLIFETIME(ACoopNetTestProbe, Subjects);
 }
 
 void ACoopNetTestProbe::ServerReceipt_Implementation(const FString& Name, bool bPassed, const FString& Detail)
@@ -85,34 +76,29 @@ void UCoopNetTestDriver::Start()
 	FParse::Value(FCommandLine::Get(), TEXT("CoopNetTest="), Mode);
 	FParse::Value(FCommandLine::Get(), TEXT("CoopTestRole="), Role);
 	FParse::Value(FCommandLine::Get(), TEXT("CoopTestToken="), Token);
-	Optimization = TEXT("Combined");
-	FParse::Value(FCommandLine::Get(), TEXT("CoopOptimization="), Optimization);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopMatrix="), Matrix);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopCsvPath="), CsvRequestedPath);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopStaticCount="), StaticCount);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopMovingCount="), MovingCount);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopWarmupSeconds="), WarmupSeconds);
-	FParse::Value(FCommandLine::Get(), TEXT("CoopSampleSeconds="), SampleSeconds);
+	FParse::Value(FCommandLine::Get(), TEXT("CoopServerAddress="), ServerAddress);
 	FParse::Value(FCommandLine::Get(), TEXT("CoopTestTimeout="), TimeoutSeconds);
 	bServer = Role == TEXT("Server");
 	bPartner = Role == TEXT("Partner");
-	FParse::Value(FCommandLine::Get(), TEXT("CoopServerAddress="), ServerAddress);
 	StartedAt = Now();
 	SetPhase(TEXT("Boot"));
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &ThisClass::Tick), .1f);
+
 	if ((Role != TEXT("Server") && Role != TEXT("Client") && Role != TEXT("Partner")) || Token.IsEmpty())
 		Finish(false, TEXT("Requires CoopTestRole=Server|Client|Partner and a unique CoopTestToken"));
-	if (!TArray<FString>{TEXT("Scale"), TEXT("Flow"), TEXT("Keys"), TEXT("LateJoin"), TEXT("Reconnect"), TEXT("ConnectionRetry"), TEXT("Ride"), TEXT("RideMotion"), TEXT("DedicatedSmoke")}.Contains(Mode))
-		Finish(false, TEXT("Unknown test mode"));
-	if (StaticCount < 0 || StaticCount > 500 || MovingCount < 0 || MovingCount > 20 || SampleSeconds <= 0 || WarmupSeconds < 0)
-		Finish(false, TEXT("Invalid scale limits"));
+	if (Mode != TEXT("RideMotion") && Mode != TEXT("Combat"))
+		Finish(false, TEXT("Supported scenarios: RideMotion and Combat"));
+
+	FString SyncMode = TEXT("PlatformInertia");
+	FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformSyncMode="), SyncMode);
+	if (Mode == TEXT("RideMotion") && SyncMode != TEXT("OrderedVelocity") && SyncMode != TEXT("PlatformInertia"))
+		Finish(false, TEXT("RideMotion requires CoopPlatformSyncMode=OrderedVelocity|PlatformInertia"));
 #endif
 }
 
 void UCoopNetTestDriver::Stop()
 {
 	FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
-	if (GEngine) GEngine->OnNetworkFailure().RemoveAll(this);
 }
 
 UWorld* UCoopNetTestDriver::FindWorld() const
@@ -147,6 +133,13 @@ void UCoopNetTestDriver::SetPhase(const FString& Value)
 	Emit(TEXT("STAGE"));
 }
 
+void UCoopNetTestDriver::SetCommand(const FString& Command)
+{
+	SetPhase(Command);
+	if (Probe.IsValid()) { Probe->Stage = Command; Probe->ForceNetUpdate(); }
+	if (PartnerProbe.IsValid()) { PartnerProbe->Stage = Command; PartnerProbe->ForceNetUpdate(); }
+}
+
 void UCoopNetTestDriver::Assert(const FString& Name, bool bPassed, const FString& Detail)
 {
 	TSharedRef<FJsonObject> Extra = MakeShared<FJsonObject>();
@@ -154,6 +147,25 @@ void UCoopNetTestDriver::Assert(const FString& Name, bool bPassed, const FString
 	Extra->SetBoolField(TEXT("passed"), bPassed);
 	Emit(TEXT("ASSERT"), Detail, Extra);
 	if (!bPassed) Finish(false, Name + TEXT(": ") + Detail);
+}
+
+void UCoopNetTestDriver::SendReceipt(const FString& Name, bool bPassed, const FString& Detail)
+{
+	if (!Probe.IsValid() || SentReceipts.Contains(Name)) return;
+	SentReceipts.Add(Name);
+	Assert(Name, bPassed, Detail);
+	Probe->ServerReceipt(Name, bPassed, Detail);
+}
+
+void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FString& Detail, ACoopNetTestProbe* Source)
+{
+	if (!bServer || bDone) return;
+	// RPC 所属 Probe 区分两条连接，不能把同一客户端的重复回执算成两人成功。
+	const ACoopNetTestProbe* Expected = Name.StartsWith(TEXT("Partner")) ? PartnerProbe.Get() : Probe.Get();
+	if (!Source || Source != Expected || Receipts.Contains(Name)) return;
+	Receipts.Add(Name);
+	Emit(TEXT("RECEIPT"), Name + TEXT(": ") + Detail);
+	if (!bPassed) Assert(Name, false, Detail);
 }
 
 void UCoopNetTestDriver::Finish(bool bPassed, const FString& Detail)
@@ -178,17 +190,11 @@ bool UCoopNetTestDriver::Tick(float)
 	if (Now() - StartedAt > TimeoutSeconds) { Finish(false, TEXT("Test timeout")); return true; }
 	UWorld* World = FindWorld();
 	if (!World) return true;
-	UmultiplayerGameInstance* GI = Cast<UmultiplayerGameInstance>(World->GetGameInstance());
-	if (!GI) { Finish(false, TEXT("Wrong GameInstance")); return true; }
-	if (GameInstance.Get() != GI)
-	{
-		// 模块启动时 GEngine 可能尚未构造；在游戏实例就绪后再订阅全局失败事件。
-		GEngine->OnNetworkFailure().RemoveAll(this);
-		GEngine->OnNetworkFailure().AddUObject(this, &ThisClass::NetworkFailure);
-		GameInstance = GI;
-	}
-	if (Mode == TEXT("DedicatedSmoke")) DedicatedTick(World);
-	else if (bServer) ServerTick(World); else if (bPartner) PartnerTick(World); else ClientTick(World);
+	GameInstance = Cast<UmultiplayerGameInstance>(World->GetGameInstance());
+	if (!GameInstance.IsValid()) { Finish(false, TEXT("Wrong GameInstance")); return true; }
+	if (bServer) ServerTick(World);
+	else if (bPartner) PartnerTick(World);
+	else ClientTick(World);
 #endif
 	return true;
 }
@@ -229,13 +235,12 @@ void UCoopNetTestDriver::ServerTick(UWorld* World)
 	{
 		FActorSpawnParameters Params; Params.Owner = Partner;
 		PartnerProbe = World->SpawnActor<ACoopNetTestProbe>(Params);
+		if (!PartnerProbe.IsValid()) { Finish(false, TEXT("Could not create partner probe")); return; }
 		PartnerProbe->Stage = TEXT("PartnerReady");
 	}
 	if (Phase == TEXT("ReadyForPartner"))
 	{
 		if (!Receipts.Contains(TEXT("PartnerReady"))) return;
-		if (Mode == TEXT("LateJoin")) PrepareLateJoin(World);
-		if (bDone) return;
 		SetPhase(TEXT("ReadyForClient"));
 		Emit(TEXT("PRIMARY_READY"));
 	}
@@ -244,22 +249,15 @@ void UCoopNetTestDriver::ServerTick(UWorld* World)
 		APlayerController* Remote = PrimaryPlayer(World);
 		if (!Remote) return;
 		FActorSpawnParameters Params; Params.Owner = Remote;
-		Probe = Mode == TEXT("RideMotion") ? World->SpawnActor<ACoopPlatformRideProbe>(Params) : World->SpawnActor<ACoopNetTestProbe>(Params);
+		Probe = Mode == TEXT("Combat")
+			? World->SpawnActor<ACoopNetTestProbe>(Params)
+			: World->SpawnActor<ACoopPlatformRideProbe>(Params);
 		Assert(TEXT("Join"), Probe.IsValid(), TEXT("Two remote players; primary probe owned by second connection"));
 		if (!Probe.IsValid()) return;
-		if (Mode == TEXT("Scale"))
-		{
-			SpawnScale(World);
-			if (bDone) return;
-			SetPhase(TEXT("Warmup"));
-			Probe->Stage = TEXT("Warmup");
-			Probe->ForceNetUpdate();
-		}
-		else SetPhase(TEXT("ScenarioStart"));
+		SetPhase(TEXT("ScenarioStart"));
 	}
-	if (Mode == TEXT("Scale")) ScaleTick(World);
-	else if (Mode == TEXT("RideMotion")) MotionServerTick(World);
-	else ScenarioServerTick(World);
+	if (Mode == TEXT("Combat")) CombatServerTick(World);
+	else MotionServerTick(World);
 	// 广播完成状态；服务器延迟退出，外层脚本还会要求 Partner 独立 DONE 才判通过。
 	if (bDone && PartnerProbe.IsValid()) { PartnerProbe->Stage = TEXT("Complete"); PartnerProbe->ForceNetUpdate(); }
 }
@@ -288,13 +286,7 @@ void UCoopNetTestDriver::PartnerTick(UWorld* World)
 	if (!State || State->GetObjectiveState().RequiredKeys <= 0) return;
 	if (!SentReceipts.Contains(TEXT("PartnerReady")))
 		SendReceipt(TEXT("PartnerReady"), true, TEXT("First remote client received pawn, owned probe and shared objective"));
-	if (State->GetObjectiveState().bGameWon && !SentReceipts.Contains(TEXT("PartnerVictory")))
-	{
-		SendReceipt(TEXT("PartnerVictory"), true, TEXT("Victory replicated to the other client too"));
-		PreviousWorld = World;
-	}
-	if (Probe->Stage == TEXT("Restarted") && SentReceipts.Contains(TEXT("PartnerVictory")) && !State->GetObjectiveState().bGameWon)
-		SendReceipt(TEXT("PartnerRestart"), true, TEXT("Partner loaded reset world"));
+	if (Mode == TEXT("Combat")) CombatClientTick(World);
 	if (Probe->Stage == TEXT("Complete"))
 	{
 		SendReceipt(TEXT("PartnerComplete"), true, TEXT("Partner observed completion"));
@@ -304,22 +296,10 @@ void UCoopNetTestDriver::PartnerTick(UWorld* World)
 
 void UCoopNetTestDriver::ClientTick(UWorld* World)
 {
-	if (Mode != TEXT("Scale") && (Phase == TEXT("Leaving") || Phase == TEXT("Restarting")))
-	{
-		ScenarioClientTick(World);
-		return;
-	}
 	if (World->GetNetMode() != NM_Client)
 	{
 		if (Phase == TEXT("Boot") && World->GetFirstPlayerController())
 		{
-			SetPhase(Mode == TEXT("ConnectionRetry") ? TEXT("BadAddress") : TEXT("Connecting"));
-			GameInstance->ConnectToServer(Mode == TEXT("ConnectionRetry") ? TEXT("127.0.0.1:1") : ServerAddress);
-		}
-		else if (Phase == TEXT("BadAddress") && GameInstance->GetConnectionState() == EMultiplayerConnectionState::Idle)
-		{
-			Assert(TEXT("ConnectionFailureRecovered"), !GameInstance->GetConnectionMessage().IsEmpty(),
-				TEXT("Unreachable endpoint released busy state and reported error"));
 			SetPhase(TEXT("Connecting"));
 			GameInstance->ConnectToServer(ServerAddress);
 		}
@@ -331,272 +311,7 @@ void UCoopNetTestDriver::ClientTick(UWorld* World)
 			if (It->GetOwner() == World->GetFirstPlayerController()) { Probe = *It; break; }
 		if (!Probe.IsValid()) return;
 		Assert(TEXT("Join"), true, TEXT("Remote-owned replicated test probe received after direct connection"));
-		if (Mode == TEXT("Flow") && Phase == TEXT("Connecting"))
-		{
-			const APlayerController* Local = World->GetFirstPlayerController();
-			const bool bInputReady = Local && Local->IsLocalController() && !Local->bShowMouseCursor
-				&& World->GetGameViewport() && !World->GetGameViewport()->IgnoreInput();
-			Assert(TEXT("ClientInputReady"), bInputReady, TEXT("Menu UIOnly released; gameplay viewport accepts input"));
-			if (bDone) return;
-		}
 	}
-	const FString Command = Probe->Stage;
-	if (Mode == TEXT("RideMotion")) { MotionClientTick(World); return; }
-	if (Mode != TEXT("Scale")) { ScenarioClientTick(World); return; }
-	if (Command == TEXT("Warmup") && !SentReceipts.Contains(TEXT("ScaleClientLoad")))
-	{
-		if (Phase != TEXT("Warmup")) SetPhase(TEXT("Warmup"));
-		// 跨 Actor 的属性到达顺序没有保证；等所有引用解析完，再验证实际类型和位置变化。
-		if (CheckScaleLoad(World, true))
-		{
-			Assert(TEXT("ScaleClientLoad"), true, ScaleLoadDetail);
-			SentReceipts.Add(TEXT("ScaleClientLoad"));
-			Probe->ServerReceipt(TEXT("ScaleClientLoad"), true, ScaleLoadDetail);
-		}
-		else if (Now() - PhaseAt > 30)
-		{
-			Probe->ServerReceipt(TEXT("ScaleClientLoad"), false, ScaleLoadDetail);
-			Assert(TEXT("ScaleClientLoad"), false, TEXT("Client load confirmation timed out: ") + ScaleLoadDetail);
-		}
-		return;
-	}
-	if (Command == TEXT("Sample") && Phase != TEXT("Sample"))
-	{
-		if (!SentReceipts.Contains(TEXT("ScaleClientLoad")))
-		{
-			Finish(false, TEXT("Server requested sampling before client load confirmation"));
-			return;
-		}
-		SetPhase(TEXT("Sample"));
-		BeginSample(World);
-		if (bDone) return;
-	}
-	if (Command == TEXT("SampleEnd") && !SentReceipts.Contains(Command))
-	{
-		if (EndSample(World))
-		{
-			SentReceipts.Add(Command);
-			Probe->ServerReceipt(Command, true, TEXT("Client counters and CSV completed"));
-		}
-	}
-	if (Command == TEXT("Complete") && !SentReceipts.Contains(Command))
-	{
-		SentReceipts.Add(Command);
-		Probe->ServerReceipt(Command, true, TEXT("Client complete"));
-		Finish(true);
-	}
-}
-
-void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FString& Detail, ACoopNetTestProbe* Source)
-{
-	if (!bServer || bDone) return;
-	// RPC 所属 Probe 区分两条连接，不能把同一客户端的重复回执算成两人成功。
-	FString ReceiptName = Name;
-	if (Mode == TEXT("DedicatedSmoke"))
-	{
-		if (!Source || !DedicatedProbes.Contains(Source)) return;
-		ReceiptName += TEXT(":") + Source->GetName();
-	}
-	if (Receipts.Contains(ReceiptName)) return;
-	Receipts.Add(ReceiptName);
-	Emit(TEXT("RECEIPT"), Name + TEXT(": ") + Detail);
-	if (!bPassed) Assert(Name, false, Detail);
-}
-
-void UCoopNetTestDriver::SpawnScale(UWorld* World)
-{
-	const bool bFrequency = Optimization == TEXT("Frequency") || Optimization == TEXT("Combined");
-	const bool bDormancy = Optimization == TEXT("Dormancy") || Optimization == TEXT("Combined");
-	if ((Matrix == TEXT("Static") && (MovingCount != 0 || (Optimization != TEXT("Baseline") && Optimization != TEXT("Dormancy"))))
-		|| (Matrix == TEXT("Moving") && (StaticCount != 0 || (Optimization != TEXT("Baseline") && Optimization != TEXT("Frequency")))))
-	{
-		Finish(false, TEXT("Matrix must isolate Dormancy for static plates or update frequency for moving platforms"));
-		return;
-	}
-	if (!bFrequency && !bDormancy && Optimization != TEXT("Baseline"))
-	{
-		Finish(false, TEXT("Unknown CoopOptimization"));
-		return;
-	}
-	Probe->Subjects.Reset();
-	for (int32 Index = 0; Index < StaticCount; ++Index)
-	{
-		const FVector Location(20000 + (Index % 25) * 400, (Index / 25) * 400, 2000);
-		AmultiplayerPressurePlate* Plate = World->SpawnActor<AmultiplayerPressurePlate>(Location, FRotator::ZeroRotator);
-		if (!Plate) continue;
-		Plate->SetActorEnableCollision(false);
-		Plate->bAlwaysRelevant = true;
-		// 静态系列仅改变休眠，网络频率两组同为 30 Hz；不改现有关卡背景机关。
-		const float PlateFrequency = Matrix == TEXT("Static") ? 30.f : (bFrequency ? 5.f : 100.f);
-		Plate->SetNetUpdateFrequency(PlateFrequency);
-		Plate->SetMinNetUpdateFrequency(PlateFrequency);
-		Plate->SetNetDormancy(bDormancy ? DORM_DormantAll : DORM_Awake);
-		Plate->ForceNetUpdate();
-		Probe->Subjects.Add(Plate);
-	}
-	for (int32 Index = 0; Index < MovingCount; ++Index)
-	{
-		const FVector Location(20000, -1000 - Index * 400, 2000);
-		AmultiplayerMovingPlatform* Platform = World->SpawnActor<AmultiplayerMovingPlatform>(Location, FRotator::ZeroRotator);
-		if (!Platform) continue;
-		Platform->bAlwaysRelevant = true;
-		Platform->SetActorEnableCollision(false);
-		Platform->SetNetUpdateFrequency(bFrequency ? 30 : 100);
-		Platform->SetMinNetUpdateFrequency(bFrequency ? 30 : 100);
-		if (UmultiplayerTransporterComponent* Transport = Platform->FindComponentByClass<UmultiplayerTransporterComponent>())
-		{
-			Transport->ConfigureWorldTargets(Location, Location + FVector(500, 0, 0));
-			Transport->SetTransportActive(true);
-		}
-		MovingActors.Add(Platform);
-		MovingStarts.Add(Location);
-		MovingForward.Add(true);
-		Probe->Subjects.Add(Platform);
-	}
-	Assert(TEXT("ScaleCount"), CheckScaleLoad(World, false), ScaleLoadDetail);
-}
-
-bool UCoopNetTestDriver::CheckScaleLoad(UWorld* World, bool bRequireObservedMovement)
-{
-	ScaleObservedStaticCount = 0;
-	ScaleObservedMovingCount = 0;
-	TSet<AActor*> UniqueActors;
-	bool bReferencesValid = Probe.IsValid();
-	if (Probe.IsValid()) for (AActor* Actor : Probe->Subjects)
-	{
-		if (!IsValid(Actor) || Actor->GetWorld() != World || UniqueActors.Contains(Actor))
-		{
-			bReferencesValid = false;
-			continue;
-		}
-		UniqueActors.Add(Actor);
-		if (Cast<AmultiplayerPressurePlate>(Actor)) ++ScaleObservedStaticCount;
-		else if (AmultiplayerMovingPlatform* Platform = Cast<AmultiplayerMovingPlatform>(Actor))
-		{
-			++ScaleObservedMovingCount;
-			if (bRequireObservedMovement)
-			{
-				const TWeakObjectPtr<AmultiplayerMovingPlatform> Key(Platform);
-				if (const FVector* Start = ScaleObservedStarts.Find(Key))
-				{
-					if (FVector::DistSquared(*Start, Platform->GetActorLocation()) >= FMath::Square(5.f))
-						ScaleMovedActors.Add(Key);
-				}
-				else ScaleObservedStarts.Add(Key, Platform->GetActorLocation());
-			}
-		}
-		else bReferencesValid = false;
-	}
-	const bool bCountMatches = Probe.IsValid() && Probe->Subjects.Num() == StaticCount + MovingCount
-		&& ScaleObservedStaticCount == StaticCount && ScaleObservedMovingCount == MovingCount;
-	const bool bMovementConfirmed = !bRequireObservedMovement || ScaleMovedActors.Num() == MovingCount;
-	ScaleLoadDetail = FString::Printf(TEXT("Observed static=%d/%d moving=%d/%d; validUniqueReferences=%s; platformsMovedAtLeast5cm=%d/%d"),
-		ScaleObservedStaticCount, StaticCount, ScaleObservedMovingCount, MovingCount,
-		bReferencesValid ? TEXT("true") : TEXT("false"), ScaleMovedActors.Num(), MovingCount);
-	// 0 个新增对象也是有效基线：收到 Warmup 指令且空清单与期望一致即可确认。
-	return bReferencesValid && bCountMatches && bMovementConfirmed;
-}
-
-void UCoopNetTestDriver::ScaleTick(UWorld* World)
-{
-	for (int32 Index = 0; Index < MovingActors.Num(); ++Index)
-	{
-		AmultiplayerMovingPlatform* Platform = MovingActors[Index].Get();
-		if (!Platform) { Finish(false, TEXT("Scale platform destroyed")); return; }
-		const FVector Target = MovingStarts[Index] + (MovingForward[Index] ? FVector(500, 0, 0) : FVector::ZeroVector);
-		if (Platform->GetActorLocation().Equals(Target, 1))
-		{
-			MovingForward[Index] = !MovingForward[Index];
-			Platform->FindComponentByClass<UmultiplayerTransporterComponent>()->SetTransportActive(MovingForward[Index]);
-		}
-	}
-	if (Phase == TEXT("Warmup") && !Receipts.Contains(TEXT("ScaleClientLoad")) && Now() - PhaseAt > 45)
-	{
-		Finish(false, TEXT("Timed out waiting for ScaleClientLoad: client must resolve every synthetic actor and observe platform movement"));
-		return;
-	}
-	if (Phase == TEXT("Warmup") && Receipts.Contains(TEXT("ScaleClientLoad")) && Now() - PhaseAt >= WarmupSeconds)
-	{
-		SetPhase(TEXT("Sample"));
-		BeginSample(World);
-		if (bDone) return;
-		Probe->Stage = TEXT("Sample");
-		Probe->ForceNetUpdate();
-	}
-	if (Phase == TEXT("Sample") && Now() - SampleAt >= SampleSeconds)
-	{
-		SetPhase(TEXT("SampleEnd"));
-		Probe->Stage = TEXT("SampleEnd");
-		Probe->ForceNetUpdate();
-	}
-	if (Phase == TEXT("SampleEnd") && EndSample(World) && Receipts.Contains(TEXT("SampleEnd")))
-	{
-		Assert(TEXT("SampleCompleted"), true, TEXT("Both real network drivers sampled and CSV writes finished"));
-		SetPhase(TEXT("Completing"));
-		Probe->Stage = TEXT("Complete");
-		Probe->ForceNetUpdate();
-	}
-	if (Phase == TEXT("Completing") && Receipts.Contains(TEXT("Complete"))) Finish(true);
-}
-
-void UCoopNetTestDriver::BeginSample(UWorld* World)
-{
-	if (!CheckScaleLoad(World, !bServer)) { Finish(false, TEXT("Scale load changed before sample: ") + ScaleLoadDetail); return; }
-	UNetDriver* Net = World->GetNetDriver();
-	if (!Net) { Finish(false, TEXT("No NetDriver at sample start")); return; }
-	SampleDriver = Net;
-	StartBytes = Net->OutTotalBytes;
-	StartPackets = Net->OutTotalPackets;
-	SampleAt = Now();
-#if CSV_PROFILER
-	const FString CsvFolder = CsvRequestedPath.IsEmpty() ? FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("NetworkValidation/Csv")) : FPaths::GetPath(CsvRequestedPath);
-	const FString CsvName = CsvRequestedPath.IsEmpty() ? Token + TEXT("-") + Role + TEXT(".csv") : FPaths::GetCleanFilename(CsvRequestedPath);
-	FCsvProfiler::Get()->BeginCapture(-1, CsvFolder, CsvName);
-#endif
-}
-
-bool UCoopNetTestDriver::EndSample(UWorld* World)
-{
-	if (bMetricEmitted) return true;
-	if (!CheckScaleLoad(World, !bServer)) { Finish(false, TEXT("Scale load changed during sample: ") + ScaleLoadDetail); return false; }
-	UNetDriver* Net = SampleDriver.Get();
-	if (!Net || World->GetNetDriver() != Net) { Finish(false, TEXT("NetDriver changed during sample")); return false; }
-	if (!bSampleEnding)
-	{
-		SampleElapsed = Now() - SampleAt;
-		SampleBytes = Net->OutTotalBytes - StartBytes;
-		SamplePackets = Net->OutTotalPackets - StartPackets;
-		bSampleEnding = true;
-#if CSV_PROFILER
-		CsvFinished = FCsvProfiler::Get()->EndCapture();
-#endif
-	}
-	FString CsvPath;
-#if CSV_PROFILER
-	if (!CsvFinished.IsValid() || !CsvFinished.IsReady()) return false;
-	CsvPath = FPaths::ConvertRelativePathToFull(CsvFinished.Get());
-#endif
-	int32 ActorCount = 0;
-	for (TActorIterator<AActor> It(World); It; ++It) ++ActorCount;
-	TSharedRef<FJsonObject> Metrics = MakeShared<FJsonObject>();
-	Metrics->SetNumberField(TEXT("outBytes"), SampleBytes);
-	Metrics->SetNumberField(TEXT("outPackets"), SamplePackets);
-	Metrics->SetNumberField(TEXT("sampleSeconds"), SampleElapsed);
-	Metrics->SetNumberField(TEXT("bytesPerSecond"), SampleBytes / FMath::Max(.001, SampleElapsed));
-	Metrics->SetNumberField(TEXT("connections"), bServer ? Net->ClientConnections.Num() : (Net->ServerConnection ? 1 : 0));
-	Metrics->SetNumberField(TEXT("actorCount"), ActorCount);
-	Metrics->SetNumberField(TEXT("syntheticStaticCount"), ScaleObservedStaticCount);
-	Metrics->SetNumberField(TEXT("syntheticMovingCount"), ScaleObservedMovingCount);
-	Metrics->SetNumberField(TEXT("expectedStaticCount"), StaticCount);
-	Metrics->SetNumberField(TEXT("expectedMovingCount"), MovingCount);
-	if (!bServer) Metrics->SetNumberField(TEXT("platformsWithObservedMovement"), ScaleMovedActors.Num());
-	Metrics->SetStringField(TEXT("optimization"), Optimization);
-	Metrics->SetStringField(TEXT("matrix"), Matrix);
-	Metrics->SetStringField(TEXT("counterSource"), TEXT("UNetDriver.OutTotalBytes/OutTotalPackets; engine send counters including configured packet overhead, not NIC capture or delivered bytes"));
-	Metrics->SetStringField(TEXT("csvPath"), CsvPath);
-	TSharedRef<FJsonObject> Extra = MakeShared<FJsonObject>();
-	Extra->SetObjectField(TEXT("metrics"), Metrics);
-	Emit(TEXT("METRIC"), TEXT("Server measurement is total outbound across its remote connections; synthetic actors plus constant map background"), Extra);
-	bMetricEmitted = true;
-	return true;
+	if (Mode == TEXT("Combat")) CombatClientTick(World);
+	else MotionClientTick(World);
 }

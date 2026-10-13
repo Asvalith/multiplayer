@@ -12,7 +12,25 @@
 - **DS 连接与失败恢复**：GameInstance 管理地址校验、连接期限、取消、有限重连和退出；按 World / NetDriver 过滤全局失败事件，用操作编号拒绝失效流程。某个玩家退出不关闭服务器，重连后重新获取仍在运行的 DS 保存的共享状态。
 - **复制成本优化与数据验证**：静止机关采用网络休眠，变化前刷新休眠；移动平台采用受控的更新频率上限。历史 Listen 正式对照中，500 个合成压力板的复制作用域耗时降低约 **89.0%**，20 个合成平台的引擎发送量降低约 **36.2%**；两项分别统计复制 CPU 与引擎发送量。
 - **移动基座与弱网定位**：角色复用原生 CharacterMovement；平台维护根组件速度和更新阶段，角色保留空中水平惯性。测试按同一 Move 时间戳关联双端记录，输出基座状态与校正时间线，并通过频率对照验证同步策略的取舍。
-- **配置与自动化验证**：玩法参数集中到 JSON，启动时校验并完整提交，失败整表回退。统一脚本编排 DS 与两个客户端，覆盖玩法、晚加入、断线恢复、载人动作和复制规模实验，并检查各端断言、退出状态与采样有效性。
+- **配置与自动化验证**：玩法参数集中到 JSON，启动时校验并完整提交，失败整表回退。平台专项脚本编排 DS 与两个客户端，覆盖站立、行走、反向和自由跳跃，检查各端动作、退出状态与采样有效性；既有玩法回归与规模对照保留分版本报告。
+
+## GAS 基础战斗
+
+`codex/gas` 分支在原有合作角色上接入 GAS，使用独立关卡 `/Game/Combat/Maps/CombatTest` 验证战斗，不替换原机关关卡。
+
+- **左键攻击**：服务器生成能量弹，命中敌人造成 25 点伤害，冷却 0.5 秒；队友不会受到伤害。
+- **Q 防御**：消耗 20 能量，持续 3 秒、减伤 50%，冷却 8 秒；所属客户端先预测消耗、冷却和防御效果，服务器确认或拒绝后由 GAS 核对结果。
+- **E 治疗**：消耗 25 能量，治疗 600cm 内最低血量比例的受伤友军或自己 30 点，冷却 6 秒；没有合法目标时不消耗，不能穿墙治疗。
+- **服务器维护战斗状态**：GAS 管理属性、消耗、冷却和状态标签；玩家与敌人共用伤害和死亡处理。死亡后取消技能、停止移动并退出机关占用，敌人额外停止 AI 并清理尸体。
+- **基础敌人**：服务器生成 3 个敌人，使用 NavMesh 追击存活玩家，进入射程且视线无遮挡后通过 GAS 攻击。
+
+~~~powershell
+.\Scripts\RunLocalDedicatedServer.ps1 -Play -Map /Game/Combat/Maps/CombatTest -Port 7777
+~~~
+
+攻击和治疗使用 ServerOnly，防御使用 LocalPredicted；请求经过所属角色的 ASC，伤害、治疗目标及最终战斗状态由服务器决定。角色移动仍使用原生 CMC。独立战斗 HUD 使用 UMG 蓝图显示血量、能量、防御状态及剩余时间，原合作 HUD 保持不变。
+
+已通过编译、基础规则回归和一个 DS 加两个客户端的 Normal、Harsh 战斗同步测试，检查真实预测键的确认、资源不足拒绝、死亡拒绝及两端最终状态。技能与对应效果按攻击、防御、治疗分组，敌人生成和追击集中在同一组源码中。
 
 ## 目录结构
 
@@ -20,7 +38,14 @@
 Config/                                  引擎、地图、输入与打包配置
 Content/Config/Gameplay.json              目标数量、人数、机关速度与重连等待参数
 Content/UI/DSMenu.umap                    地址连接菜单关卡
+Content/UI/WBPmainmenu.uasset             UMG 地址输入、连接与取消按钮
+Content/UI/winandquit.uasset              UMG 胜利、重开与返回菜单按钮
+Content/UI/BP_MenuController.uasset       菜单界面生命周期与输入模式
+Content/UI/BP_MenuGameMode.uasset         菜单控制器配置，不生成 Pawn
+Content/UI/BP_CoopHUD.uasset              胜利订阅、快照补读与本地界面管理
+Content/UI/BP_CoopGameState.uasset        继承 C++ 共享状态，就绪后通知本地 HUD
 Content/ThirdPerson/                      角色、输入与机关蓝图
+Content/Combat/                           独立战斗关卡与 UMG 战斗 HUD
 Source/
   multiplayer.Target.cs                  游戏目标
   multiplayerEditor.Target.cs            编辑器开发目标
@@ -30,11 +55,11 @@ Source/
     Network/                             GameInstance 连接生命周期
     Player/                              第三人称输入、CMC 与所属玩家请求
     Mechanisms/                          钥匙、插槽、压力板、门、平台与终点
-    UI/                                  原生连接菜单、胜利 HUD 与界面
-    Testing/                             三进程回归、连接单测与移动诊断
+    Combat/                              GAS 属性、技能、效果、能量弹与基础敌人
+    Testing/                             三进程平台、战斗回归与移动诊断
 Scripts/
-  RunLocalDedicatedServer.ps1             可操作双客户端 / 连接冒烟入口
-  RunMultiplayerNetworkTests.ps1          统一回归与规模实验
+  RunLocalDedicatedServer.ps1             可操作双客户端 / 平台实验入口
+  RunMultiplayerNetworkTests.ps1          平台与战斗双客户端弱网回归
   PlotRideMotionTimeline.py               平台与角色的实测时间线
   ExportNetworkEvidence.ps1               已完成实验的脱敏证据导出
 Tests/                                   测试说明、报告结构与公开证据
@@ -52,7 +77,7 @@ flowchart LR
         CC["Character + CMC：输入、移动预测"]
         PC["PlayerController：请求、RPC 与操作状态"]
         CGS["GameState 副本：共享结果"]
-        HUD["CoopHUD：胜利订阅与界面管理"]
+        HUD["BP_CoopHUD：胜利订阅与界面管理"]
         VIEW["机关表现与本地 UI"]
         CGS -->|状态通知与绑定后补读| HUD
         HUD -->|创建界面与管理输入| VIEW
@@ -89,7 +114,7 @@ GameInstance 位于每个进程，管理配置与连接生命周期；合作进�
 | CoopGameState | 目标总数、已完成数量、胜利状态 | 属性复制与 RepNotify；HUD 绑定后补读 |
 | GameInstance | 配置、服务器地址、连接阶段、重试计时与操作编号 | 本地菜单显示连接状态与操作反馈 |
 | PlayerController | 所属玩家请求、重开 / 退出操作状态 | Server RPC 提交请求，Client RPC 接收失败；本地委托发布操作反馈 |
-| CoopHUD / VictoryWidget | 本地胜利订阅、界面生命周期与输入模式 | HUD 等待 GameState 并补读胜利快照；Widget 展示反馈、转交按钮意图 |
+| BP_CoopHUD / winandquit | 本地胜利订阅、界面生命周期与输入模式 | HUD 与 GameState 就绪时相互衔接并补读胜利快照；Widget 展示反馈、转交按钮意图 |
 | 机关 Actor | 服务器端安装、开关、激活条件和运动状态 | 复制必要结果，客户端重建对应表现 |
 | PlayerOccupancyComponent | 服务器区域内的角色重叠记录与玩家资格 | 占用表留在服务器，由机关发布最终结果 |
 | TransporterComponent | 服务器轨道位移、方向与根组件速度 | 由平台 Actor 的移动复制传递 |
@@ -109,6 +134,10 @@ GameMode 完成规则判断后，通过 GameState 的唯一权威入口写入 `F
 服务器写入和客户端 OnRep 分别触发本机通知。广播前保存本次快照及胜利转换，避免监听者同步重入造成重复胜利广播。GameMode 指定的 CoopHUD 等待 GameState 就绪，订阅后补读当前结果，负责本地胜利界面的创建、清理与输入模式。
 
 重开由所属 Controller 提交可靠 Server RPC，GameMode 校验条件并去重；失败释放请求状态并反馈所属客户端。Controller 通过本地 `OnVictoryActionChanged` 委托向 Widget 发布操作反馈。主动退出交回 GameInstance，统一停止重连、断开连接并返回菜单。
+
+界面布局、按钮事件和状态绑定保存在 `WBPmainmenu`、`winandquit` 两个 UMG 蓝图中，直接继承 `UserWidget`。`BP_MenuController` 与 `BP_CoopHUD` 负责创建、清理和输入模式；C++ 只提供 GameInstance / Controller 的请求、查询和状态通知接口，没有自定义 C++ UI 基类。
+
+`BP_CoopHUD` 就绪时尝试获取 GameState；`BP_CoopGameState` 就绪时也通知已有的本地 HUD，覆盖两者不同的到达顺序。HUD 先订阅胜利事件，再读取当前快照，重复初始化不会重复创建界面；退出时解除绑定。这个约定针对本项目每个 World 一份 GameState 的生命周期，不依赖 Tick 轮询。
 
 ### 角色与移动平台
 
@@ -204,8 +233,8 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 | 终点条件汇合 | [WinArea](Source/multiplayer/Mechanisms/multiplayerWinArea.cpp) |
 | 连接、取消与有限重连 | [GameInstance](Source/multiplayer/Network/multiplayerGameInstance.cpp) |
 | JSON 校验与配置读取 | [GameplayConfig](Source/multiplayer/Core/multiplayerGameplayConfig.cpp) |
-| 菜单、胜利 HUD 与界面 | [ConnectionMenu](Source/multiplayer/UI/multiplayerConnectionMenu.cpp)、[CoopHUD / VictoryWidget](Source/multiplayer/UI/multiplayerVictoryWidget.cpp) |
-| 自动场景与移动诊断 | [Testing](Source/multiplayer/Testing/)、[统一测试入口](Scripts/RunMultiplayerNetworkTests.ps1) |
+| 菜单、胜利 HUD 与界面 | [Content/UI](Content/UI/) 中的 UMG、菜单控制器与 HUD 蓝图 |
+| 平台实验与移动诊断 | [Testing](Source/multiplayer/Testing/)、[统一测试入口](Scripts/RunMultiplayerNetworkTests.ps1) |
 
 函数按生命周期、对外业务入口、引擎事件和内部清理组织。共同机制抽到占用组件与网格移动辅助函数；机关各自保留规则，连接状态不承担合作玩法结算。
 
@@ -239,7 +268,7 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 # 一个 DS + 两个可操作客户端；也可双击 LaunchTwoPlayers.bat。
 .\Scripts\RunLocalDedicatedServer.ps1 -Play -Port 7777
 
-# 无画面连接冒烟，完成断言后自动退出。
+# 无画面平台实验，完成断言与采样后自动退出。
 .\Scripts\RunLocalDedicatedServer.ps1
 ~~~
 
@@ -249,33 +278,22 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 
 单个客户端退出不会关闭 DS；本地手动启动脚本在两个窗口都关闭或自身退出时，清理它启动的进程。地址连接使用服务器可达地址和游戏端口。
 
-### 自动回归与规模实验
+### 平台弱网专项实验
 
 ~~~powershell
 # 脚本和报告判定自测，不启动 UE。
 .\Scripts\RunMultiplayerNetworkTests.ps1 -SelfTest
 
-# DS + 两客户端，七类场景与三档模拟网络。
-.\Scripts\RunMultiplayerNetworkTests.ps1 -Scenario All -Profiles Normal,Moderate,Harsh -Repeat 1
+# DS + 两客户端，站立、行走、反向和自由跳跃，三档模拟网络。
+.\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Normal,Moderate,Harsh -Repeat 1
 
-# 同条件重复的平台动作测试。
-.\Scripts\RunMultiplayerNetworkTests.ps1 -Scenario RideMotion -Profiles Harsh -Repeat 3
-
-# 两种负载分别对照，避免变量混杂。
-.\Scripts\RunMultiplayerNetworkTests.ps1 -Suite Scale -Matrix Static -StaticCounts 0,50,200,500 -Repeat 3
-.\Scripts\RunMultiplayerNetworkTests.ps1 -Suite Scale -Matrix Moving -MovingCounts 1,5,20 -Repeat 3
+# 同条件重复与静止平台对照。
+.\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -Repeat 3
+.\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -PlatformMotion Static -Repeat 1
 ~~~
 
-| 场景 | 自动核验内容 |
-| --- | --- |
-| Flow | 自动归位、不同玩家计数、触发体重绑定、机关开关、占用清理、平台、双端胜利与重开 |
-| Keys | 缺绑定 / 安装失败、重试、重复触碰、目标上限、提交重入与远端附着 |
-| LateJoin | 后加入者收到既有进度、休眠机关状态与钥匙附着 |
-| Reconnect | 单连接真实断包至超时、有限重连、共享状态恢复，DS 与另一玩家保持 |
-| ConnectionRetry | 不可达地址失败后释放忙碌状态，再连接有效服务器 |
-| Ride / RideMotion | CMC 基座、运输、站立、行走、反向与自由跳跃，输出分阶段数据与历史 Move 记录 |
-| Scale | 实际对象数量、客户端接收与运动证据、服务器复制耗时及发送计数 |
+服务器和受测客户端分别保存四阶段指标及历史 Move 记录，按移动指令时间戳关联两端状态，输出跳跃、基座切换与校正时间线。Partner 独立确认连接就绪和实验完成。
 
-Normal / Moderate / Harsh 分别设置 `PktLag / Variance / Loss` 为 `0 / 0 / 0%`、`100 / 20 / 2%`、`200 / 50 / 5%`，参数施加到三个进程，不能直接当作实测 RTT。断线场景另外阻断指定连接的服务器出站包直到真实超时，不以主动调用断线回调代替故障。
+Normal / Moderate / Harsh 分别设置 `PktLag / Variance / Loss` 为 `0 / 0 / 0%`、`100 / 20 / 2%`、`200 / 50 / 5%`，参数施加到三个进程，不能直接当作实测 RTT。
 
-通过要求同时满足各端必需断言、完成回执、正常退出和致命日志检查；规模实验同时检查 CPU 采样有效性。自动回归采用 NullRHI，验证状态、动作断言和数值记录。命令、参数和证据口径统一见 [Tests/README.md](Tests/README.md)，设计说明见 [Docs/NetworkDesign.md](Docs/NetworkDesign.md)。
+通过要求同时满足各端必需断言、完成回执、正常退出、致命日志检查与阶段采样有效性。默认 NullRHI 的数值实验不替代人工视觉验收。命令与口径见 [Tests/README.md](Tests/README.md)，设计见 [Docs/NetworkDesign.md](Docs/NetworkDesign.md)；既有玩法与规模实验见前面的分版本报告。

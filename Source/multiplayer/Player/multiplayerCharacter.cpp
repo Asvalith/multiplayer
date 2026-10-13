@@ -11,6 +11,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
+#include "InputCoreTypes.h"
 #include "Core/multiplayerLog.h"
 
 /*
@@ -102,6 +103,11 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
+	// 原有移动 Action 保持不变；基础战斗按键无需新增输入资源，也可由蓝图调用相同接口。
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AmultiplayerCharacter::Attack);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AmultiplayerCharacter::Defend);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AmultiplayerCharacter::Heal);
+
 	// Enhanced Input 把“动作”与具体按键解耦，同一套角色代码可复用不同输入方案。
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
@@ -131,7 +137,7 @@ void AmultiplayerCharacter::Move(const FInputActionValue& Value)
 	// 二维输入分别表示左右和前后移动。
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
-	if (Controller != nullptr)
+	if (Controller != nullptr && IsAlive())
 	{
 		// 只取控制器的 Yaw，避免镜头俯仰导致角色产生向上或向下的移动分量。
 		const FRotator Rotation = Controller->GetControlRotation();

@@ -7,8 +7,8 @@
 #include "Core/multiplayerGameplayConfig.h"
 #include "GameFramework/GameSession.h"
 #include "GameFramework/GameState.h"
+#include "GameFramework/HUD.h"
 #include "Player/multiplayerCoopPlayerController.h"
-#include "UI/multiplayerVictoryWidget.h"
 #include "Core/multiplayerLog.h"
 #include "UObject/ConstructorHelpers.h"
 #if !UE_BUILD_SHIPPING
@@ -21,7 +21,17 @@ AmultiplayerGameMode::AmultiplayerGameMode()
 {
 	GameStateClass = AmultiplayerCoopGameState::StaticClass();
 	PlayerControllerClass = AmultiplayerCoopPlayerController::StaticClass();
-	HUDClass = AmultiplayerCoopHUD::StaticClass();
+	// 规则和复制仍由 C++ 负责；蓝图 GameState 通知本地 HUD 就绪，HUD 管理界面生命周期。
+	static ConstructorHelpers::FClassFinder<AGameStateBase> CoopStateBPClass(TEXT("/Game/UI/BP_CoopGameState"));
+	static ConstructorHelpers::FClassFinder<AHUD> CoopHUDBPClass(TEXT("/Game/UI/BP_CoopHUD"));
+	if (CoopStateBPClass.Class != nullptr)
+	{
+		GameStateClass = CoopStateBPClass.Class;
+	}
+	if (CoopHUDBPClass.Class != nullptr)
+	{
+		HUDClass = CoopHUDBPClass.Class;
+	}
 
 	//static 只在构造函数第一次执行时查找资源，避免每次创建 GameMode 都重复查找。
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter"));
@@ -46,12 +56,9 @@ void AmultiplayerGameMode::InitGameState()
 	if (AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>())
 	{
 		FmultiplayerCoopObjectiveState InitialState;
-		// 从 Config 读取目标数量；加载失败时已由 Config 回退，这里不再遍历插槽或另设回退目标。
 		InitialState.RequiredKeys = Config.RequiredKeys;
 		CoopState->ApplyAuthoritativeState(InitialState);
 	}
-	UE_LOG(LogMultiplayer, Log, TEXT("Game rules configured: MaxPlayers=%d, RequiredKeys=%d"),
-		Config.SessionMaxPlayers, Config.RequiredKeys);
 }
 
 //装钥匙
@@ -73,7 +80,7 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 	{
 		return false;
 	}
-	// 保留其余快照字段，只推进钥匙进度。
+	//更新状态
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	++NewState.ActivatedKeys;
 	CoopState->ApplyAuthoritativeState(NewState);
@@ -83,22 +90,25 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 //判胜利
 bool AmultiplayerGameMode::TryCompleteCoopGame(int32 CurrentPlayers, int32 RequiredPlayers)
 {
+	//细节：合法性兜底
 	if (CurrentPlayers < FMath::Max(1, RequiredPlayers))
 	{
 		return false;
 	}
+	//状态校验
 	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
 	if (CoopState == nullptr || CoopState->GetObjectiveState().bGameWon || !CoopState->IsObjectiveComplete())
 	{
 		return false;
 	}
+	//更新
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	NewState.bGameWon = true;
 	CoopState->ApplyAuthoritativeState(NewState);
 	return true;
 }
 
-//重新开始
+//重新开始（传入发起者）
 bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingController)
 {
 	//前置校验
@@ -116,18 +126,18 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingCon
 		return false;
 	}
 
-	// 先锁定请求再触发 Travel，阻止两名玩家同帧点击导致重复重载。
+	//****先锁定请求再触发 Travel，阻止两名玩家同帧点击导致重复重载
 	PendingRestart.bRequested = true;
 	PendingRestart.PreviousMatchState = GetMatchState();
 	PendingRestart.PreviousSwitchCountdown = World->NextSwitchCountdown;
 	PendingRestart.Requester = RequestingController;
+
+//测试分支：模拟重开失败（只注入一次）
 #if !UE_BUILD_SHIPPING
 	static bool bRestartFailureInjected = false;
 	if (!bRestartFailureInjected && FParse::Param(FCommandLine::Get(), TEXT("CoopTestFailRestartOnce")))
 	{
 		bRestartFailureInjected = true;
-		// 模拟已进入离图状态但旧 World 尚存活，精确验证与真实失败共用的恢复分支。
-		// 不广播引擎全局错误，避免引擎默认处理器另行断线/切回菜单干扰本分支。
 		StartToLeaveMap();
 		World->NextURL = TEXT("?Restart");
 		PendingRestart.TravelURL = World->NextURL;
@@ -135,15 +145,14 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingCon
 		return false;
 	}
 #endif
-	// DS 的服务端身份来自进程；重开当前地图不需要追加 listen 或创建本地主机玩家。
-	UE_LOG(LogMultiplayer, Log, TEXT("Restarting the current coop map after an authoritative victory."));
+
+
 	RestartGame();
 	if (!PendingRestart.bRequested)
 	{
 		return false;
 	}
 	PendingRestart.TravelURL = World->NextURL;
-	// RestartGame 不返回结果；请求被 GameSession/CanServerTravel 拒绝时不会留下待跳转任务。
 	if (World->NextURL.IsEmpty() && !World->IsInSeamlessTravel())
 	{
 		RecoverFailedRestart(TEXT("RestartGame did not schedule server travel."));

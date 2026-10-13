@@ -55,24 +55,19 @@ void AmultiplayerPressurePlate::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (HasAuthority())
-	{
-		// 初始速度也是复制数据，不能在休眠期间静默改写。
-		FlushNetDormancy();
-		RuntimePressMoveSpeed = FmultiplayerGameplayConfig::Get(this).PlateMoveSpeed;
-	}
-
 	ReleasedRelativeLocation = PlateMesh->GetRelativeLocation();
-	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
-		this, &AmultiplayerPressurePlate::HandleOccupancyChanged);
-	PlayerOccupancy->BindTrigger(ActivationTrigger, bRequirePlayerControlledCharacter);
 	PlateMesh->SetRelativeLocation(GetMeshTargetLocation());
 	SetActorTickEnabled(false);
 
 	if (!HasAuthority())
 	{
+		ActivationTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		return;
 	}
+
+	// 初始速度也是复制数据，不能在休眠期间静默改写。
+	FlushNetDormancy();
+	RuntimePressMoveSpeed = FmultiplayerGameplayConfig::Get(this).PlateMoveSpeed;
 
 	if (bRequireObjectiveComplete)
 	{
@@ -83,6 +78,10 @@ void AmultiplayerPressurePlate::BeginPlay()
 				this, &AmultiplayerPressurePlate::HandleObjectiveProgressChanged);
 		}
 	}
+
+	PlayerOccupancy->OnOccupancyChanged.AddUniqueDynamic(
+		this, &AmultiplayerPressurePlate::HandleOccupancyChanged);
+	PlayerOccupancy->BindTrigger(ActivationTrigger, bRequirePlayerControlledCharacter);
 	EvaluatePlateState();
 }
 
@@ -129,11 +128,8 @@ void AmultiplayerPressurePlate::GetOccupyingCharacters(
 void AmultiplayerPressurePlate::HandleOccupancyChanged(int32 PlayerCount)
 {
 	EvaluatePlateState();
-	if (HasAuthority())
-	{
-		// 激活布尔值不变时也必须通知门重新统计不同玩家。
-		OnPlateOccupancyChanged.Broadcast(this, PlayerCount);
-	}
+	// 激活布尔值不变时也必须通知门重新统计不同玩家。
+	OnPlateOccupancyChanged.Broadcast(this, PlayerCount);
 }
 
 void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
@@ -144,11 +140,6 @@ void AmultiplayerPressurePlate::HandleObjectiveProgressChanged(
 
 void AmultiplayerPressurePlate::EvaluatePlateState()
 {
-	if (!HasAuthority())
-	{
-		return;
-	}
-
 	const bool bObjectiveReady = !bRequireObjectiveComplete
 		|| (CoopGameState != nullptr && CoopGameState->IsObjectiveComplete());
 	const bool bNewPlateActive = (bLatchOnceActivated && bPlateActive)

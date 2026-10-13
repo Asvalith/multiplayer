@@ -21,13 +21,18 @@ public class multiplayer : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"InputCore",
 			"EnhancedInput",
+			"GameplayAbilities",
+			"GameplayTags",
+			"GameplayTasks",
 			"UMG",
 			"Slate",
 			"SlateCore"
 		});
 
 		// 默认菜单、JSON 解析及测试用玩家连接标识只在实现文件中使用。
-		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline", "AIModule", "NavigationSystem" });
+
 	}
 }

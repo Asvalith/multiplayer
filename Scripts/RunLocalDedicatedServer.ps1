@@ -1,5 +1,5 @@
 ﻿<#
-本机独立 DS + 两个客户端。默认冒烟复用网络测试入口；-Play 打开可操作窗口。
+本机独立 DS + 两个客户端。默认复用平台网络实验入口；-Play 打开可操作窗口。
 使用 Editor 的 -server，不等于已经构建独立 Server.exe。只清理本脚本启动的进程。
 #>
 [CmdletBinding()]
@@ -14,7 +14,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Play) {
-    & (Join-Path $PSScriptRoot 'RunMultiplayerNetworkTests.ps1') -Scenario DedicatedSmoke -Profiles @($Profile) -Repeat 1 -EditorPath $EditorPath -Map $Map -ListenPort $Port -TimeoutSeconds $TimeoutSeconds -PlanOnly:$PlanOnly
+    & (Join-Path $PSScriptRoot 'RunMultiplayerNetworkTests.ps1') -Scenario RideMotion -Profiles @($Profile) -Repeat 1 -EditorPath $EditorPath -Map $Map -ListenPort $Port -TimeoutSeconds $TimeoutSeconds -PlanOnly:$PlanOnly
     return
 }
 

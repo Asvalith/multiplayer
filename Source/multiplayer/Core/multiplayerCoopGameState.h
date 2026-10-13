@@ -59,6 +59,9 @@ public:
 		return ObjectiveState;
 	}
 
+	UFUNCTION(BlueprintPure, Category = "Coop|Objective")
+	bool HasGameWon() const { return ObjectiveState.bGameWon; }
+
 	// RequiredKeys 必须大于 0，避免空关卡被误判为“0/0 已完成”。
 	bool IsObjectiveComplete() const
 	{
@@ -72,9 +75,11 @@ public:
 
 	// 对外本地事件。
 	// 本机进度刷新事件：服务器写入和客户端 OnRep 都会触发，监听者无需区分数据来源。
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Objective")
 	FmultiplayerObjectiveProgressEvent OnObjectiveProgressChanged;
 
 	// 仅本机观察到 false -> true 的胜利状态转换时广播一次；具体 UI 由本地 HUD 负责。
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Objective")
 	FmultiplayerGameWonEvent OnGameWon;
 
 protected:

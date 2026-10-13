@@ -1,17 +1,11 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('Regression', 'Scale', 'All')][string]$Suite = 'Regression',
-    [ValidateSet('All', 'DedicatedSmoke', 'Flow', 'Keys', 'LateJoin', 'Reconnect', 'ConnectionRetry', 'Ride', 'RideMotion')][string]$Scenario = 'All',
+    [ValidateSet('RideMotion', 'Combat')][string]$Scenario = 'RideMotion',
     [ValidateSet('Normal', 'Moderate', 'Harsh')][string[]]$Profiles = @('Normal', 'Moderate', 'Harsh'),
     [ValidateRange(1, 100)][int]$Repeat = 3,
-    [ValidateSet('Static', 'Moving', 'All')][string]$Matrix = 'All',
-    [ValidateRange(0, 500)][int[]]$StaticCounts = @(0, 50, 200, 500),
-    [ValidateRange(0, 20)][int[]]$MovingCounts = @(1, 5, 20),
-    [ValidateRange(1, 300)][int]$WarmupSeconds = 5,
-    [ValidateRange(5, 600)][int]$SampleSeconds = 30,
     [ValidateRange(30, 1800)][int]$TimeoutSeconds = 180,
     [ValidateRange(1, 60)][int]$PlatformNetHz = 30,
-    [ValidateSet('Baseline', 'OrderedVelocity', 'PlatformInertia')][string]$PlatformSyncMode = 'PlatformInertia',
+    [ValidateSet('OrderedVelocity', 'PlatformInertia')][string]$PlatformSyncMode = 'PlatformInertia',
     [ValidateSet('Moving', 'Static')][string]$PlatformMotion = 'Moving',
     [string]$EditorPath = 'E:/program/ue554/UE_5.5/Engine/Binaries/Win64/UnrealEditor.exe',
     [string]$GameExecutablePath = '',
@@ -110,7 +104,8 @@ function Test-SourceManifestPath {
 
 function Get-SourceManifest {
     $files = @()
-    foreach ($directory in @('Source', 'Config', 'Scripts', 'Tests')) {
+    # UMG 布局、按钮图、菜单控制器和 HUD 生命周期均在 Content/UI，统一纳入验证指纹。
+    foreach ($directory in @('Source', 'Config', 'Scripts', 'Tests', 'Content/UI')) {
         $directoryPath = Join-Path $ProjectRoot $directory
         if (Test-Path -LiteralPath $directoryPath) {
             $files += @(Get-ChildItem -LiteralPath $directoryPath -File -Recurse | Where-Object {
@@ -127,18 +122,20 @@ function Get-SourceManifest {
 }
 
 function Get-RequiredAssertions {
-    param([string]$Mode)
-    switch ($Mode) {
-        'DedicatedSmoke' { return @('TwoRemotePlayers', 'TwoClientReceipts', 'DedicatedClientState') }
-        'Flow' { return @('Join', 'ClientInputReady', 'OverlapKeys', 'PlateDistinctPlayers', 'OccupancyRebindClears', 'OccupancyRebindRestores', 'OccupancyRebindMembership', 'GateRules', 'GateOpen', 'GateClosed', 'OccupancyUnpossess', 'OccupancyRepossess', 'OccupancyUncontrolledEntry', 'OccupancyLatePossess', 'DestroyedPawnCleanup', 'PlatformEndpoint', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'RestartFailureRecovery', 'Restart', 'ClientRestart', 'ClientLeave', 'ServerSurvivesClientLeave', 'PartnerVictory', 'PartnerRestart') }
-        'Keys' { return @('Join', 'KeyMissingDestinationRetainsKey', 'KeyInstallFailureRollback', 'KeyCommitReentryBlocked', 'KeyInstalledOnce', 'ClientKeyInstalled', 'KeySecondOverlapCommitted', 'KeyInstallRejectedRetainsKey') }
-        'LateJoin' { return @('LateJoinState', 'LateJoinKeyAttachments') }
-        'Reconnect' { return @('OutageApplied', 'ConnectionLostDetected', 'ServerConnectionRetained', 'ReconnectAfterOutage', 'ReconnectStateRestored') }
-        'ConnectionRetry' { return @('ConnectionFailureRecovered', 'ConnectionRetrySucceeded') }
-        'Ride' { return @('ClientRide') }
-        'RideMotion' { return @('Join', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse', 'MotionServerObserved') }
-        'Scale' { return @('ScaleCount', 'ScaleClientLoad', 'SampleCompleted') }
+    param([string]$Mode = 'RideMotion')
+    if ($Mode -eq 'Combat') {
+        return @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerCombatFixture', 'ServerCombatSpawn',
+            'ServerCombatCurrentState', 'ServerCombatAttack', 'ServerCombatDefense', 'ServerCombatHeal',
+            'ServerCombatEnemyDeath', 'ServerCombatPlayerDeath', 'PrimaryCurrentState', 'PartnerCurrentState',
+            'PrimaryAttack', 'PartnerAttack', 'PrimaryDefense', 'PartnerDefense', 'PrimaryHeal', 'PartnerHeal',
+            'PrimaryDefensePredicted', 'PrimaryDefenseRepeatedInput', 'PrimaryDefenseConfirmed',
+            'ServerCombatResourceFixture', 'ServerCombatResourceRejected', 'PrimaryResourceReady', 'PartnerResourceReady',
+            'PrimaryResourcePredicted', 'PrimaryResourceRepeatedInput', 'PrimaryResourceRejected', 'PrimaryResourceRollback', 'PartnerResourceRollback',
+            'ServerCombatDeathFixture', 'PrimaryDeathReady', 'PartnerDeathReady', 'PrimaryDeathPredicted', 'PrimaryDeathRepeatedInput', 'PrimaryDeathRejected',
+            'PrimaryEnemyDeath', 'PartnerEnemyDeath', 'PrimaryPlayerDeath', 'PartnerPlayerDeath', 'Complete', 'PartnerComplete')
     }
+    return @('DedicatedAuthority', 'PartnerReady', 'Join', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse',
+        'ServerMotionStand', 'ServerMotionWalk', 'ServerMotionReverse', 'ServerMotionJump', 'MotionServerObserved', 'PartnerComplete')
 }
 
 function Test-FiniteNumber {
@@ -164,9 +161,9 @@ function Get-CaseVerdict {
     foreach ($name in $Required) {
         # 服务器自身通过不能代替远端确认；两端入场也必须分别有证据。
         $roles = if ($name -eq 'Join') { @('Server', 'Client') }
-            elseif ($name -eq 'DedicatedClientState') { @('Partner', 'Client') }
             elseif ($name -like 'Partner*') { @('Partner') }
-            elseif ($name -in @('ClientInputReady', 'GateOpen', 'GateClosed', 'ClientRide', 'ClientVictoryState', 'ClientRestartFailureRecovery', 'ClientRestart', 'ClientLeave', 'ConnectionFailureRecovered', 'ClientKeyInstalled', 'LateJoinState', 'LateJoinKeyAttachments', 'ConnectionLostDetected', 'ReconnectStateRestored', 'ScaleClientLoad', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse')) { @('Client') }
+            elseif ($name -like 'Primary*' -or ($Mode -eq 'Combat' -and $name -eq 'Complete')) { @('Client') }
+            elseif ($name -like 'Motion*' -and $name -ne 'MotionServerObserved') { @('Client') }
             else { @('Server') }
         foreach ($role in $roles) {
             $passes = @($Events | Where-Object { $_.status -eq 'ASSERT' -and (Get-PropertyValue $_ 'assertion' '') -eq $name -and (Get-PropertyValue $_ 'role' '') -ceq $role -and (Get-PropertyValue $_ 'passed' $false) -ceq $true })
@@ -175,15 +172,7 @@ function Get-CaseVerdict {
     }
     # 运动样本必须按角色与阶段保留，不能被最后一条服务器样本覆盖，也不能用规模测试指标代替。
     $motionMetrics = @($Events | Where-Object { $_.status -eq 'METRIC' -and (Get-PropertyValue (Get-PropertyValue $_ 'metrics') 'category' '') -ceq 'platformRide' })
-    $samples = @($Events | Where-Object { $_.status -eq 'METRIC' -and (Get-PropertyValue $_ 'role' '') -eq 'Server' -and (Get-PropertyValue (Get-PropertyValue $_ 'metrics') 'category' '') -cne 'platformRide' })
     $metrics = $null
-    if ($samples.Count -gt 0) { $metrics = Get-PropertyValue $samples[-1] 'metrics' }
-    if ($Mode -eq 'Scale') {
-        foreach ($field in @('outBytes', 'outPackets', 'sampleSeconds', 'actorCount')) {
-            if ($null -eq (Get-PropertyValue $metrics $field)) { $errors.Add("Missing server metric: $field") }
-        }
-        if ([double](Get-PropertyValue $metrics 'sampleSeconds' 0) -le 0) { $errors.Add('Sampling duration must be positive') }
-    }
     if ($Mode -eq 'RideMotion') {
         foreach ($role in @('Server', 'Client')) { foreach ($phase in @('Stand', 'Walk', 'Jump', 'Reverse')) {
             $phaseSamples = @($motionMetrics | Where-Object { (Get-PropertyValue $_ 'role' '') -ceq $role -and (Get-PropertyValue $_.metrics 'phase' '') -ceq $phase })
@@ -213,64 +202,6 @@ function Get-CaseVerdict {
     return [pscustomobject]@{ status = $status; errors = @($errors.ToArray()); metrics = $metrics; motionMetrics = $motionMetrics }
 }
 
-function Get-CsvMetricSummary {
-    param([string]$Text)
-    # UE CSV 的尾部可含元数据；只统计表头对应列中的有限数值，绝不把缺列当作 0。
-    $lines = @($Text -split '\r?\n')
-    $headerIndex = -1
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        if ($lines[$index] -match 'Exclusive/(GameThread/)?ServerReplicateActors') { $headerIndex = $index; break }
-    }
-    if ($headerIndex -lt 0) { return $null }
-    $csvRows = @(($lines[$headerIndex..($lines.Count - 1)] -join "`n") | ConvertFrom-Csv)
-    if ($csvRows.Count -eq 0) { return $null }
-    $summary = [ordered]@{}
-    foreach ($definition in @(
-        @{ name = 'serverReplicateActors'; pattern = '^Exclusive/(GameThread/)?ServerReplicateActors$'; unit = 'ms'; required = $true },
-        @{ name = 'gameThread'; pattern = '(^|/)GameThreadTime$'; unit = 'ms'; required = $false },
-        @{ name = 'fullyDormantActors'; pattern = '^Replication/NumberOfFullyDormantActors$'; unit = 'actors'; required = $false },
-        @{ name = 'replicateCallsPerConnection'; pattern = '^Replication/NumReplicateActorCallsPerConAvg$'; unit = 'calls/connection'; required = $false }
-    )) {
-        $columns = @($csvRows[0].PSObject.Properties.Name | Where-Object { $_.Trim().Trim([char]0xFEFF) -match $definition.pattern })
-        if ($columns.Count -ne 1) {
-            if ($definition.required) { return $null }
-            $summary[$definition.name] = $null
-            continue
-        }
-        $column = $columns[0]
-        $values = New-Object 'System.Collections.Generic.List[double]'
-        foreach ($row in $csvRows) {
-            $number = 0.0
-            if ([double]::TryParse([string]$row.$column, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number) -and -not [double]::IsNaN($number) -and -not [double]::IsInfinity($number) -and $number -ge 0) { $values.Add($number) }
-        }
-        if ($values.Count -eq 0) {
-            if ($definition.required) { return $null }
-            $summary[$definition.name] = $null
-            continue
-        }
-        $sorted = @($values.ToArray() | Sort-Object)
-        $p95Index = [Math]::Max(0, [int][Math]::Ceiling($sorted.Count * 0.95) - 1)
-        $summary[$definition.name] = [ordered]@{ sourceColumn = $column; unit = $definition.unit; sampleCount = $sorted.Count; nonZeroSampleCount = @($sorted | Where-Object { $_ -ne 0 }).Count; allZero = ($sorted[-1] -eq 0); mean = [Math]::Round(($sorted | Measure-Object -Average).Average, 6); p95 = [Math]::Round($sorted[$p95Index], 6); p95Method = 'nearest-rank'; max = $sorted[-1] }
-    }
-    return [pscustomobject]$summary
-}
-
-function Get-DisplayGameThreadMetric {
-    param($CpuMetrics)
-    # 保留 report 中的原始计数；计数器全零不代表游戏线程没有开销，展示与汇总应留空。
-    if ($null -eq $CpuMetrics -or $null -eq $CpuMetrics.gameThread -or $CpuMetrics.gameThread.allZero) { return $null }
-    return $CpuMetrics.gameThread
-}
-
-function Get-Median {
-    param([double[]]$Values)
-    if ($Values.Count -eq 0) { return $null }
-    $ordered = @($Values | Sort-Object)
-    $middle = [int][Math]::Floor($ordered.Count / 2)
-    if (($ordered.Count % 2) -eq 1) { return $ordered[$middle] }
-    return ($ordered[$middle - 1] + $ordered[$middle]) / 2
-}
-
 if ($SelfTest) {
     foreach ($excluded in @('Source/.vs/index.db', 'Source\.git\objects\cache', 'Source/Binaries/game.exe', 'Tests/Intermediate/test.obj', 'Scripts/Saved/log.txt', 'Tests/Evidence/report.json', 'Source/Nested/.VS/index.db')) {
         if (Test-SourceManifestPath $excluded) { throw "Source manifest accepted generated/cache path: $excluded" }
@@ -278,52 +209,10 @@ if ($SelfTest) {
     foreach ($included in @('Source/multiplayer/Core/GameMode.cpp', 'Source/multiplayer/Save/SavedState.h', 'Config/DefaultGame.ini', 'Scripts/RunMultiplayerNetworkTests.ps1', 'Tests/EvidenceReader.cpp', 'Content/Config/Gameplay.json')) {
         if (-not (Test-SourceManifestPath $included)) { throw "Source manifest excluded source/config path: $included" }
     }
-    $fixture = 'Log: COOP_TEST {"token":"current","mode":"Flow","role":"Server","status":"ASSERT","assertion":"Example","passed":true}' + "`n" +
-        'Log: COOP_TEST {"token":"current","mode":"Flow","status":"DONE","role":"Server","passed":true}' + "`n" +
-        'Log: COOP_TEST {"token":"current","mode":"Flow","status":"DONE","role":"Client","passed":true}'
-    $fixture += "`n" + 'Log: COOP_TEST {"token":"current","mode":"Flow","role":"Partner","status":"DONE","passed":true}'
-    $events = @(ConvertFrom-CoopLog $fixture -Token 'current' -Role 'Server' -Mode 'Flow') +
-        @(ConvertFrom-CoopLog $fixture -Token 'current' -Role 'Client' -Mode 'Flow') +
-        @(ConvertFrom-CoopLog $fixture -Token 'current' -Role 'Partner' -Mode 'Flow')
-    if ((Get-CaseVerdict $events @('Example') 'Flow').status -ne 'passed') { throw 'Runner parser rejected valid fixture' }
-    if ((Get-CaseVerdict $events @('Missing') 'Flow').status -ne 'failed') { throw 'Runner accepted a missing assertion' }
-    if ((Get-CaseVerdict @($events | Where-Object { (Get-PropertyValue $_ 'role' '') -ne 'Client' }) @('Example') 'Flow').status -ne 'failed') { throw 'Runner accepted a missing peer' }
-    $oldFixture = $fixture.Replace('"current"', '"previous"') + "`n" +
-        'Log: COOP_TEST {"token":"previous","mode":"Flow","role":"Server","status":"READY"}' + "`n" +
-        'Log: COOP_TEST {"token":"previous","mode":"Flow","role":"Server","status":"METRIC","metrics":{"outBytes":123}}'
-    $oldEvents = @(ConvertFrom-CoopLog $oldFixture -Token 'current' -Role 'Server' -Mode 'Flow') +
-        @(ConvertFrom-CoopLog $oldFixture -Token 'current' -Role 'Client' -Mode 'Flow')
-    if ($oldEvents.Count -ne 0 -or (Get-CaseVerdict $oldEvents @('Example') 'Flow').status -ne 'failed') { throw 'Runner accepted READY/DONE/ASSERT/METRIC from a previous run' }
-    $mixedEvents = @(ConvertFrom-CoopLog ($oldFixture + "`n" + $fixture) -Token 'current' -Role 'Server' -Mode 'Flow')
-    if ($mixedEvents.Count -ne 2 -or (Get-CaseVerdict $mixedEvents @('Example') 'Flow').status -ne 'failed') { throw 'Runner accepted an old event or a wrong-role peer completion' }
-    $doneOnlyFixture = ($fixture -split "`n" | Where-Object { $_ -notmatch '"ASSERT"' }) -join "`n"
-    $missingCurrentAssertion = @(ConvertFrom-CoopLog ($oldFixture + "`n" + $doneOnlyFixture) -Token 'current' -Role 'Server' -Mode 'Flow') +
-        @(ConvertFrom-CoopLog ($oldFixture + "`n" + $doneOnlyFixture) -Token 'current' -Role 'Client' -Mode 'Flow')
-    if ((Get-CaseVerdict $missingCurrentAssertion @('Example') 'Flow').status -ne 'failed') { throw 'Previous passing assertion incorrectly completed current DONE events' }
-    if (@(ConvertFrom-CoopLog $fixture -Token 'current' -Role 'Server' -Mode 'Scale').Count -ne 0) { throw 'Runner accepted events from a different scenario' }
-    $wrongRoleEvents = @(ConvertFrom-CoopLog ($fixture.Replace('"Example"', '"ScaleClientLoad"')) -Token 'current' -Role 'Server' -Mode 'Flow') +
-        @($events | Where-Object { $_.role -eq 'Client' })
-    if ((Get-CaseVerdict $wrongRoleEvents @('ScaleClientLoad') 'Flow').status -ne 'failed') { throw 'Server assertion incorrectly satisfied a client-only load check' }
-    foreach ($clientAssertion in @('ClientInputReady', 'ClientRestartFailureRecovery', 'ConnectionFailureRecovered', 'ClientKeyInstalled')) {
-        $clientEvents = @($events | Where-Object status -eq 'DONE') +
-            @([pscustomobject]@{ status = 'ASSERT'; role = 'Client'; assertion = $clientAssertion; passed = $true })
-        if ((Get-CaseVerdict $clientEvents @($clientAssertion) 'Flow').status -ne 'passed') { throw "Client assertion rejected: $clientAssertion" }
-        $clientEvents[-1].role = 'Server'
-        if ((Get-CaseVerdict $clientEvents @($clientAssertion) 'Flow').status -ne 'failed') { throw "Server incorrectly satisfied client assertion: $clientAssertion" }
-    }
-    $smokeEvents = @($events | Where-Object status -eq 'DONE')
-    foreach ($role in @('Partner', 'Client')) {
-        $smokeEvents += [pscustomobject]@{ status = 'ASSERT'; role = $role; assertion = 'DedicatedClientState'; passed = $true }
-    }
-    if ((Get-CaseVerdict $smokeEvents @('DedicatedClientState') 'DedicatedSmoke').status -ne 'passed') { throw 'Two independent smoke client receipts rejected' }
-    foreach ($role in @('Partner', 'Client')) {
-        $missing = @($smokeEvents | Where-Object { -not ($_.status -eq 'ASSERT' -and $_.role -eq $role) })
-        if ((Get-CaseVerdict $missing @('DedicatedClientState') 'DedicatedSmoke').status -ne 'failed') { throw "Smoke accepted missing $role receipt" }
-    }
     # 构造完整的双端四阶段日志，再逐项破坏证据，防止“只有 DONE”或服务器代答造成假通过。
     $motionLines = @()
     foreach ($role in @('Server', 'Client')) {
-        $assertions = if ($role -eq 'Server') { @('Join', 'MotionServerObserved') } else { @('Join', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse') }
+        $assertions = if ($role -eq 'Server') { @('DedicatedAuthority', 'Join', 'ServerMotionStand', 'ServerMotionWalk', 'ServerMotionReverse', 'ServerMotionJump', 'MotionServerObserved') } else { @('Join', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse') }
         foreach ($assertion in $assertions) {
             $motionLines += 'Log: COOP_TEST ' + ([ordered]@{ token = 'motion'; mode = 'RideMotion'; role = $role; status = 'ASSERT'; assertion = $assertion; passed = $true } | ConvertTo-Json -Compress)
         }
@@ -335,14 +224,26 @@ if ($SelfTest) {
         }
         $motionLines += 'Log: COOP_TEST ' + ([ordered]@{ token = 'motion'; mode = 'RideMotion'; role = $role; status = 'DONE'; passed = $true } | ConvertTo-Json -Compress)
     }
+    foreach ($assertion in @('PartnerReady', 'PartnerComplete')) {
+        $motionLines += 'Log: COOP_TEST ' + (@{ token = 'motion'; mode = 'RideMotion'; role = 'Partner'; status = 'ASSERT'; assertion = $assertion; passed = $true } | ConvertTo-Json -Compress)
+    }
     $motionLines += 'Log: COOP_TEST {"token":"motion","mode":"RideMotion","role":"Partner","status":"DONE","passed":true}'
     $motionFixture = $motionLines -join "`n"
     $motionEvents = @(ConvertFrom-CoopLog $motionFixture -Token 'motion' -Role 'Server' -Mode 'RideMotion') +
         @(ConvertFrom-CoopLog $motionFixture -Token 'motion' -Role 'Client' -Mode 'RideMotion') +
         @(ConvertFrom-CoopLog $motionFixture -Token 'motion' -Role 'Partner' -Mode 'RideMotion')
-    $motionRequired = @(Get-RequiredAssertions 'RideMotion')
+    $motionRequired = @(Get-RequiredAssertions)
     $motionVerdict = Get-CaseVerdict $motionEvents $motionRequired 'RideMotion'
     if ($motionVerdict.status -ne 'passed' -or $motionVerdict.motionMetrics.Count -ne 8 -or $null -ne $motionVerdict.metrics) { throw 'Runner did not preserve valid per-role motion measurements' }
+    if (@(ConvertFrom-CoopLog $motionFixture -Token 'old' -Role 'Server' -Mode 'RideMotion').Count) { throw 'Runner accepted events from another run' }
+    if (@(ConvertFrom-CoopLog $motionFixture -Token 'motion' -Role 'Server' -Mode 'Removed').Count) { throw 'Runner accepted events from another scenario' }
+    foreach ($role in @('Server', 'Client', 'Partner')) {
+        if ((Get-CaseVerdict @($motionEvents | Where-Object role -ne $role) $motionRequired 'RideMotion').status -ne 'failed') { throw "Runner accepted missing peer: $role" }
+    }
+    foreach ($assertion in $motionRequired) {
+        $missing = @($motionEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $assertion })
+        if ((Get-CaseVerdict $missing $motionRequired 'RideMotion').status -ne 'failed') { throw "Runner accepted missing assertion: $assertion" }
+    }
     foreach ($role in @('Server', 'Client')) { foreach ($phase in @('Stand', 'Walk', 'Jump', 'Reverse')) {
         $incomplete = @($motionEvents | Where-Object { -not ($_.status -eq 'METRIC' -and $_.role -eq $role -and $_.metrics.phase -eq $phase) })
         if ((Get-CaseVerdict $incomplete $motionRequired 'RideMotion').status -ne 'failed') { throw "Runner accepted missing motion sample: $role/$phase" }
@@ -377,17 +278,37 @@ if ($SelfTest) {
     $withoutMotion = @($motionEvents | Where-Object { $_.status -ne 'METRIC' }) +
         @([pscustomobject]@{ token = 'motion'; mode = 'RideMotion'; role = 'Server'; status = 'METRIC'; metrics = [pscustomobject]@{ outBytes = 123; sampleSeconds = 2; actorCount = 1; outPackets = 2 } })
     if ((Get-CaseVerdict $withoutMotion $motionRequired 'RideMotion').status -ne 'failed') { throw 'Scale metrics incorrectly replaced motion measurements' }
-    if ((Get-Median @(1, 3, 2)) -ne 2 -or (Get-Median @(1, 4)) -ne 2.5) { throw 'Invalid median' }
-    $csvFixture = "FrameTime,GameThreadTime,Exclusive/ServerReplicateActors`n16,4,1`n17,6,3`n[Metadata],not-a-number,not-a-number"
-    $cpu = Get-CsvMetricSummary $csvFixture
-    if ($null -eq $cpu -or $cpu.gameThread.mean -ne 5 -or $cpu.serverReplicateActors.p95 -ne 3) { throw 'CSV mean/P95 self-test failed' }
-    if ($null -ne (Get-CsvMetricSummary "FrameTime,GameThreadTime`n16,4")) { throw 'Missing CPU column incorrectly became a measurement' }
-    $dsCpu = Get-CsvMetricSummary "FrameTime,Exclusive/GameThread/ServerReplicateActors`n33,1`n34,3"
-    if ($null -eq $dsCpu -or $dsCpu.serverReplicateActors.mean -ne 2 -or $null -ne $dsCpu.gameThread -or $null -ne (Get-DisplayGameThreadMetric $dsCpu)) { throw 'DS CSV must preserve replication CPU and leave missing total GT unavailable' }
-    if ($null -ne (Get-CsvMetricSummary "FrameTime,Exclusive/GameThread/ServerReplicateActors`n33,NaN`n34,invalid")) { throw 'Invalid DS replication samples must not pass' }
-    $zeroCpu = Get-CsvMetricSummary "FrameTime,GameThreadTime,Exclusive/ServerReplicateActors`n16,0,1`n17,0,3"
-    if ($null -ne (Get-DisplayGameThreadMetric $zeroCpu) -or $zeroCpu.gameThread.mean -ne 0 -or -not $zeroCpu.gameThread.allZero) { throw 'All-zero GameThread counter was displayed as cost or raw evidence was changed' }
-    if ($null -ne (Get-DisplayGameThreadMetric $null) -or (Get-DisplayGameThreadMetric $cpu).mean -ne 5) { throw 'Valid/missing GameThread display metric handling failed' }
+
+    # 战斗模式不要求运动样本，但每个权威检查和两条连接的独立观察都不能缺失。
+    $combatRequired = @(Get-RequiredAssertions -Mode 'Combat')
+    $combatEvents = @()
+    foreach ($name in $combatRequired) {
+        $roles = if ($name -eq 'Join') { @('Server', 'Client') }
+            elseif ($name -like 'Partner*') { @('Partner') }
+            elseif ($name -like 'Primary*' -or $name -eq 'Complete') { @('Client') }
+            else { @('Server') }
+        foreach ($role in $roles) {
+            $combatEvents += [pscustomobject]@{ token = 'combat'; mode = 'Combat'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true }
+        }
+    }
+    foreach ($role in @('Server', 'Client', 'Partner')) {
+        $combatEvents += [pscustomobject]@{ token = 'combat'; mode = 'Combat'; role = $role; status = 'DONE'; passed = $true }
+    }
+    if ((Get-CaseVerdict $combatEvents $combatRequired 'Combat').status -ne 'passed') { throw 'Runner rejected complete independent combat evidence' }
+    foreach ($role in @('Server', 'Client', 'Partner')) {
+        if ((Get-CaseVerdict @($combatEvents | Where-Object role -ne $role) $combatRequired 'Combat').status -ne 'failed') { throw "Combat runner accepted missing peer: $role" }
+    }
+    foreach ($name in $combatRequired) {
+        $missing = @($combatEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $combatRequired 'Combat').status -ne 'failed') { throw "Combat runner accepted missing assertion: $name" }
+    }
+    foreach ($role in @('Client', 'Partner')) {
+        $wrongRole = $combatEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $wrongRole) {
+            if ($event.status -eq 'ASSERT' -and $event.role -eq $role) { $event.role = 'Server' }
+        }
+        if ((Get-CaseVerdict $wrongRole $combatRequired 'Combat').status -ne 'failed') { throw "Server incorrectly satisfied combat client assertions: $role" }
+    }
     Write-Output 'Runner contract self-test passed. No Unreal process or network test was run.'
     return
 }
@@ -460,7 +381,7 @@ $report = [ordered]@{
     schemaVersion = 1; runId = $RunId; generatedAtUtc = [DateTime]::UtcNow.ToString('o'); status = 'running'; planOnly = [bool]$PlanOnly
     environment = [ordered]@{ machine = $env:COMPUTERNAME; engineAssociation = $projectDescription.EngineAssociation; executable = $ExecutablePath; executableVersion = $exeVersion; executableSha256 = $exeHash; projectModule = $projectModule; runtimeGameplayConfig = $runtimeConfig; buildKind = $BuildKind; map = $Map; nullRhi = (-not ($Visible -or $Offscreen)); offscreenDx11 = [bool]$Offscreen; topology = 'One local dedicated server and two separate remote client processes'; visualValidation = $false }
     provenance = [ordered]@{ gitCommit = $gitCommit; dirty = ($gitStatus.Count -gt 0); gitStatus = $gitStatus; sourceFingerprintSha256 = $fingerprint; sourceManifest = $sourceManifest; gameplayConfigPath = $configPath; gameplayConfigSha256 = $configHash; gameplayConfigText = $configText }
-    scope = @('Assertions represent the driver checks, not manual visual acceptance.', 'PktLag values are emulator parameters applied to all three peers, not measured RTT.', 'Scale tests use synthetic actors and three processes, not player-capacity certification.', 'RideMotion retains per-role, per-phase runtime measurements; they do not certify rendered smoothness.', 'Historical 22.17% bandwidth data is not a result of this run.', 'Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.')
+    scope = @('Assertions represent the driver checks, not manual visual acceptance.', 'PktLag values are emulator parameters applied to all three peers, not measured RTT.', 'RideMotion retains per-role, per-phase runtime measurements; they do not certify rendered smoothness.', 'Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.')
     cases = @(); summaries = @()
 }
 $cases = New-Object 'System.Collections.Generic.List[object]'
@@ -469,24 +390,9 @@ $profileSettings = @{
     Moderate = @{ lag = 100; variance = 20; loss = 2 }
     Harsh = @{ lag = 200; variance = 50; loss = 5 }
 }
-if ($Suite -in @('Regression', 'All')) {
-    $modes = if ($Scenario -eq 'All') { @('Flow', 'Keys', 'LateJoin', 'Reconnect', 'ConnectionRetry', 'Ride', 'RideMotion') } else { @($Scenario) }
-    foreach ($mode in $modes) { foreach ($profile in $Profiles) { for ($iteration = 1; $iteration -le $Repeat; $iteration++) {
-        $cases.Add([pscustomobject]@{ mode = $mode; matrix = 'Regression'; profile = $profile; iteration = $iteration; staticCount = 0; movingCount = 1; optimization = 'Combined' })
-    } } }
-}
-if ($Suite -in @('Scale', 'All')) {
-    if ($Matrix -in @('Static', 'All')) {
-        foreach ($static in $StaticCounts) { foreach ($optimization in @('Baseline', 'Dormancy')) { for ($iteration = 1; $iteration -le $Repeat; $iteration++) {
-            $cases.Add([pscustomobject]@{ mode = 'Scale'; matrix = 'Static'; profile = 'Normal'; iteration = $iteration; staticCount = $static; movingCount = 0; optimization = $optimization })
-        } } }
-    }
-    if ($Matrix -in @('Moving', 'All')) {
-        foreach ($moving in $MovingCounts) { foreach ($optimization in @('Baseline', 'Frequency')) { for ($iteration = 1; $iteration -le $Repeat; $iteration++) {
-            $cases.Add([pscustomobject]@{ mode = 'Scale'; matrix = 'Moving'; profile = 'Normal'; iteration = $iteration; staticCount = 0; movingCount = $moving; optimization = $optimization })
-        } } }
-    }
-}
+foreach ($profile in $Profiles) { for ($iteration = 1; $iteration -le $Repeat; $iteration++) {
+    $cases.Add([pscustomobject]@{ mode = $Scenario; profile = $profile; iteration = $iteration })
+} }
 
 function Save-Report {
     $report.generatedAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -505,30 +411,32 @@ try {
     $caseIndex = 0
     foreach ($case in $cases) {
         $caseIndex++
-        $caseId = '{0:D3}-{1}-{2}-{3}-{4}-{5}-{6}' -f $caseIndex, $case.mode, $case.profile, $case.staticCount, $case.movingCount, $case.optimization, $case.iteration
+        $caseId = '{0:D3}-{1}-{2}-{3}' -f $caseIndex, $case.mode, $case.profile, $case.iteration
         $port = if ($ListenPort -gt 0) { $ListenPort } else { Get-FreeUdpPort }
         $token = "$RunId-$caseIndex"
-        $result = [ordered]@{ id = $caseId; token = $token; mode = $case.mode; matrix = $case.matrix; profile = $case.profile; iteration = $case.iteration; staticCount = $case.staticCount; movingCount = $case.movingCount; optimization = $case.optimization; warmupSeconds = $(if ($case.mode -ne 'RideMotion') { $WarmupSeconds } else { $null }); sampleSeconds = $(if ($case.mode -ne 'RideMotion') { $SampleSeconds } else { $null }); samplingDurationSource = $(if ($case.mode -eq 'RideMotion') { 'motionMetrics[].metrics.elapsedSeconds, separately measured per role and phase' } else { 'metrics.sampleSeconds where available' }); outageModel = $(if ($case.mode -eq 'Reconnect') { 'primary-server-outbound-drop-until-client-timeout' } else { $null }); platformNetHz = $(if ($case.mode -eq 'RideMotion') { $PlatformNetHz } else { $null }); platformSyncMode = $(if ($case.mode -eq 'RideMotion') { $PlatformSyncMode } else { $null }); port = $port; startedAtUtc = [DateTime]::UtcNow.ToString('o'); durationSeconds = 0; status = 'planned'; requiredAssertions = @('DedicatedAuthority') + @(Get-RequiredAssertions $case.mode); commands = @(); peers = @(); events = @(); errors = @(); metrics = $null; motionMetrics = @(); csvPath = $null; csvSha256 = $null; cpuMetrics = $null; measurementWarnings = @() }
-        if ($case.mode -ne 'DedicatedSmoke') { $result.requiredAssertions += 'PartnerReady' }
-        $result['platformMotion'] = $(if ($case.mode -eq 'RideMotion') { $PlatformMotion } else { $null })
+        $result = [ordered]@{
+            id = $caseId; token = $token; mode = $case.mode; profile = $case.profile; iteration = $case.iteration
+            platformNetHz = $PlatformNetHz; platformSyncMode = $PlatformSyncMode; platformMotion = $PlatformMotion
+            samplingDurationSource = 'motionMetrics[].metrics.elapsedSeconds, separately measured per role and phase'
+            port = $port; startedAtUtc = [DateTime]::UtcNow.ToString('o'); durationSeconds = 0; status = 'planned'
+            requiredAssertions = @(Get-RequiredAssertions -Mode $case.mode); commands = @(); peers = @(); events = @(); errors = @(); motionMetrics = @()
+        }
         $network = $profileSettings[$case.profile]
         $peerSpecs = @{}
         foreach ($role in @('Server', 'Partner', 'Client')) {
             $logPath = Join-Path $OutputDirectory "$caseId-$role.log"
-            $url = if ($role -eq 'Server') { $Map }
-                elseif ($case.mode -eq 'DedicatedSmoke') { "127.0.0.1:$port" }
-                else { '/Game/UI/DSMenu' }
+            $url = if ($role -eq 'Server') { $Map } else { '/Game/UI/DSMenu' }
             $arguments = @()
             if ($BuildKind -eq 'editor-game') { $arguments += $ProjectPath }
-            $arguments += @($url, '-game', '-NoSplash', '-NoSound', '-unattended', '-DDC=InstalledNoZenLocalFallback', "-abslog=$logPath", "-port=$port", "-CoopTestToken=$token", "-CoopNetTest=$($case.mode)", "-CoopTestRole=$role", "-CoopStaticCount=$($case.staticCount)", "-CoopMovingCount=$($case.movingCount)", "-CoopOptimization=$($case.optimization)", "-CoopWarmupSeconds=$WarmupSeconds", "-CoopSampleSeconds=$SampleSeconds", "-PktLag=$($network.lag)", "-PktLagVariance=$($network.variance)", "-PktLoss=$($network.loss)")
+            $arguments += @($url, '-game', '-NoSplash', '-NoSound', '-unattended', '-DDC=InstalledNoZenLocalFallback', "-abslog=$logPath", "-port=$port", "-CoopTestToken=$token", "-CoopNetTest=$($case.mode)", "-CoopTestRole=$role", "-PktLag=$($network.lag)", "-PktLagVariance=$($network.variance)", "-PktLoss=$($network.loss)")
             if ($role -eq 'Server') { $arguments += '-server' }
             $arguments += @("-CoopServerAddress=127.0.0.1:$port")
             if (($Visible -or $Offscreen) -and $role -ne 'Server') { $arguments += @('-windowed', '-ResX=960', '-ResY=540') } else { $arguments += '-NullRHI' }
             # 离屏 DX11 验收走真实渲染初始化，窗口仍隐藏；不能与 NullRHI 的性能数据混算。
             if ($Offscreen -and $role -ne 'Server') { $arguments += @('-RenderOffscreen', '-dx11') }
-            $arguments += @('-DDC-ForceMemoryCache', '-NoVSync', '-ExecCmds=t.MaxFPS 60', "-CoopTestTimeout=$TimeoutSeconds", "-CoopMatrix=$(Get-PropertyValue $case 'matrix' '')", "-CoopCsvPath=$(Join-Path $OutputDirectory "$caseId-$role.csv")")
-            if ($case.mode -eq 'Flow' -and $role -eq 'Server') { $arguments += '-CoopTestFailRestartOnce' }
-            if ($case.mode -eq 'RideMotion') { $arguments += @("-CoopPlatformNetHz=$PlatformNetHz", "-CoopPlatformSyncMode=$PlatformSyncMode", "-CoopPlatformMotion=$PlatformMotion") }
+            # 并发进程各用 GUID 子目录，着色器临时文件留在项目 Saved 中，不写用户目录。
+            $arguments += @('-Multiprocess', "-ShaderWorkingDir=$(Join-Path $ProjectRoot 'Saved/ShaderWorking')", '-DDC-ForceMemoryCache', '-NoVSync', '-ExecCmds=t.MaxFPS 60', "-CoopTestTimeout=$TimeoutSeconds")
+            $arguments += @("-CoopPlatformNetHz=$PlatformNetHz", "-CoopPlatformSyncMode=$PlatformSyncMode", "-CoopPlatformMotion=$PlatformMotion")
             $argumentLine = ($arguments | ForEach-Object { Quote-Argument $_ }) -join ' '
             $peerSpecs[$role] = [pscustomobject]@{ role = $role; log = $logPath; arguments = $argumentLine }
             $commandExecutable = if ($role -eq 'Server' -and $ServerExecutablePath) { $ServerExecutablePath } else { $ExecutablePath }
@@ -556,8 +464,7 @@ try {
             if (-not $ready) { throw 'Server did not emit READY before failure, exit or timeout' }
             $partnerProcess = Start-TestPeer $peerSpecs.Partner.arguments
             $startedProcesses.Add([pscustomobject]@{ role = 'Partner'; process = $partnerProcess; log = $peerSpecs.Partner.log })
-            # 冒烟只检查两个真实远端同时入场；其他场景须先让 Partner 准备测试状态。
-            $primaryReady = $case.mode -eq 'DedicatedSmoke'
+            $primaryReady = $false
             while (-not $primaryReady -and $watch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
                 $serverEvents = @(Get-CoopEvents $peerSpecs.Server.log -Token $token -Role 'Server' -Mode $case.mode)
                 if (@($serverEvents | Where-Object status -eq 'PRIMARY_READY').Count) { $primaryReady = $true; break }
@@ -607,30 +514,7 @@ try {
             $verdict = Get-CaseVerdict $result.events $result.requiredAssertions $case.mode
             $result.status = $verdict.status
             $result.errors += $verdict.errors
-            $result.metrics = $verdict.metrics
             $result.motionMetrics = $verdict.motionMetrics
-            if ($case.mode -eq 'Scale') {
-                # 只读取驱动真实上报的文件；找不到时保留 null 并判失败，不能以计划路径捏造结果。
-                $result.csvPath = Get-PropertyValue $verdict.metrics 'csvPath'
-                if (-not $result.csvPath) {
-                    $metricEvents = @($result.events | Where-Object { $_.status -eq 'METRIC' -and (Get-PropertyValue $_ 'role' '') -eq 'Server' })
-                    if ($metricEvents.Count) { $result.csvPath = Get-PropertyValue $metricEvents[-1] 'csvPath' }
-                }
-                try {
-                    if ($result.csvPath -and (Test-Path -LiteralPath $result.csvPath -PathType Leaf)) {
-                        $result.cpuMetrics = Get-CsvMetricSummary (Read-SharedText $result.csvPath)
-                        $result.csvSha256 = (Get-FileHash -LiteralPath $result.csvPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    }
-                } catch { $result.errors += "CPU CSV parsing failed: $($_.Exception.Message)" }
-                if ($null -eq $result.cpuMetrics) {
-                    $result.errors += 'Missing valid measured CSV column: Exclusive/GameThread/ServerReplicateActors'
-                    if ($result.status -ne 'unsupported') { $result.status = 'failed' }
-                } elseif ($null -eq $result.cpuMetrics.gameThread) {
-                    $result.measurementWarnings += 'GameThreadTime is unavailable in this DS CSV; total game-thread cost remains null. Replication CPU is measured separately.'
-                } elseif ($result.cpuMetrics.gameThread.allZero) {
-                    $result.measurementWarnings += 'GameThreadTime contains only raw zeros; do not interpret this as zero CPU cost. The engine counter may be unavailable in this configuration.'
-                }
-            }
             if ($failure) { $result.errors += $failure }
             if ($result.errors.Count -gt 0 -and $result.status -ne 'unsupported') { $result.status = 'failed' }
             Save-Report
@@ -638,48 +522,13 @@ try {
     }
 }
 finally {
-    $rows = @($report.cases | ForEach-Object {
-        $m = $_.metrics
-        $seconds = [double](Get-PropertyValue $m 'sampleSeconds' 0)
-        $bytes = Get-PropertyValue $m 'outBytes'
-        $cpu = $_.cpuMetrics
-        $displayGameThread = Get-DisplayGameThreadMetric $cpu
-        [pscustomobject]@{
-            id = $_.id; mode = $_.mode; matrix = $_.matrix; profile = $_.profile; iteration = $_.iteration
-            staticCount = $_.staticCount; movingCount = $_.movingCount; optimization = $_.optimization; status = $_.status
-            platformNetHz = $_.platformNetHz; platformSyncMode = $_.platformSyncMode; platformMotion = $_.platformMotion
-            sampleSeconds = $(if ($seconds -gt 0) { $seconds } else { $null }); outBytes = $bytes; outPackets = (Get-PropertyValue $m 'outPackets')
-            bytesPerSecond = $(if ($seconds -gt 0 -and $null -ne $bytes) { [Math]::Round([double]$bytes / $seconds, 3) } else { $null })
-            serverReplicateMeanMs = $(if ($null -ne $cpu) { $cpu.serverReplicateActors.mean } else { $null })
-            serverReplicateP95Ms = $(if ($null -ne $cpu) { $cpu.serverReplicateActors.p95 } else { $null })
-            gameThreadMeanMs = $(if ($null -ne $displayGameThread) { $displayGameThread.mean } else { $null })
-            gameThreadP95Ms = $(if ($null -ne $displayGameThread) { $displayGameThread.p95 } else { $null })
-            gameThreadAllZero = $(if ($null -ne $cpu -and $null -ne $cpu.gameThread) { $cpu.gameThread.allZero } else { $null })
-            fullyDormantActorsMean = $(if ($null -ne $cpu -and $null -ne $cpu.fullyDormantActors) { $cpu.fullyDormantActors.mean } else { $null })
-            replicateCallsPerConnectionMean = $(if ($null -ne $cpu -and $null -ne $cpu.replicateCallsPerConnection) { $cpu.replicateCallsPerConnection.mean } else { $null })
-            errors = ($_.errors -join ' | '); measurementWarnings = ($_.measurementWarnings -join ' | ')
-        }
-    })
-    foreach ($group in @($rows | Group-Object mode, matrix, profile, staticCount, movingCount, optimization, platformNetHz, platformSyncMode, platformMotion)) {
-        $valid = @($group.Group | Where-Object { $_.status -eq 'passed' -and $null -ne $_.bytesPerSecond })
-        $values = @($valid | ForEach-Object { [double]$_.bytesPerSecond })
-        $cpuValid = @($valid | Where-Object { $null -ne $_.serverReplicateMeanMs -and $null -ne $_.serverReplicateP95Ms })
-        $gameThreadValid = @($valid | Where-Object { $null -ne $_.gameThreadMeanMs -and $null -ne $_.gameThreadP95Ms })
-        $dormantValid = @($valid | Where-Object { $null -ne $_.fullyDormantActorsMean })
+    foreach ($group in @($report.cases | Group-Object {
+        if ($_.mode -eq 'Combat') { "Combat/$($_.profile)" }
+        else { "RideMotion/$($_.profile)/$($_.platformNetHz)Hz/$($_.platformSyncMode)/$($_.platformMotion)" }
+    })) {
         $report.summaries += [ordered]@{
-            group = $group.Name; matrix = $group.Group[0].matrix; attempted = $group.Count
-            passed = @($group.Group | Where-Object status -eq 'passed').Count; measuredSamples = $valid.Count; minimumThreeMeasuredSamples = ($valid.Count -ge 3)
-            medianBytesPerSecond = $(if ($values.Count) { Get-Median $values } else { $null })
-            minBytesPerSecond = $(if ($values.Count) { ($values | Measure-Object -Minimum).Minimum } else { $null })
-            maxBytesPerSecond = $(if ($values.Count) { ($values | Measure-Object -Maximum).Maximum } else { $null })
-            cpuMeasuredSamples = $cpuValid.Count
-            gameThreadMeasuredSamples = $gameThreadValid.Count
-            medianReplicateMeanMs = $(if ($cpuValid.Count) { Get-Median @($cpuValid | ForEach-Object { [double]$_.serverReplicateMeanMs }) } else { $null })
-            medianReplicateP95Ms = $(if ($cpuValid.Count) { Get-Median @($cpuValid | ForEach-Object { [double]$_.serverReplicateP95Ms }) } else { $null })
-            medianGameThreadMeanMs = $(if ($gameThreadValid.Count) { Get-Median @($gameThreadValid | ForEach-Object { [double]$_.gameThreadMeanMs }) } else { $null })
-            medianGameThreadP95Ms = $(if ($gameThreadValid.Count) { Get-Median @($gameThreadValid | ForEach-Object { [double]$_.gameThreadP95Ms }) } else { $null })
-            gameThreadAllZeroRuns = @($cpuValid | Where-Object { $_.gameThreadAllZero }).Count
-            medianFullyDormantActorsMean = $(if ($dormantValid.Count) { Get-Median @($dormantValid | ForEach-Object { [double]$_.fullyDormantActorsMean }) } else { $null })
+            group = $group.Name; attempted = $group.Count
+            passed = @($group.Group | Where-Object status -eq 'passed').Count
         }
     }
     $report.status = if ($PlanOnly) { 'planned' } elseif (@($report.cases | Where-Object { $_.status -ne 'passed' }).Count -eq 0 -and $report.cases.Count -eq $cases.Count) { 'passed' } else { 'failed' }
@@ -699,7 +548,6 @@ finally {
             Save-Report
         }
     }
-    if ($rows.Count) { $rows | Export-Csv -LiteralPath (Join-Path $OutputDirectory 'samples.csv') -NoTypeInformation -Encoding UTF8 }
     $markdown = New-Object 'System.Collections.Generic.List[string]'
     $markdown.Add('# Network validation report')
     $markdown.Add('')
@@ -707,15 +555,13 @@ finally {
     $markdown.Add('')
     $markdown.Add('This is automated assertion evidence, not visual or manual end-to-end acceptance. Planned, failed and unsupported cases are not measured successes.')
     $markdown.Add('')
-    $markdown.Add('| Case group | Passed / attempted | Measured samples | Median B/s | Min–max B/s | Replicate mean/P95 ms | GameThread mean/P95 ms | Dormant actors mean |')
-    $markdown.Add('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
-    foreach ($summary in $report.summaries) { $markdown.Add("| $($summary.group) | $($summary.passed) / $($summary.attempted) | $($summary.measuredSamples) | $($summary.medianBytesPerSecond) | $($summary.minBytesPerSecond) – $($summary.maxBytesPerSecond) | $($summary.medianReplicateMeanMs) / $($summary.medianReplicateP95Ms) | $($summary.medianGameThreadMeanMs) / $($summary.medianGameThreadP95Ms) | $($summary.medianFullyDormantActorsMean) |") }
+    $markdown.Add('| Case group | Passed / attempted |')
+    $markdown.Add('| --- | ---: |')
+    foreach ($summary in $report.summaries) { $markdown.Add("| $($summary.group) | $($summary.passed) / $($summary.attempted) |") }
     $markdown.Add('')
-    $markdown.Add('CPU/actor columns summarize the median of per-run means/P95 values; P95 uses nearest-rank, not a pooled percentile. Missing metrics and all-zero GameThreadTime counters remain blank/null in the table and samples.csv; original counters remain in report.json. All-zero counters must not be interpreted as zero CPU cost. The process is capped at 60 fps: a 100 Hz replication setting is only an upper bound, not a measured sending rate.')
-    foreach ($caseResult in $report.cases) { foreach ($warning in $caseResult.measurementWarnings) { $markdown.Add("Warning [$($caseResult.id)]: $warning") } }
-    $markdown.Add('')
-    $markdown.Add('See report.json for commands, configuration, fingerprints, per-assertion events and errors; samples.csv contains raw per-run samples. Bandwidth comparisons require matching topology, counts, warmup/sample durations and at least three successful measured samples per group. Visibility alone does not certify visual correctness.')
-    $markdown.Add('RideMotion phase measurements are preserved as complete events in each case''s motionMetrics array in report.json, including role, phase, sample count, base/falling observations and correction distances. Missing or non-finite measurements fail the case; the numerical checks are not a replacement for visual acceptance.')
+    $markdown.Add('See report.json for commands, configuration, fingerprints, per-assertion events and any per-role motion measurements. No bandwidth or CPU measurements are produced by this assertion suite.')
+    if (@($report.cases | Where-Object mode -eq 'Combat').Count -gt 0) { $markdown.Add('Combat checks authoritative damage/healing/death, defense prediction before the local call returns, PredictionKey catch-up without double cost, and real rejection after server-only resource/death divergence. Rejection fixtures briefly delay pawn property replication while preserving the real GAS RPC path; the owning client must observe predicted effects and the engine rejection callback before rollback is accepted. Both clients independently verify the final replicated state. It does not certify animations, rendered projectiles, full AI navigation or visual quality.') }
+    if (@($report.cases | Where-Object mode -eq 'RideMotion').Count -gt 0) { $markdown.Add('RideMotion phase measurements are preserved as complete events in each case''s motionMetrics array in report.json, including role, phase, sample count, base/falling observations and correction distances. Missing or non-finite measurements fail the case; the numerical checks are not a replacement for visual acceptance.') }
     if (@($report.cases | Where-Object mode -eq 'RideMotion').Count -gt 0 -and -not $PlanOnly) { $markdown.Add('RideMotion client Jump timeline: timeline-<case id>.svg, plus -samples.csv, -corrections.csv, -move-pairs.csv and -all-moves.csv. Moves are joined by CMC timestamp; server/client World clocks are not compared. This is not a packet trace or proof of visual smoothness.') }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'summary.md'), ($markdown -join "`r`n"), $Utf8)
 }

@@ -7,9 +7,11 @@
 #include "multiplayerCoopPlayerController.generated.h"
 
 /** 本地操作反馈，不经过网络；HUD/Widget 订阅后更新按钮和提示。 */
-DECLARE_MULTICAST_DELEGATE_TwoParams(FCoopVictoryActionChanged, bool, const FText&);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FCoopVictoryActionChanged, bool, bActionsEnabled, const FText&, Message);
 
 /** 互斥的本地界面操作；不复制，服务器规则仍由 GameMode 决定。 */
+UENUM(BlueprintType)
 enum class ECoopVictoryAction : uint8
 {
 	// 可接受新操作，包括上一次失败后重试。
@@ -41,15 +43,19 @@ public:
 	void LeaveCoopSession();
 
 	/** 只读观察当前操作，不允许外部跳过请求和失败恢复路径修改状态。 */
+	UFUNCTION(BlueprintPure, Category = "Coop|Flow")
 	ECoopVictoryAction GetVictoryAction() const { return VictoryAction; }
+
+	// 所属客户端的按钮与提示反馈；这是本地委托，不是网络广播。
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Flow")
 	FCoopVictoryActionChanged OnVictoryActionChanged;
 
 	/** GameMode 在旧 World 内恢复失败时，通知实际提交请求的所属客户端。 */
 	void NotifyRestartFailed(const FText& Reason);
 
 	// 蓝图表现扩展。
-	// 默认 C++ UI 已能完成流程；该事件用于附加动画、音效等表现，不替换默认 Widget。
-	UFUNCTION(BlueprintImplementableEvent, Category = "Coop|Victory", meta = (DisplayName = "On Coop Game Won"))
+	// HUD 已展示 UMG 胜利界面；该事件仅用于附加动画、音效，不再创建第二份 Widget。
+	UFUNCTION(BlueprintImplementableEvent, BlueprintCallable, Category = "Coop|Victory", meta = (DisplayName = "On Coop Game Won"))
 	void ReceiveCoopGameWon();
 
 protected:
@@ -78,6 +84,7 @@ private:
 	void SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message);
 
 	// 外部状态变化回调。
+	// 由 GameInstance 的本地 OnLeaveFailed 委托触发，只解除退出操作，不恢复旧连接。
 	void HandleLeaveFailed(const FText& Reason);
 
 	// 所属客户端：本地操作状态不复制，不决定服务器规则。

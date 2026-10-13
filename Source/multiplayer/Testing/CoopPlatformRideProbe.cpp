@@ -347,7 +347,7 @@ void UCoopNetTestDriver::MotionServerTick(UWorld* World)
 		FString PlatformMotion = TEXT("Moving");
 		FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformMotion="), PlatformMotion);
 		MotionProbe->MovementSettings.bStationaryPlatform = PlatformMotion == TEXT("Static");
-		if (SyncMode == TEXT("Baseline") || SyncMode == TEXT("OrderedVelocity"))
+		if (SyncMode == TEXT("OrderedVelocity"))
 		{
 			MotionProbe->MovementSettings.FallingBraking = 1500;
 		}

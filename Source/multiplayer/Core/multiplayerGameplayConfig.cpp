@@ -148,10 +148,6 @@ bool FmultiplayerGameplayConfig::LoadFromFile(const FString& FilePath)
 	}
 	// 全部字段通过后才原子提交；任何读取或校验失败都会恢复整套默认值。
 	*this = MoveTemp(Candidate);
-	UE_LOG(LogMultiplayer, Log,
-		TEXT("Gameplay config loaded: '%s'; session=%d, required keys=%d, win=%d, platform=%d, speeds=%.2f/%.2f/%.2f cm/s, reconnect attempts=%d"),
-		*FilePath, SessionMaxPlayers, RequiredKeys, WinRequiredPlayers, PlatformRequiredPlayers,
-		PlatformMoveSpeed, DoorMoveSpeed, PlateMoveSpeed, ReconnectDelaysSeconds.Num());
 	return true;
 }
 

@@ -3,8 +3,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/multiplayerCombatCharacter.h"
 #include "GameFramework/GameMode.h"
 #include "multiplayerGameMode.generated.h"
+
+class AmultiplayerCoopPlayerController;
 
 /**
  * 合作玩法的服务器规则入口。
@@ -24,6 +27,15 @@ public:
 	// 在接收玩家前设置实际登录容量；地图直接启动或重开时同样使用 JSON 人数上限。
 	// GameSession 和 GameState 创建后，统一应用内存中的配置并初始化目标快照。
 	virtual void InitGameState() override;
+	virtual void PostLogin(APlayerController* NewPlayer) override;
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	virtual void Logout(AController* Exiting) override;
+
+	// 接纳只校验服务器签发的票据；个人状态始终来自本局服务器快照，不收客户端数值。
+	bool ClaimCombatSession(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket,
+		FGuid& OutTicket, FText& OutError, bool& bRetryable);
+	// Controller 在销毁 Pawn 前调用；重复的销毁/Logout 通知不会覆盖第一次快照。
+	void SaveCombatSession(AmultiplayerCoopPlayerController* Controller);
 
 	// 合作目标的权威提交入口。
 	/**
@@ -56,7 +68,22 @@ public:
 	// Travel 失败且本 GameMode/World 仍可用时解除本次重开锁；成功切图由新 World 初始化。
 	bool RecoverFailedRestart(const FString& FailureReason);
 
+protected:
+	virtual void FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation) override;
+	virtual APlayerController* ProcessClientTravel(FString& URL, bool bSeamless, bool bAbsolute) override;
+
 private:
+	struct FCombatSession
+	{
+		TWeakObjectPtr<AmultiplayerCoopPlayerController> Controller;
+		FGuid PreviousTicket;
+		FmultiplayerCombatResumeState State;
+		double SavedAt = 0;
+		double ExpiresAt = 0;
+	};
+	// 仅存本局内存；断线快照保留120秒，当前/备用票据共享一个在线锁，轮换回执丢失也能恢复。
+	TMap<FGuid, FCombatSession> CombatSessions;
+
 	// 钥匙附着、销毁和进度通知可能同步触发其他事件，拒绝提交期间的嵌套登记。
 	bool bRegisteringKey = false;
 

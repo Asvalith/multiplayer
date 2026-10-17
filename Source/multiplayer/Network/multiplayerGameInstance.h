@@ -6,6 +6,8 @@
 #include "Core/multiplayerGameplayConfig.h"
 #include "multiplayerGameInstance.generated.h"
 
+class AmultiplayerCoopPlayerController;
+
 /** 客户端连接生命周期。服务器不参与菜单状态，不因某名玩家退出而停止。 */
 UENUM(BlueprintType)
 enum class EMultiplayerConnectionState : uint8
@@ -15,6 +17,7 @@ enum class EMultiplayerConnectionState : uint8
 	// 首次连接已发起，尚未收到本地 PlayingState 确认。
 	Connecting,
 	// 已进入客户端 PlayingState，不表示所有复制对象和界面都已就绪。
+	// 还必须已收到服务器会话接纳/恢复完成回执。
 	Connected,
 	// 断线后保留地址，等待下一次有限重试。
 	ReconnectWaiting,
@@ -55,7 +58,13 @@ public:
 	void LeaveGame();
 
 	// 由本地 PlayerController 进入 PlayingState 时调用，不以 Travel 发出作为成功依据。
+	// PlayingState 只准备握手；本入口仅在服务器确认且当前 Controller 已接纳后生效。
 	void NotifyClientConnected();
+	// Owned Controller 在 PlayingState 准备握手，只有同一操作与同一控制器的服务器结果可以提交成功。
+	bool PrepareCombatHandshake(AmultiplayerCoopPlayerController* Controller, FGuid& OutTicket, uint64& OutOperation);
+	bool CompleteCombatHandshake(AmultiplayerCoopPlayerController* Controller, uint64 Operation,
+		const FGuid& Ticket, const FText& Error, bool bRetryable);
+	void SetReconnectTicket(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket);
 
 	// 只读状态供菜单展示，配置供玩法规则读取；地址校验不发起连接。
 	// 返回本实例的业务状态，不直接等同于底层 NetConnection 状态。
@@ -113,10 +122,14 @@ private:
 	FText ConnectionMessage;
 	// 首次请求或实际客户端 URL 记下的地址；主动退出和最终失败会清空。
 	FString LastServerAddress;
+	// 本地内存按规范端点保存不透明票据，不拼入URL、不写日志，也不保存客户端战斗数值。
+	TMap<FString, FGuid> ReconnectTickets;
+	TWeakObjectPtr<AmultiplayerCoopPlayerController> HandshakeController;
 	// 已经开始的重连次数，用作下一次等待间隔的下标。
 	int32 ReconnectAttempt = 0;
 	// 仅由 SetConnectionState 递增，使旧回调和通知中被替换的操作失效。
 	// 超时和状态通知后显式校验编号；重试 Timer 则检查当前等待状态。
+	// 握手回执及重试 Timer 同样绑定操作编号，旧 World/旧 Controller 不得接管新连接。
 	uint64 OperationRevision = 0;
 	// 一次连接尝试的等待期限，与重试前的等待分别管理。
 	FTimerHandle ConnectTimeoutHandle;

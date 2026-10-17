@@ -107,6 +107,8 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AmultiplayerCharacter::Attack);
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AmultiplayerCharacter::Defend);
 	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AmultiplayerCharacter::Heal);
+	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AmultiplayerCharacter::CastArea);
+	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AmultiplayerCharacter::CancelCast);
 
 	// Enhanced Input 把“动作”与具体按键解耦，同一套角色代码可复用不同输入方案。
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
@@ -137,7 +139,7 @@ void AmultiplayerCharacter::Move(const FInputActionValue& Value)
 	// 二维输入分别表示左右和前后移动。
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
-	if (Controller != nullptr && IsAlive())
+	if (Controller != nullptr && IsCombatReady() && !IsStunned() && !IsCasting())
 	{
 		// 只取控制器的 Yaw，避免镜头俯仰导致角色产生向上或向下的移动分量。
 		const FRotator Rotation = Controller->GetControlRotation();

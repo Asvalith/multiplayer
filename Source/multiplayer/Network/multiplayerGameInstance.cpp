@@ -1,4 +1,5 @@
 #include "Network/multiplayerGameInstance.h"
+#include "Player/multiplayerCoopPlayerController.h"
 #include "Core/multiplayerGameMode.h"
 #include "Core/multiplayerLog.h"
 #include "Engine/Engine.h"
@@ -31,6 +32,9 @@ void UmultiplayerGameInstance::Shutdown()
 {
 	// 不让连接超时或重试等待在实例结束后继续执行。
 	ClearConnectionTimers();
+	++OperationRevision;
+	HandshakeController.Reset();
+	ReconnectTickets.Reset();
 	// 与初始化时的引擎事件订阅对称清理。
 	if (GEngine)
 	{
@@ -112,6 +116,7 @@ void UmultiplayerGameInstance::StartTravel(bool bRetry)
 {
 	// 新尝试接管旧等待；先提交状态，供菜单显示连接中的提示。
 	ClearConnectionTimers();
+	HandshakeController.Reset();
 	const uint64 Revision = SetConnectionState(
 		bRetry ? EMultiplayerConnectionState::Reconnecting : EMultiplayerConnectionState::Connecting,
 		NSLOCTEXT("Multiplayer", "ConnectingDS", "正在连接服务器……"));
@@ -139,8 +144,63 @@ void UmultiplayerGameInstance::HandleConnectTimeout(uint64 Revision)
 	// 先保留本次是否重试，再取消 Pending；后续收尾会改变状态。
 	const bool bRetry = ConnectionState == EMultiplayerConnectionState::Reconnecting;
 	if (GEngine && GetWorld()) GEngine->CancelPending(GetWorld());
+	if (Revision != OperationRevision) return;
 	// 首次连接到期直接报错；重连到期使用剩余次数安排下一次。
 	if (bRetry) ScheduleReconnect(); else FailConnection(TEXT("Connection timed out"));
+	if (GetWorld() && GetWorld()->GetNetMode() == NM_Client) ReturnToMainMenu();
+}
+
+bool UmultiplayerGameInstance::PrepareCombatHandshake(AmultiplayerCoopPlayerController* Controller,
+	FGuid& OutTicket, uint64& OutOperation)
+{
+	UWorld* World = GetWorld();
+	if (!Controller || Controller != GetFirstLocalPlayerController() || Controller->GetWorld() != World
+		|| !World || World->GetNetMode() != NM_Client || ConnectionState == EMultiplayerConnectionState::Leaving) return false;
+	FString Address;
+	if (!NormalizeServerAddress(FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port), Address)) return false;
+	LastServerAddress = MoveTemp(Address);
+	// 控制台直连和整体回合重开也必须经过相同握手；重连则保留原来的有限重试预算。
+	if (ConnectionState != EMultiplayerConnectionState::Connecting && ConnectionState != EMultiplayerConnectionState::Reconnecting)
+	{
+		const uint64 Revision = SetConnectionState(EMultiplayerConnectionState::Connecting,
+			NSLOCTEXT("Multiplayer", "ConfirmCombatSession", "正在确认服务器会话……"));
+		if (Revision != OperationRevision) return false;
+	}
+	ClearConnectionTimers();
+	HandshakeController = Controller;
+	OutOperation = OperationRevision;
+	OutTicket = ReconnectTickets.FindRef(LastServerAddress);
+	GetTimerManager().SetTimer(ConnectTimeoutHandle,
+		FTimerDelegate::CreateUObject(this, &ThisClass::HandleConnectTimeout, OutOperation), 20.f, false);
+	return true;
+}
+
+bool UmultiplayerGameInstance::CompleteCombatHandshake(AmultiplayerCoopPlayerController* Controller,
+	uint64 Operation, const FGuid& Ticket, const FText& Error, bool bRetryable)
+{
+	if (!Controller || Controller != HandshakeController.Get() || Controller != GetFirstLocalPlayerController()
+		|| Controller->GetWorld() != GetWorld() || Operation != OperationRevision
+		|| (ConnectionState != EMultiplayerConnectionState::Connecting && ConnectionState != EMultiplayerConnectionState::Reconnecting)) return false;
+	HandshakeController.Reset();
+	if (Ticket.IsValid() && Error.IsEmpty())
+	{
+		ReconnectTickets.Add(LastServerAddress, Ticket);
+		return true;
+	}
+	// 只有旧连接尚未被服务器清理可以继续有限重试；失效票据明确终止，不能静默换成新人物。
+	if (!bRetryable) ReconnectTickets.Remove(LastServerAddress);
+	if (bRetryable && ConnectionState == EMultiplayerConnectionState::Reconnecting) ScheduleReconnect();
+	else FailConnection(Error.IsEmpty() ? TEXT("Server rejected the combat session") : Error.ToString());
+	ReturnToMainMenu();
+	return false;
+}
+
+void UmultiplayerGameInstance::SetReconnectTicket(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket)
+{
+	if (!Controller || Controller != GetFirstLocalPlayerController() || Controller->GetWorld() != GetWorld()
+		|| !Controller->HasAcceptedCombatSession() || LastServerAddress.IsEmpty()) return;
+	if (Ticket.IsValid()) ReconnectTickets.Add(LastServerAddress, Ticket);
+	else ReconnectTickets.Remove(LastServerAddress);
 }
 
 // 本地 Controller 进入 PlayingState 后确认连接；不代表全部复制对象和 UI 已经就绪。
@@ -149,6 +209,8 @@ void UmultiplayerGameInstance::NotifyClientConnected()
 	UWorld* World = GetWorld();
 	// 只接受客户端游戏世界的确认，不能把菜单、服务器或主动退出改成已连接。
 	if (!World || World->GetNetMode() != NM_Client || ConnectionState == EMultiplayerConnectionState::Leaving) return;
+	const auto* Controller = Cast<AmultiplayerCoopPlayerController>(GetFirstLocalPlayerController());
+	if (!Controller || !Controller->HasAcceptedCombatSession()) return;
 	// 控制台/命令行直连没有菜单请求；从实际 URL 补记地址，重开后也重新确认。
 	FString Address;
 	if (NormalizeServerAddress(FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port), Address)) LastServerAddress = Address;
@@ -165,6 +227,8 @@ void UmultiplayerGameInstance::LeaveGame()
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_DedicatedServer || ConnectionState == EMultiplayerConnectionState::Leaving) return;
 	// 清掉等待、地址和次数，避免主动关闭连接后又被断线通知自动连回。
 	ClearConnectionTimers();
+	ReconnectTickets.Remove(LastServerAddress);
+	HandshakeController.Reset();
 	LastServerAddress.Reset();
 	ReconnectAttempt = 0;
 	// 先提交 Leaving，使旧超时失效；监听者可以同步更新退出界面。
@@ -191,7 +255,7 @@ void UmultiplayerGameInstance::HandlePostLoadMap(UWorld* World)
 bool UmultiplayerGameInstance::OwnsFailure(const UWorld* World, const UNetDriver* Driver) const
 {
 	// 已知 World 属于其他实例时直接忽略，避免编辑器多实例之间串台。
-	if (World && World->GetGameInstance() != this) return false;
+	if (World && (World->GetGameInstance() != this || World != GetWorld())) return false;
 	// 当前实例的 World 与正式驱动能够对应时，直接确认归属。
 	if (World && (!Driver || World->GetNetDriver() == Driver)) return true;
 	// World 信息不足时，必须有驱动与引擎上下文才能继续查找。
@@ -217,6 +281,9 @@ void UmultiplayerGameInstance::HandleNetworkFailure(UWorld* World, UNetDriver* D
 		UE_LOG(LogMultiplayer, Warning, TEXT("DS network event %s: %s; server continues independently."), ENetworkFailure::ToString(Type), *Error);
 		return;
 	}
+	// 失败回执已经结束业务操作时，底层随后清连接的通知不能覆盖具体原因。
+	if (ConnectionState == EMultiplayerConnectionState::Idle && LastServerAddress.IsEmpty()) return;
+	HandshakeController.Reset();
 	// 自动恢复仅面向已连接后的丢线或重试过程中的连接失败；首次连接失败不循环重试。
 	const bool bRetryable = Type == ENetworkFailure::ConnectionLost || Type == ENetworkFailure::ConnectionTimeout
 		|| (ConnectionState == EMultiplayerConnectionState::Reconnecting && Type == ENetworkFailure::PendingConnectionFailure);
@@ -234,7 +301,7 @@ void UmultiplayerGameInstance::HandleNetworkFailure(UWorld* World, UNetDriver* D
 void UmultiplayerGameInstance::HandleTravelFailure(UWorld* World, ETravelFailure::Type, const FString& Error)
 {
 	// Travel 通知同样是全局事件，只处理当前实例的 World。
-	if (!World || World->GetGameInstance() != this) return;
+	if (!World || World->GetGameInstance() != this || World != GetWorld()) return;
 	// 服务器重开失败可能仍能恢复旧世界，先让 GameMode 处理自己的请求快照。
 	if (auto* GM = World->GetAuthGameMode<AmultiplayerGameMode>())
 		if (GM->RecoverFailedRestart(Error)) return;
@@ -261,6 +328,7 @@ void UmultiplayerGameInstance::FailConnection(const FString& Reason)
 {
 	// 结束等待并放弃原地址，之后需要玩家重新提交连接请求。
 	ClearConnectionTimers();
+	HandshakeController.Reset();
 	LastServerAddress.Reset();
 	ReconnectAttempt = 0;
 	// Idle 表示业务操作结束，不表示引擎已经同步完成返回菜单。
@@ -281,12 +349,16 @@ void UmultiplayerGameInstance::ScheduleReconnect()
 	}
 	// 用已开始的尝试次数选择下一次间隔；这里安排等待，还没有增加尝试次数。
 	ClearConnectionTimers();
+	HandshakeController.Reset();
 	const float Delay = GameplayConfig.ReconnectDelaysSeconds[ReconnectAttempt];
 	const uint64 Revision = SetConnectionState(EMultiplayerConnectionState::ReconnectWaiting,
 		NSLOCTEXT("Multiplayer", "ReconnectWaiting", "连接中断，等待重试……"));
 	// 等待通知也可能同步触发退出，操作未被替换才真正注册计时器。
 	if (Revision != OperationRevision) return;
-	GetTimerManager().SetTimer(ReconnectTimerHandle, this, &ThisClass::TryReconnect, Delay, false);
+	GetTimerManager().SetTimer(ReconnectTimerHandle, FTimerDelegate::CreateWeakLambda(this, [this, Revision]
+	{
+		if (Revision == OperationRevision) TryReconnect();
+	}), Delay, false);
 }
 
 // 重连等待 Timer 到期后开始一次尝试；已取消等待时不执行，也不增加次数。

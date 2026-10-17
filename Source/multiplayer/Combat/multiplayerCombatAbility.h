@@ -4,11 +4,21 @@
 
 #include "CoreMinimal.h"
 #include "Abilities/GameplayAbility.h"
+#include "AbilitySystemComponent.h"
 #include "GameplayEffect.h"
+#include "Combat/multiplayerCombatConfig.h"
 #include "multiplayerCombatAbility.generated.h"
 
-// 三个技能共用服务器执行和死亡限制；客户端只通过自己的 ASC 发起技能请求。
-// 默认沿用服务器执行；防御在自己的构造中覆写为本地预测，最终结果仍由服务器决定。
+// UE5.5禁止客户端任意移除权威GE；只开放“结束本次本地施法”的窄入口，不开放资源/CD移除。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerCombatAbilitySystem : public UAbilitySystemComponent
+{
+	GENERATED_BODY()
+public:
+	void EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey);
+};
+
+// 三个技能共用 GAS 本地预测、连接接纳与死亡限制；最终玩法结果仍由服务器决定。
 UCLASS(Abstract)
 class MULTIPLAYER_API UmultiplayerCombatAbility : public UGameplayAbility
 {
@@ -16,8 +26,26 @@ class MULTIPLAYER_API UmultiplayerCombatAbility : public UGameplayAbility
 
 public:
 	UmultiplayerCombatAbility();
+	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
+		const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags = nullptr,
+		const FGameplayTagContainer* TargetTags = nullptr, FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
+protected:
+	// 所有技能的资源与冷却从同一份规则读取；效果继续交给 GAS 预测与确认。
+	virtual bool CheckCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
+	virtual void ApplyCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo) const override;
+	virtual void ApplyCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo) const override;
+	virtual void CommitExecute(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo) override;
+	const FmultiplayerCombatSkillRule& GetRule() const;
+	EMultiplayerCombatSkill Skill = EMultiplayerCombatSkill::Attack;
+	// InstancedPerActor 会复用实例；同步取消后再激活时，旧调用栈不能继续推动新一轮技能。
+	uint32 ActivationRevision = 0;
 };
 
+// 攻击：伤害效果、冷却和技能放在一起。
 // 以下效果提供可运行的默认规则，蓝图派生类可调整数值和持续时间。
 UCLASS(Blueprintable)
 class MULTIPLAYER_API UmultiplayerDamageEffect : public UGameplayEffect
@@ -51,8 +79,15 @@ protected:
 		const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo,
 		const FGameplayEventData* TriggerEventData) override;
+	virtual void EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
+private:
+	UFUNCTION() void ReleaseProjectile();
+	UFUNCTION() void FinishAttack();
+	bool bProjectileReleased = false;
 };
 
+// 防御：消耗、冷却、限时效果和技能。
 UCLASS(Blueprintable)
 class MULTIPLAYER_API UmultiplayerDefendCostEffect : public UGameplayEffect
 {
@@ -97,6 +132,7 @@ protected:
 		const FGameplayEventData* TriggerEventData) override;
 };
 
+// 治疗：治疗效果、消耗、冷却和技能。
 UCLASS(Blueprintable)
 class MULTIPLAYER_API UmultiplayerHealEffect : public UGameplayEffect
 {
@@ -132,10 +168,60 @@ class MULTIPLAYER_API UmultiplayerHealAbility : public UmultiplayerCombatAbility
 
 public:
 	UmultiplayerHealAbility();
+	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
+		const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags = nullptr,
+		const FGameplayTagContainer* TargetTags = nullptr, FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
 
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle,
 		const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo,
 		const FGameplayEventData* TriggerEventData) override;
+};
+
+// 范围技能沿用防御/治疗的资源通道，不另写客户端扣费或冷却计时。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerAreaCostEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerAreaCostEffect();
+};
+UCLASS()
+class MULTIPLAYER_API UmultiplayerAreaCooldownEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerAreaCooldownEffect();
+};
+UCLASS(NotBlueprintable)
+class MULTIPLAYER_API UmultiplayerCastingEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerCastingEffect();
+};
+// 同一目标只保留一份眩晕，再次施加刷新时长，不能叠出多份移动锁。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerStunEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerStunEffect();
+};
+
+// 起手扣费并启动冷却；延时由 AbilityTask 管理，取消/死亡统一 EndAbility 销毁任务。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerAreaAbility : public UmultiplayerCombatAbility
+{
+	GENERATED_BODY()
+public:
+	UmultiplayerAreaAbility();
+protected:
+	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
+	virtual void EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
+private:
+	UFUNCTION() void ReleaseArea();
+	UFUNCTION() void FinishRecovery();
+	FActiveGameplayEffectHandle CastingEffect;
+	FVector TargetLocation = FVector::ZeroVector;
+	bool bReleased = false;
 };

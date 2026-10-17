@@ -6,6 +6,14 @@ Saved/
 Packaged/
 # Cooker-generated file access traces; keep hand-maintained Build assets trackable.
 /Build/Windows/FileOpenOrder/
+/Build/LinuxServer/FileOpenOrder/
+
+# Third-party source packs stay local; project-authored Combat assets remain trackable.
+/Content/AdvancedARPGCombat/
+/Content/Mage/
+/Content/Pack_Effects_2/
+/Content/Mage Animation Pack/
+/Content/nigara/
 
 # Visual Studio generated files
 .vs/

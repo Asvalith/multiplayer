@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('RideMotion', 'Combat')][string]$Scenario = 'RideMotion',
+    [ValidateSet('RideMotion', 'Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle')][string]$Scenario = 'RideMotion',
     [ValidateSet('Normal', 'Moderate', 'Harsh')][string[]]$Profiles = @('Normal', 'Moderate', 'Harsh'),
     [ValidateRange(1, 100)][int]$Repeat = 3,
     [ValidateRange(30, 1800)][int]$TimeoutSeconds = 180,
@@ -105,7 +105,7 @@ function Test-SourceManifestPath {
 function Get-SourceManifest {
     $files = @()
     # UMG 布局、按钮图、菜单控制器和 HUD 生命周期均在 Content/UI，统一纳入验证指纹。
-    foreach ($directory in @('Source', 'Config', 'Scripts', 'Tests', 'Content/UI')) {
+    foreach ($directory in @('Source', 'Config', 'Scripts', 'Tests', 'Content/UI', 'Content/Combat', 'Content/__ExternalActors__/Combat')) {
         $directoryPath = Join-Path $ProjectRoot $directory
         if (Test-Path -LiteralPath $directoryPath) {
             $files += @(Get-ChildItem -LiteralPath $directoryPath -File -Recurse | Where-Object {
@@ -124,15 +124,65 @@ function Get-SourceManifest {
 function Get-RequiredAssertions {
     param([string]$Mode = 'RideMotion')
     if ($Mode -eq 'Combat') {
-        return @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerCombatFixture', 'ServerCombatSpawn',
+        $required = @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerCombatFixture', 'ServerCombatSpawn',
             'ServerCombatCurrentState', 'ServerCombatAttack', 'ServerCombatDefense', 'ServerCombatHeal',
             'ServerCombatEnemyDeath', 'ServerCombatPlayerDeath', 'PrimaryCurrentState', 'PartnerCurrentState',
             'PrimaryAttack', 'PartnerAttack', 'PrimaryDefense', 'PartnerDefense', 'PrimaryHeal', 'PartnerHeal',
             'PrimaryDefensePredicted', 'PrimaryDefenseRepeatedInput', 'PrimaryDefenseConfirmed',
+            'PrimaryAttackPredicted', 'PrimaryAttackRepeatedInput', 'PrimaryAttackConfirmed',
+            'PrimaryHealPredicted', 'PrimaryHealRepeatedInput', 'PrimaryHealConfirmed',
             'ServerCombatResourceFixture', 'ServerCombatResourceRejected', 'PrimaryResourceReady', 'PartnerResourceReady',
             'PrimaryResourcePredicted', 'PrimaryResourceRepeatedInput', 'PrimaryResourceRejected', 'PrimaryResourceRollback', 'PartnerResourceRollback',
+            'PrimaryResourceLocalRollback',
             'ServerCombatDeathFixture', 'PrimaryDeathReady', 'PartnerDeathReady', 'PrimaryDeathPredicted', 'PrimaryDeathRepeatedInput', 'PrimaryDeathRejected',
+            'PrimaryDeathAttackPredicted', 'PrimaryDeathAttackRepeatedInput', 'PrimaryDeathAttackRejected',
+            'PrimaryDeathHealPredicted', 'PrimaryDeathHealRepeatedInput', 'PrimaryDeathHealRejected', 'PrimaryDeathLocalRollback',
+            'PrimaryFreshIntentionalExit', 'ServerCombatFreshSession',
+            'ServerCombatResourceRoutingFixture', 'ServerCombatResourceRouting', 'PartnerDefenseResourcesHidden', 'PartnerResourceRollbackResourcesHidden',
+            'PrimaryPublicMaxHealth', 'PartnerPublicMaxHealth', 'PartnerOwnedResources', 'PrimaryPrivateResourcesHidden',
             'PrimaryEnemyDeath', 'PartnerEnemyDeath', 'PrimaryPlayerDeath', 'PartnerPlayerDeath', 'Complete', 'PartnerComplete')
+        foreach ($case in @('AttackCooldown', 'DefenseCooldown', 'HealCooldown', 'HealEnergy', 'AreaCooldown', 'AreaEnergy', 'HealNoTarget')) {
+            $required += @("Primary${case}Ready", "Partner${case}Ready", "Server${case}Fixture",
+                "Primary${case}Predicted", "Primary${case}RepeatedInput", "Primary${case}Rejected", "Primary${case}Rollback", "Server${case}Rejected",
+                "Primary${case}RetryReady", "Partner${case}RetryReady", "Primary${case}RetryPredicted", "Primary${case}RetryRepeatedInput",
+                "Primary${case}RetryConfirmed", "Primary${case}RetryOutcome", "Partner${case}RetryOutcome", "Server${case}Retry")
+        }
+        foreach ($case in @('FreshAttack', 'FreshDefense', 'FreshHeal')) {
+            $required += @("Primary${case}Ready", "Partner${case}Ready", "Primary${case}RetryPredicted", "Primary${case}RetryRepeatedInput",
+                "Primary${case}RetryConfirmed", "Primary${case}RetryOutcome", "Partner${case}RetryOutcome", "Server${case}Retry")
+        }
+        return $required
+    }
+    if ($Mode -eq 'CombatTraffic') {
+        return @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerTrafficFixture', 'ServerTrafficClearPath', 'ServerTrafficConnections',
+            'ServerTrafficSchedule', 'PrimaryTrafficReady', 'PartnerTrafficReady', 'PrimaryTrafficObserved', 'PartnerTrafficObserved', 'Complete', 'PartnerComplete')
+    }
+    if ($Mode -eq 'CombatLifecycle') {
+        $required = @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerLifecycleFloor', 'ServerLifecycleLateState',
+            'ServerLifecycleFixture', 'ServerLifecycleRules', 'PrimaryLifecycleRules', 'PartnerLifecycleRules',
+            'PrimaryLifecycleLateState', 'PartnerLifecycleLateState',
+            'ServerAreaSingleDamage', 'ServerAreaCancelNoDamage', 'ServerAreaStunInterrupt', 'ServerAreaStunNoDamage',
+            'ServerAreaCancelCooldownRetained', 'ServerAreaConfirmedCancelCooldownRetained', 'ServerAreaConfirmedCancelNoDamage',
+            'PrimaryAreaConfirmedCancelAuthorityObserved', 'PrimaryAreaConfirmedCancelSent',
+            'PrimaryAreaCancelSent', 'PrimaryAreaStunObserved', 'PartnerAreaStunObserved', 'Complete', 'PartnerComplete')
+        foreach ($case in @('Release', 'Cancel', 'ConfirmedCancel', 'Stun')) {
+            $required += @("PrimaryArea${case}Ready", "PartnerArea${case}Ready", "PrimaryArea${case}Predicted",
+                "PrimaryArea${case}RepeatedInput", "PrimaryArea${case}Outcome", "PartnerArea${case}Outcome")
+        }
+        foreach ($case in @('Join', 'Release', 'Cancel', 'ConfirmedCancel', 'Stun')) {
+            $required += @("PrimaryMovement${case}Ready", "PartnerMovement${case}Ready",
+                "PrimaryMovement${case}", "PartnerMovement${case}", "ServerMovement${case}")
+        }
+        return $required
+    }
+    if ($Mode -eq 'CombatReconnect') {
+        return @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerReconnectFixture',
+            'ServerReconnectTicketActive', 'ServerReconnectTicketInvalid', 'ServerReconnectTicketAckLost', 'ServerReconnectTicketRotatedAlias',
+            'ServerReconnectLive', 'ServerReconnectCooldownElapsed', 'ServerReconnectControlElapsed', 'ServerReconnectDead', 'ServerReconnectPartnerContinuity', 'ServerReconnectSharedState',
+            'PrimaryReconnectLiveBefore', 'PrimaryReconnectLiveDrop', 'PrimaryReconnectLive',
+            'PrimaryReconnectDeadBefore', 'PrimaryReconnectDeadDrop', 'PrimaryReconnectDead',
+            'PartnerReconnectLiveBefore', 'PartnerReconnectLive', 'PartnerReconnectDeadBefore', 'PartnerReconnectDead',
+            'PrimaryReconnectControl', 'PartnerReconnectControl', 'Complete', 'PartnerComplete')
     }
     return @('DedicatedAuthority', 'PartnerReady', 'Join', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse',
         'ServerMotionStand', 'ServerMotionWalk', 'ServerMotionReverse', 'ServerMotionJump', 'MotionServerObserved', 'PartnerComplete')
@@ -149,10 +199,15 @@ function Test-FiniteNumber {
 function Get-CaseVerdict {
     param([object[]]$Events, [string[]]$Required, [string]$Mode)
     $errors = New-Object 'System.Collections.Generic.List[string]'
+    $successfulAssertions = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     $unsupported = @($Events | Where-Object { $_.status -eq 'UNSUPPORTED' -or (Get-PropertyValue $_ 'phase' '') -eq 'Unsupported' }).Count -gt 0
     foreach ($event in $Events) {
         if ($event.status -eq 'FAIL' -or ($event.status -eq 'ASSERT' -and (Get-PropertyValue $event 'passed' $false) -cne $true)) {
             $errors.Add(('Driver failure: {0} {1}' -f (Get-PropertyValue $event 'assertion' ''), (Get-PropertyValue $event 'detail' '')))
+        }
+        elseif ($event.status -eq 'ASSERT') {
+            $assertion = [string](Get-PropertyValue $event 'assertion' '')
+            [void]$successfulAssertions.Add("$(Get-PropertyValue $event 'role' '')|$($assertion.ToLowerInvariant())")
         }
     }
     foreach ($role in @('Server', 'Client', 'Partner')) {
@@ -162,16 +217,16 @@ function Get-CaseVerdict {
         # 服务器自身通过不能代替远端确认；两端入场也必须分别有证据。
         $roles = if ($name -eq 'Join') { @('Server', 'Client') }
             elseif ($name -like 'Partner*') { @('Partner') }
-            elseif ($name -like 'Primary*' -or ($Mode -eq 'Combat' -and $name -eq 'Complete')) { @('Client') }
+            elseif ($name -like 'Primary*' -or ($Mode -in @('Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle') -and $name -eq 'Complete')) { @('Client') }
             elseif ($name -like 'Motion*' -and $name -ne 'MotionServerObserved') { @('Client') }
             else { @('Server') }
         foreach ($role in $roles) {
-            $passes = @($Events | Where-Object { $_.status -eq 'ASSERT' -and (Get-PropertyValue $_ 'assertion' '') -eq $name -and (Get-PropertyValue $_ 'role' '') -ceq $role -and (Get-PropertyValue $_ 'passed' $false) -ceq $true })
-            if ($passes.Count -eq 0) { $errors.Add("Missing passing assertion: $name from $role") }
+            if (-not $successfulAssertions.Contains("$role|$($name.ToLowerInvariant())")) { $errors.Add("Missing passing assertion: $name from $role") }
         }
     }
     # 运动样本必须按角色与阶段保留，不能被最后一条服务器样本覆盖，也不能用规模测试指标代替。
     $motionMetrics = @($Events | Where-Object { $_.status -eq 'METRIC' -and (Get-PropertyValue (Get-PropertyValue $_ 'metrics') 'category' '') -ceq 'platformRide' })
+    $combatTrafficMetrics = @($Events | Where-Object { $_.status -eq 'METRIC' -and (Get-PropertyValue (Get-PropertyValue $_ 'metrics') 'category' '') -ceq 'combatTraffic' })
     $metrics = $null
     if ($Mode -eq 'RideMotion') {
         foreach ($role in @('Server', 'Client')) { foreach ($phase in @('Stand', 'Walk', 'Jump', 'Reverse')) {
@@ -196,10 +251,66 @@ function Get-CaseVerdict {
             }
         } }
     }
+    if ($Mode -eq 'CombatTraffic') {
+        if ($combatTrafficMetrics.Count -ne 1) { $errors.Add('CombatTraffic requires exactly one combatTraffic metric, from Server') }
+        foreach ($sample in $combatTrafficMetrics) {
+            $traffic = $sample.metrics
+            if ((Get-PropertyValue $sample 'role' '') -cne 'Server' -or (Get-PropertyValue $sample 'phase' '') -cne 'TrafficSampling' -or
+                (Get-PropertyValue $traffic 'counterSource' '') -cne 'UNetDriver.OutTotalBytes/OutTotalPackets' -or
+                (Get-PropertyValue $traffic 'scope' '') -cne 'server-all-client-connections' -or
+                (Get-PropertyValue $traffic 'scheduleVersion' '') -cne 'projectile-energy-v2') { $errors.Add('CombatTraffic metric has the wrong role, phase, scope, counter source or schedule') }
+            if ((Get-PropertyValue $traffic 'trajectoryMode' '') -ceq 'initialLaunchState') {
+                $replicateMovement = Get-PropertyValue $traffic 'replicateMovement'
+                if ($replicateMovement -isnot [bool] -or $replicateMovement) { $errors.Add('Initial-launch trajectory unexpectedly replicated continuous movement') }
+                foreach ($peer in @('Client', 'Partner')) {
+                    $assertion = if ($peer -eq 'Client') { 'PrimaryTrafficLaunchState' } else { 'PartnerTrafficLaunchState' }
+                    if (@($Events | Where-Object { $_.status -eq 'ASSERT' -and (Get-PropertyValue $_ 'role' '') -ceq $peer -and
+                        (Get-PropertyValue $_ 'phase' '') -ceq 'TrafficVerify' -and (Get-PropertyValue $_ 'assertion' '') -ceq $assertion -and
+                        (Get-PropertyValue $_ 'passed' $false) -ceq $true }).Count -eq 0) {
+                        $errors.Add("Missing passing initial-launch observation: $peer")
+                    }
+                }
+            }
+            elseif ((Get-PropertyValue $traffic 'trajectoryMode' '') -cne '') { $errors.Add('Unknown CombatTraffic trajectory contract') }
+            $validNumbers = $true
+            foreach ($field in @('warmupSeconds', 'targetSampleSeconds', 'elapsedSeconds', 'beginOutTotalBytes', 'endOutTotalBytes', 'outBytes',
+                'beginOutTotalPackets', 'endOutTotalPackets', 'outPackets', 'bytesPerSecond', 'packetsPerSecond', 'projectileSpawns', 'energyUpdates',
+                'connectionCount', 'projectileIntervalSeconds', 'energyIntervalSeconds', 'maxScheduleDelaySeconds', 'projectileNetHz', 'frameSamples', 'framesPerSecond', 'serverNetTickRate', 'maxFps')) {
+                $value = Get-PropertyValue $traffic $field
+                if (-not (Test-FiniteNumber $value)) { $errors.Add("Invalid combatTraffic metric: $field must be finite"); $validNumbers = $false }
+                elseif ([double]$value -lt 0) { $errors.Add("Invalid combatTraffic metric: $field is negative"); $validNumbers = $false }
+            }
+            if (-not $validNumbers) { continue }
+            foreach ($field in @('beginOutTotalBytes', 'endOutTotalBytes', 'outBytes', 'beginOutTotalPackets', 'endOutTotalPackets', 'outPackets', 'projectileSpawns', 'energyUpdates', 'connectionCount', 'frameSamples')) {
+                if ([double]$traffic.$field -ne [Math]::Truncate([double]$traffic.$field)) { $errors.Add("Invalid combatTraffic integer: $field") }
+            }
+            foreach ($field in @('beginOutTotalBytes', 'endOutTotalBytes', 'beginOutTotalPackets', 'endOutTotalPackets')) {
+                if ([double]$traffic.$field -gt [uint32]::MaxValue) { $errors.Add("Invalid combatTraffic uint32 counter: $field") }
+            }
+            if ($traffic.warmupSeconds -lt 3 -or $traffic.warmupSeconds -gt 3.25 -or $traffic.targetSampleSeconds -ne 15 -or
+                $traffic.elapsedSeconds -lt 15 -or $traffic.elapsedSeconds -gt 15.25 -or $traffic.maxScheduleDelaySeconds -ge .25 -or
+                $traffic.projectileIntervalSeconds -ne .5 -or $traffic.energyIntervalSeconds -ne .25 -or
+                $traffic.projectileSpawns -ne 30 -or $traffic.energyUpdates -ne 60 -or $traffic.connectionCount -ne 2 -or $traffic.maxFps -ne 30) {
+                $errors.Add('CombatTraffic fixed workload, timing or connection contract was not met')
+            }
+            if ($traffic.framesPerSecond -lt 28 -or $traffic.framesPerSecond -gt 34) { $errors.Add('CombatTraffic measured server frames/second must be within 28..34 for comparable samples') }
+            if ($traffic.outBytes -le 0 -or $traffic.outPackets -le 0 -or $traffic.frameSamples -le 0 -or $traffic.projectileNetHz -le 0 -or $traffic.framesPerSecond -le 0 -or
+                $traffic.endOutTotalBytes -le $traffic.beginOutTotalBytes -or $traffic.endOutTotalPackets -le $traffic.beginOutTotalPackets -or
+                $traffic.outBytes -ne ($traffic.endOutTotalBytes - $traffic.beginOutTotalBytes) -or $traffic.outPackets -ne ($traffic.endOutTotalPackets - $traffic.beginOutTotalPackets)) {
+                $errors.Add('CombatTraffic requires positive traffic and frame samples, unchanged counter lifetime, and exact counter deltas')
+            }
+            if ($traffic.elapsedSeconds -gt 0) {
+                foreach ($pair in @(@('bytesPerSecond', 'outBytes'), @('packetsPerSecond', 'outPackets'), @('framesPerSecond', 'frameSamples'))) {
+                    $expectedRate = [double]$traffic.($pair[1]) / [double]$traffic.elapsedSeconds
+                    if ([Math]::Abs([double]$traffic.($pair[0]) - $expectedRate) -gt [Math]::Max(0.000001, $expectedRate * 0.000001)) { $errors.Add("CombatTraffic rate does not match measured elapsed time: $($pair[0])") }
+                }
+            }
+        }
+    }
     $status = 'passed'
     if ($errors.Count -gt 0) { $status = 'failed' }
     if ($unsupported) { $status = 'unsupported' }
-    return [pscustomobject]@{ status = $status; errors = @($errors.ToArray()); metrics = $metrics; motionMetrics = $motionMetrics }
+    return [pscustomobject]@{ status = $status; errors = @($errors.ToArray()); metrics = $metrics; motionMetrics = $motionMetrics; combatTrafficMetrics = $combatTrafficMetrics }
 }
 
 if ($SelfTest) {
@@ -309,6 +420,128 @@ if ($SelfTest) {
         }
         if ((Get-CaseVerdict $wrongRole $combatRequired 'Combat').status -ne 'failed') { throw "Server incorrectly satisfied combat client assertions: $role" }
     }
+    $reconnectRequired = @(Get-RequiredAssertions -Mode 'CombatReconnect')
+    $reconnectEvents = @()
+    foreach ($name in $reconnectRequired) {
+        $roles = if ($name -eq 'Join') { @('Server', 'Client') } elseif ($name -like 'Partner*') { @('Partner') }
+            elseif ($name -like 'Primary*' -or $name -eq 'Complete') { @('Client') } else { @('Server') }
+        foreach ($role in $roles) { $reconnectEvents += [pscustomobject]@{ token = 'reconnect'; mode = 'CombatReconnect'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true } }
+    }
+    foreach ($role in @('Server', 'Client', 'Partner')) { $reconnectEvents += [pscustomobject]@{ token = 'reconnect'; mode = 'CombatReconnect'; role = $role; status = 'DONE'; passed = $true } }
+    if ((Get-CaseVerdict $reconnectEvents $reconnectRequired 'CombatReconnect').status -ne 'passed') { throw 'Runner rejected complete reconnect evidence' }
+    foreach ($name in $reconnectRequired) {
+        $missing = @($reconnectEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $reconnectRequired 'CombatReconnect').status -ne 'failed') { throw "CombatReconnect accepted missing assertion: $name" }
+    }
+    foreach ($role in @('Client', 'Partner')) {
+        $wrongRole = $reconnectEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.role -eq $role) { $event.role = 'Server' } }
+        if ((Get-CaseVerdict $wrongRole $reconnectRequired 'CombatReconnect').status -ne 'failed') { throw "Server incorrectly satisfied reconnect client assertions: $role" }
+    }
+    # 新施法模式仍要求三进程证据；缺一条或用服务器替代客户端都必须失败。
+    $lifecycleRequired = @(Get-RequiredAssertions -Mode 'CombatLifecycle')
+    $lifecycleEvents = @()
+    foreach ($name in $lifecycleRequired) {
+        $roles = if ($name -eq 'Join') { @('Server', 'Client') } elseif ($name -like 'Partner*') { @('Partner') }
+            elseif ($name -like 'Primary*' -or $name -eq 'Complete') { @('Client') } else { @('Server') }
+        foreach ($role in $roles) { $lifecycleEvents += [pscustomobject]@{ token = 'lifecycle'; mode = 'CombatLifecycle'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true } }
+    }
+    foreach ($role in @('Server', 'Client', 'Partner')) { $lifecycleEvents += [pscustomobject]@{ token = 'lifecycle'; mode = 'CombatLifecycle'; role = $role; status = 'DONE'; passed = $true } }
+    if ((Get-CaseVerdict $lifecycleEvents $lifecycleRequired 'CombatLifecycle').status -ne 'passed') { throw 'Runner rejected complete lifecycle evidence' }
+    foreach ($name in $lifecycleRequired) {
+        $missing = @($lifecycleEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $lifecycleRequired 'CombatLifecycle').status -ne 'failed') { throw "CombatLifecycle accepted missing assertion: $name" }
+    }
+    foreach ($role in @('Client', 'Partner')) {
+        $wrongRole = $lifecycleEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.role -eq $role) { $event.role = 'Server' } }
+        if ((Get-CaseVerdict $wrongRole $lifecycleRequired 'CombatLifecycle').status -ne 'failed') { throw "Server incorrectly satisfied lifecycle client assertions: $role" }
+    }
+    $trafficRequired = @(Get-RequiredAssertions -Mode 'CombatTraffic')
+    $trafficEvents = @()
+    foreach ($name in $trafficRequired) {
+        $roles = if ($name -eq 'Join') { @('Server', 'Client') } elseif ($name -like 'Partner*') { @('Partner') }
+            elseif ($name -like 'Primary*' -or $name -eq 'Complete') { @('Client') } else { @('Server') }
+        foreach ($role in $roles) { $trafficEvents += [pscustomobject]@{ token = 'traffic'; mode = 'CombatTraffic'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true } }
+    }
+    foreach ($role in @('Server', 'Client', 'Partner')) { $trafficEvents += [pscustomobject]@{ token = 'traffic'; mode = 'CombatTraffic'; role = $role; status = 'DONE'; passed = $true } }
+    $trafficMetric = [pscustomobject]@{ token = 'traffic'; mode = 'CombatTraffic'; role = 'Server'; phase = 'TrafficSampling'; status = 'METRIC'; metrics = [pscustomobject]@{
+        category = 'combatTraffic'; counterSource = 'UNetDriver.OutTotalBytes/OutTotalPackets'; scope = 'server-all-client-connections'; scheduleVersion = 'projectile-energy-v2'
+        warmupSeconds = 3.1; targetSampleSeconds = 15; elapsedSeconds = 15; beginOutTotalBytes = 10000; endOutTotalBytes = 22000; outBytes = 12000
+        beginOutTotalPackets = 50; endOutTotalPackets = 350; outPackets = 300; bytesPerSecond = 800; packetsPerSecond = 20
+        projectileSpawns = 30; energyUpdates = 60; connectionCount = 2; projectileIntervalSeconds = .5; energyIntervalSeconds = .25; maxScheduleDelaySeconds = .1
+        projectileNetHz = 60; frameSamples = 450; framesPerSecond = 30; serverNetTickRate = 30; maxFps = 30
+    } }
+    $trafficEvents += $trafficMetric
+    $trafficVerdict = Get-CaseVerdict $trafficEvents $trafficRequired 'CombatTraffic'
+    if ($trafficVerdict.status -ne 'passed' -or $trafficVerdict.combatTrafficMetrics.Count -ne 1) { throw "Runner rejected valid combatTraffic evidence: $($trafficVerdict.errors -join '; ')" }
+    foreach ($role in @('Server', 'Client', 'Partner')) {
+        if ((Get-CaseVerdict @($trafficEvents | Where-Object role -ne $role) $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "CombatTraffic accepted missing peer: $role" }
+    }
+    foreach ($name in $trafficRequired) {
+        $missing = @($trafficEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "CombatTraffic accepted missing assertion: $name" }
+    }
+    if ((Get-CaseVerdict @($trafficEvents | Where-Object status -ne 'METRIC') $trafficRequired 'CombatTraffic').status -ne 'failed') { throw 'CombatTraffic accepted missing traffic measurement' }
+    if ((Get-CaseVerdict @($trafficEvents + $trafficMetric) $trafficRequired 'CombatTraffic').status -ne 'failed') { throw 'CombatTraffic accepted duplicate traffic measurements' }
+    foreach ($invalidCase in @(
+        @{ field = 'category'; value = 'scale' }, @{ field = 'counterSource'; value = 'log-line-count' }, @{ field = 'scope'; value = 'GAS-only' },
+        @{ field = 'scheduleVersion'; value = 'projectile-energy-v1' }, @{ field = 'warmupSeconds'; value = 2.99 }, @{ field = 'warmupSeconds'; value = 4 },
+        @{ field = 'targetSampleSeconds'; value = 20 }, @{ field = 'elapsedSeconds'; value = 0 }, @{ field = 'elapsedSeconds'; value = 15.26 },
+        @{ field = 'outBytes'; value = $null }, @{ field = 'outPackets'; value = -1 }, @{ field = 'outPackets'; value = 1.5 }, @{ field = 'outPackets'; value = 0 },
+        @{ field = 'endOutTotalBytes'; value = 5000 }, @{ field = 'endOutTotalBytes'; value = 4294967296 }, @{ field = 'beginOutTotalBytes'; value = 'NaN' },
+        @{ field = 'endOutTotalPackets'; value = 349 }, @{ field = 'bytesPerSecond'; value = 'Infinity' }, @{ field = 'packetsPerSecond'; value = 21 },
+        @{ field = 'projectileSpawns'; value = 29 }, @{ field = 'energyUpdates'; value = 59 }, @{ field = 'connectionCount'; value = 3 },
+        @{ field = 'projectileIntervalSeconds'; value = .6 }, @{ field = 'energyIntervalSeconds'; value = .2 }, @{ field = 'maxScheduleDelaySeconds'; value = .25 },
+        @{ field = 'projectileNetHz'; value = 0 }, @{ field = 'frameSamples'; value = 0 }, @{ field = 'framesPerSecond'; value = 60 },
+        @{ field = 'serverNetTickRate'; value = -1 }, @{ field = 'maxFps'; value = 60 }
+    )) {
+        $invalidEvents = $trafficEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        $sample = @($invalidEvents | Where-Object status -eq 'METRIC')[0]
+        $sample.metrics.($invalidCase.field) = $invalidCase.value
+        if ((Get-CaseVerdict $invalidEvents $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "CombatTraffic accepted invalid field: $($invalidCase.field)" }
+    }
+    foreach ($field in @('role', 'phase')) {
+        $invalidEvents = $trafficEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        @($invalidEvents | Where-Object status -eq 'METRIC')[0].$field = 'Wrong'
+        if ((Get-CaseVerdict $invalidEvents $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "CombatTraffic accepted wrong metric $field" }
+    }
+    # 同步改真实帧数和计算帧率，确保帧率边界本身受测，而不是被速率不一致检查碰巧拦截。
+    foreach ($fps in @(27, 28, 34, 35)) {
+        $fpsEvents = $trafficEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        $sample = @($fpsEvents | Where-Object status -eq 'METRIC')[0]
+        $sample.metrics.frameSamples = $fps * $sample.metrics.elapsedSeconds
+        $sample.metrics.framesPerSecond = $fps
+        $expected = if ($fps -in @(28, 34)) { 'passed' } else { 'failed' }
+        if ((Get-CaseVerdict $fpsEvents $trafficRequired 'CombatTraffic').status -ne $expected) { throw "CombatTraffic actual FPS boundary failed: $fps" }
+    }
+    foreach ($role in @('Client', 'Partner')) {
+        $wrongRole = $trafficEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.role -eq $role) { $event.role = 'Server' } }
+        if ((Get-CaseVerdict $wrongRole $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "Server incorrectly satisfied CombatTraffic client assertions: $role" }
+    }
+    # 新版必须用实际两端的发射快照观察，且额外测试回执不得混入采样窗口；旧版基线仍可读。
+    $launchEvents = $trafficEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $launchMetric = @($launchEvents | Where-Object status -eq 'METRIC')[0].metrics
+    $launchMetric | Add-Member -NotePropertyName trajectoryMode -NotePropertyValue 'initialLaunchState'
+    $launchMetric | Add-Member -NotePropertyName replicateMovement -NotePropertyValue $false
+    foreach ($peer in @('Client', 'Partner')) {
+        $name = if ($peer -eq 'Client') { 'PrimaryTrafficLaunchState' } else { 'PartnerTrafficLaunchState' }
+        $launchEvents += [pscustomobject]@{ token = 'traffic'; mode = 'CombatTraffic'; role = $peer; phase = 'TrafficVerify'; status = 'ASSERT'; assertion = $name; passed = $true }
+    }
+    if ((Get-CaseVerdict $launchEvents $trafficRequired 'CombatTraffic').status -ne 'passed') { throw 'Runner rejected valid initial-launch evidence' }
+    foreach ($value in @($null, $true, 'false', 0)) {
+        $invalidEvents = $launchEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        @($invalidEvents | Where-Object status -eq 'METRIC')[0].metrics.replicateMovement = $value
+        if ((Get-CaseVerdict $invalidEvents $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "Initial-launch accepted invalid replicateMovement: $value" }
+    }
+    foreach ($peer in @('Client', 'Partner')) {
+        $missing = @($launchEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.role -ne $peer -or $_.assertion -notlike '*TrafficLaunchState' })
+        if ((Get-CaseVerdict $missing $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "Initial-launch accepted missing observer: $peer" }
+        $duringSample = $launchEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $duringSample) { if ($event.status -eq 'ASSERT' -and $event.role -eq $peer -and $event.assertion -like '*TrafficLaunchState') { $event.phase = 'TrafficSampling' } }
+        if ((Get-CaseVerdict $duringSample $trafficRequired 'CombatTraffic').status -ne 'failed') { throw "Initial-launch observation polluted measurement window: $peer" }
+    }
     Write-Output 'Runner contract self-test passed. No Unreal process or network test was run.'
     return
 }
@@ -379,9 +612,9 @@ if ($BuildKind -eq 'editor-game') {
 }
 $report = [ordered]@{
     schemaVersion = 1; runId = $RunId; generatedAtUtc = [DateTime]::UtcNow.ToString('o'); status = 'running'; planOnly = [bool]$PlanOnly
-    environment = [ordered]@{ machine = $env:COMPUTERNAME; engineAssociation = $projectDescription.EngineAssociation; executable = $ExecutablePath; executableVersion = $exeVersion; executableSha256 = $exeHash; projectModule = $projectModule; runtimeGameplayConfig = $runtimeConfig; buildKind = $BuildKind; map = $Map; nullRhi = (-not ($Visible -or $Offscreen)); offscreenDx11 = [bool]$Offscreen; topology = 'One local dedicated server and two separate remote client processes'; visualValidation = $false }
+    environment = [ordered]@{ machine = $env:COMPUTERNAME; engineAssociation = $projectDescription.EngineAssociation; executable = $ExecutablePath; executableVersion = $exeVersion; executableSha256 = $exeHash; projectModule = $projectModule; runtimeGameplayConfig = $runtimeConfig; buildKind = $BuildKind; map = $Map; nullRhi = (-not ($Visible -or $Offscreen)); offscreenDx12 = [bool]$Offscreen; topology = 'One local dedicated server and two separate remote client processes'; visualValidation = $false }
     provenance = [ordered]@{ gitCommit = $gitCommit; dirty = ($gitStatus.Count -gt 0); gitStatus = $gitStatus; sourceFingerprintSha256 = $fingerprint; sourceManifest = $sourceManifest; gameplayConfigPath = $configPath; gameplayConfigSha256 = $configHash; gameplayConfigText = $configText }
-    scope = @('Assertions represent the driver checks, not manual visual acceptance.', 'PktLag values are emulator parameters applied to all three peers, not measured RTT.', 'RideMotion retains per-role, per-phase runtime measurements; they do not certify rendered smoothness.', 'Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.')
+    scope = @('Assertions represent the driver checks, not manual visual acceptance.', 'PktLag values are emulator parameters applied to all three peers, not measured RTT.', 'RideMotion retains per-role, per-phase runtime measurements; they do not certify rendered smoothness.', 'CombatTraffic uses server UNetDriver cumulative outbound bytes/packets, including overhead, ACKs, retransmissions and all game/test traffic. Emulated loss/delay can still be counted; these are not NIC packet captures or GAS-only costs.', 'Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.')
     cases = @(); summaries = @()
 }
 $cases = New-Object 'System.Collections.Generic.List[object]'
@@ -417,9 +650,11 @@ try {
         $result = [ordered]@{
             id = $caseId; token = $token; mode = $case.mode; profile = $case.profile; iteration = $case.iteration
             platformNetHz = $PlatformNetHz; platformSyncMode = $PlatformSyncMode; platformMotion = $PlatformMotion
-            samplingDurationSource = 'motionMetrics[].metrics.elapsedSeconds, separately measured per role and phase'
+            samplingDurationSource = $(if ($case.mode -eq 'CombatTraffic') { 'combatTrafficMetrics[0].metrics.elapsedSeconds; server monotonic clock, excludes setup/warmup/verification' } else { 'motionMetrics[].metrics.elapsedSeconds, separately measured per role and phase' })
+            combatTrafficContract = $(if ($case.mode -eq 'CombatTraffic') { [ordered]@{ scheduleVersion = 'projectile-energy-v2'; warmupSeconds = 3; sampleSeconds = 15; projectileIntervalSeconds = .5; projectileSpawns = 30; energyIntervalSeconds = .25; energyUpdates = 60; energyValues = @(30, 70); maxFps = 30; minMeasuredServerFps = 28; maxMeasuredServerFps = 34; connections = 2 } } else { $null })
+            combatLifecycleContract = $(if ($case.mode -eq 'CombatLifecycle') { [ordered]@{ areaWindupSeconds = 3; areaCooldownRule = 'max(configured cooldown, test windup + configured recovery + 1 second)'; ruleScope = 'Transient per-character config copies in server and both client processes; actual recovery retained, no asset or global CDO mutation'; cancellationCases = @('BeforeAuthorityHandoff', 'AfterCaughtUpAndReceivedCastingEffect'); movementInput = 'Owned PlayerController InputKey W press/release through EnhancedInput and CMC; no SetWalking or direct movement input'; movementCases = @('Join', 'Release', 'Cancel', 'ConfirmedCancel', 'StunExpiry'); minimumForwardTravelCm = 150; movementRequiredRoles = @('Server', 'Client', 'Partner') } } else { $null })
             port = $port; startedAtUtc = [DateTime]::UtcNow.ToString('o'); durationSeconds = 0; status = 'planned'
-            requiredAssertions = @(Get-RequiredAssertions -Mode $case.mode); commands = @(); peers = @(); events = @(); errors = @(); motionMetrics = @()
+            requiredAssertions = @(Get-RequiredAssertions -Mode $case.mode); commands = @(); peers = @(); events = @(); errors = @(); motionMetrics = @(); combatTrafficMetrics = @()
         }
         $network = $profileSettings[$case.profile]
         $peerSpecs = @{}
@@ -432,10 +667,11 @@ try {
             if ($role -eq 'Server') { $arguments += '-server' }
             $arguments += @("-CoopServerAddress=127.0.0.1:$port")
             if (($Visible -or $Offscreen) -and $role -ne 'Server') { $arguments += @('-windowed', '-ResX=960', '-ResY=540') } else { $arguments += '-NullRHI' }
-            # 离屏 DX11 验收走真实渲染初始化，窗口仍隐藏；不能与 NullRHI 的性能数据混算。
-            if ($Offscreen -and $role -ne 'Server') { $arguments += @('-RenderOffscreen', '-dx11') }
+            # 离屏使用项目采用的 DX12 渲染路径，窗口仍隐藏；不能与 NullRHI 的性能数据混算。
+            if ($Offscreen -and $role -ne 'Server') { $arguments += @('-RenderOffscreen', '-dx12') }
             # 并发进程各用 GUID 子目录，着色器临时文件留在项目 Saved 中，不写用户目录。
-            $arguments += @('-Multiprocess', "-ShaderWorkingDir=$(Join-Path $ProjectRoot 'Saved/ShaderWorking')", '-DDC-ForceMemoryCache', '-NoVSync', '-ExecCmds=t.MaxFPS 60', "-CoopTestTimeout=$TimeoutSeconds")
+            $peerMaxFps = if ($case.mode -eq 'CombatTraffic' -and $role -eq 'Server') { 30 } else { 60 }
+            $arguments += @('-Multiprocess', "-ShaderWorkingDir=$(Join-Path $ProjectRoot 'Saved/ShaderWorking')", '-DDC-ForceMemoryCache', '-NoVSync', "-ExecCmds=t.MaxFPS $peerMaxFps", "-CoopTestTimeout=$TimeoutSeconds")
             $arguments += @("-CoopPlatformNetHz=$PlatformNetHz", "-CoopPlatformSyncMode=$PlatformSyncMode", "-CoopPlatformMotion=$PlatformMotion")
             $argumentLine = ($arguments | ForEach-Object { Quote-Argument $_ }) -join ' '
             $peerSpecs[$role] = [pscustomobject]@{ role = $role; log = $logPath; arguments = $argumentLine }
@@ -493,7 +729,7 @@ try {
                 $process = $peer.process
                 try {
                     # DONE 只表示玩法检查完成，不能掩盖随后退出时崩溃；给驱动的正常退出留有限时间。
-                    if ($finished) { [void]$process.WaitForExit(10000) }
+                    if ($finished) { [void]$process.WaitForExit(30000) }
                     $process.Refresh()
                     $forced = -not $process.HasExited
                     if ($forced) { $process.Kill(); [void]$process.WaitForExit(5000) }
@@ -515,6 +751,7 @@ try {
             $result.status = $verdict.status
             $result.errors += $verdict.errors
             $result.motionMetrics = $verdict.motionMetrics
+            $result.combatTrafficMetrics = $verdict.combatTrafficMetrics
             if ($failure) { $result.errors += $failure }
             if ($result.errors.Count -gt 0 -and $result.status -ne 'unsupported') { $result.status = 'failed' }
             Save-Report
@@ -523,7 +760,7 @@ try {
 }
 finally {
     foreach ($group in @($report.cases | Group-Object {
-        if ($_.mode -eq 'Combat') { "Combat/$($_.profile)" }
+        if ($_.mode -in @('Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle')) { "$($_.mode)/$($_.profile)" }
         else { "RideMotion/$($_.profile)/$($_.platformNetHz)Hz/$($_.platformSyncMode)/$($_.platformMotion)" }
     })) {
         $report.summaries += [ordered]@{
@@ -559,8 +796,20 @@ finally {
     $markdown.Add('| --- | ---: |')
     foreach ($summary in $report.summaries) { $markdown.Add("| $($summary.group) | $($summary.passed) / $($summary.attempted) |") }
     $markdown.Add('')
-    $markdown.Add('See report.json for commands, configuration, fingerprints, per-assertion events and any per-role motion measurements. No bandwidth or CPU measurements are produced by this assertion suite.')
-    if (@($report.cases | Where-Object mode -eq 'Combat').Count -gt 0) { $markdown.Add('Combat checks authoritative damage/healing/death, defense prediction before the local call returns, PredictionKey catch-up without double cost, and real rejection after server-only resource/death divergence. Rejection fixtures briefly delay pawn property replication while preserving the real GAS RPC path; the owning client must observe predicted effects and the engine rejection callback before rollback is accepted. Both clients independently verify the final replicated state. It does not certify animations, rendered projectiles, full AI navigation or visual quality.') }
+    $markdown.Add('See report.json for commands, configuration, fingerprints, per-assertion events, motion measurements and CombatTraffic server traffic measurements. No CPU measurements are produced.')
+    if (@($report.cases | Where-Object mode -eq 'CombatTraffic').Count -gt 0) {
+        $markdown.Add('CombatTraffic schedule projectile-energy-v2 fixes the test server t.MaxFPS to 30 before its 3-second warmup, with measured server FPS required within 28..34. Clients and other modes keep their 60 FPS cap. The 15-second server sample has 30 real projectile spawns and 60 energy changes (30/70), followed by both-client projectile/public-health checks. Counters are UNetDriver-accounted outbound traffic for both client connections, including overhead, ACKs and retransmissions; they are not a NIC capture or GAS-only cost. Configured projectile Hz, the server network tick limit and measured frames/second are distinct. Only passed cases below represent measured successes; compare identical profiles, map, build kind and schedule across builds; v1 and v2 samples must not be combined.')
+        $markdown.Add('')
+        $markdown.Add('| Case | Bytes | Packets | Seconds | B/s | Packets/s | Frames/s | Projectile Hz | Server tick limit |')
+        $markdown.Add('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
+        foreach ($trafficCase in @($report.cases | Where-Object { $_.mode -eq 'CombatTraffic' -and $_.status -eq 'passed' })) {
+            $traffic = $trafficCase.combatTrafficMetrics[0].metrics
+            $markdown.Add(('| {0} | {1} | {2} | {3:F3} | {4:F2} | {5:F2} | {6:F2} | {7} | {8} |' -f $trafficCase.id, $traffic.outBytes, $traffic.outPackets, $traffic.elapsedSeconds, $traffic.bytesPerSecond, $traffic.packetsPerSecond, $traffic.framesPerSecond, $traffic.projectileNetHz, $traffic.serverNetTickRate))
+        }
+    }
+    if (@($report.cases | Where-Object mode -eq 'Combat').Count -gt 0) { $markdown.Add('Combat checks authoritative damage/healing/death, instant skills and Area predicting real cost/cooldown effects before the local call returns, PredictionKey catch-up without double cost, and rejection after server-only cooldown/resource/target/death divergence. Area adds cooldown/resource rejection with keyed casting-effect rollback and a legal asynchronous release/recovery retry. Rejection fixtures briefly delay pawn property replication while preserving the real GAS RPC path; the owner must observe real predicted effects, rejection and local rollback before the authoritative fixture is released. Each condition is followed by a legal double-click retry; death retries use an intentional exit and a new session, not personal respawn. Both clients independently verify the replicated state. It does not certify animation, rendered projectile quality or full AI navigation.') }
+    if (@($report.cases | Where-Object mode -eq 'CombatReconnect').Count -gt 0) { $markdown.Add('CombatReconnect closes the real primary connection and uses the engine network-failure entry to exercise GI recovery and the owned-controller admission handshake. A new controller/pawn must restore health, owner energy, all four elapsed cooldowns, remaining stun, death/collision and position while the partner controller/pawn and shared progress remain unchanged. Both connections independently observe restored control; unfinished casting is not resumed. Ticket active/invalid/rotation/lost-receipt boundaries are checked at the server admission entry; ticket values are never logged. This is not a fresh-session or same-pawn respawn test.') }
+    if (@($report.cases | Where-Object mode -eq 'CombatLifecycle').Count -gt 0) { $markdown.Add('CombatLifecycle starts the primary connection after a server enemy was already stunned. Only this mode uses transient per-character config copies in all three processes with Area.Windup=3 seconds and Area.Cooldown=max(configured cooldown, test windup+configured recovery+1 second), retaining the actual recovery and leaving assets, the global CDO and all other rules unchanged. It checks local Area prediction keys and keyed cost/cooldown effects, one server settlement, cancellation both before confirmation and after key catch-up plus receipt of the same-key authoritative Casting effect, and server stun interruption. Cancellation must immediately clear owner casting without refunding its one cost or deleting cooldown; the server checks retained cooldown and no damage after the original release deadline. Both clients independently observe final casting/health/resource state. After admission, normal release, both cancellations and actual stun expiry, each owner presses/releases W through its real PlayerController/EnhancedInput mapping: both local replicas and the authoritative pawns must move forward at least 150cm without the test changing movement mode or teleporting during input. The aiming floor is replicated. This is not rendered animation/VFX/UI acceptance, arbitrary target-data prediction, or public-cloud reachability.') }
     if (@($report.cases | Where-Object mode -eq 'RideMotion').Count -gt 0) { $markdown.Add('RideMotion phase measurements are preserved as complete events in each case''s motionMetrics array in report.json, including role, phase, sample count, base/falling observations and correction distances. Missing or non-finite measurements fail the case; the numerical checks are not a replacement for visual acceptance.') }
     if (@($report.cases | Where-Object mode -eq 'RideMotion').Count -gt 0 -and -not $PlanOnly) { $markdown.Add('RideMotion client Jump timeline: timeline-<case id>.svg, plus -samples.csv, -corrections.csv, -move-pairs.csv and -all-moves.csv. Moves are joined by CMC timestamp; server/client World clocks are not compared. This is not a packet trace or proof of visual smoothness.') }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'summary.md'), ($markdown -join "`r`n"), $Utf8)

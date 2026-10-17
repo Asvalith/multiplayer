@@ -2207,7 +2207,7 @@ AirBase 的 4 次校正里，只有一次记录了 11.08 cm 的位置误差，�
 
 2026-09-28 曾暂停；9 月 29 日已补完上述六轮频率对照和 DS 迁移回归，不能继续写成尚待运行。当前可复述的结论是：已经修复更新顺序、基座速度传递和空中制动问题；已定位移动基座状态差异参与弱网跳跃校正，完成了频率及静止对照；**自由跳跃弱网拉扯尚未完成修复，双端视觉也未验收**。不是“全部归因于初速度”，也不是“已实现平台预测回滚”。
 
-专项复现入口为 `Scripts/RunMultiplayerNetworkTests.ps1 -Scenario RideMotion`，三种模式通过 `-PlatformSyncMode` 选择；当前 DS 默认回归 `All` 已包含此专项；历史脚本的选择范围不代表当前版本。完整条件见实验总报告（资料路径：`Docs/Reports/2026-09-27/NetworkExperimentReport.md#5-问题三平台载人通过后走动与跳跃为什么仍可能失败`），双端阶段指标与失败对照见附录 G（资料路径：`Docs/Reports/2026-09-27/Appendix.md#g-动态载人专项编辑器构建`）。
+专项复现入口为 `Scripts/RunMultiplayerNetworkTests.ps1 -Scenario RideMotion`，当前 `-PlatformSyncMode` 可选 `OrderedVelocity` 与 `PlatformInertia`；历史 `Baseline` 对照需使用保留该开关的历史代码版本。当前 DS 默认回归 `All` 已包含此专项；历史脚本的选择范围不代表当前版本。完整条件见实验总报告（资料路径：`Docs/Reports/2026-09-27/NetworkExperimentReport.md#5-问题三平台载人通过后走动与跳跃为什么仍可能失败`），双端阶段指标与失败对照见附录 G（资料路径：`Docs/Reports/2026-09-27/Appendix.md#g-动态载人专项编辑器构建`）。
 
 仅早期五个动态案例与一次 Flow（不含后来六轮频率对照和 DS 批次）的磁盘项目模块 SHA-256 均为 `7fbe6e58f591bca60145c0ddced1f2f2360afc7015f3523db0e1519fb575376d`。这是磁盘文件指纹，没有在运行进程内再次核验加载模块哈希；测试使用编辑器 `-game -NullRHI`，不继承下面构建 A/B 的打包与 Shipping 结论。
 

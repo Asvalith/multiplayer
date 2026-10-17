@@ -5,6 +5,7 @@
 #include "Core/multiplayerGameMode.h"
 #include "Engine/World.h"
 #include "Network/multiplayerGameInstance.h"
+#include "TimerManager.h"
 
 
 // 当前 World 中只有本地控制器订阅退出失败通知，服务器上的远端控制器不处理本地界面。
@@ -29,6 +30,7 @@ void AmultiplayerCoopPlayerController::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
 	// 解绑事件
+	GetWorldTimerManager().ClearTimer(CombatHandshakeTimer);
 	if (UmultiplayerGameInstance* GameInstance = GetGameInstance<UmultiplayerGameInstance>())
 	{
 		GameInstance->OnLeaveFailed.RemoveAll(this);
@@ -47,10 +49,65 @@ void AmultiplayerCoopPlayerController::BeginPlayingState()
 		return;
 	}
 	//连接成功后通知 GameInstance，避免客户端在连接后立即断开
+	// PlayingState 现在只发起握手；必须等服务器恢复完成的可靠回执才能确认连接成功。
+	if (bCombatHandshakeSubmitted) return;
+	if (HasAuthority()) { ServerEstablishCombatSession(FGuid(), 0); return; }
 	if (UmultiplayerGameInstance* GameInstance = GetGameInstance<UmultiplayerGameInstance>())
 	{
-		GameInstance->NotifyClientConnected();
+		FGuid Ticket;
+		if (GameInstance->PrepareCombatHandshake(this, Ticket, ClientHandshakeOperation))
+		{
+			bCombatHandshakeSubmitted = true;
+			ServerEstablishCombatSession(Ticket, ClientHandshakeOperation);
+		}
 	}
+}
+
+// 单次 Owned RPC 只带服务器票据；不接收位置、血量、资源或冷却，也不接受在已接纳会话上重复换号。
+void AmultiplayerCoopPlayerController::ServerEstablishCombatSession_Implementation(FGuid Ticket, uint64 Operation)
+{
+	if (bCombatHandshakeSubmitted) return;
+	bCombatHandshakeSubmitted = true;
+	GetWorldTimerManager().ClearTimer(CombatHandshakeTimer);
+	FGuid IssuedTicket;
+	FText Error;
+	bool bRetryable = false;
+	AmultiplayerGameMode* Mode = GetWorld()->GetAuthGameMode<AmultiplayerGameMode>();
+	const bool bAccepted = Mode && Mode->ClaimCombatSession(this, Ticket, IssuedTicket, Error, bRetryable);
+	if (!bAccepted && Error.IsEmpty()) Error = NSLOCTEXT("Multiplayer", "CombatSessionUnavailable", "服务器暂时无法接纳玩家，请重新连接。");
+	ClientCombatSessionResult(IssuedTicket, Operation, Error, bRetryable);
+	if (!bAccepted) SetLifeSpan(1.0f); // 留出可靠失败回执的发送机会；未接纳 Pawn 始终不能移动或施法。
+}
+
+void AmultiplayerCoopPlayerController::ClientCombatSessionResult_Implementation(FGuid Ticket, uint64 Operation, const FText& Error, bool bRetryable)
+{
+	if (!IsLocalController() || HasAuthority()) return;
+	if (UmultiplayerGameInstance* Instance = GetGameInstance<UmultiplayerGameInstance>())
+	{
+		if (Instance->CompleteCombatHandshake(this, Operation ? Operation : ClientHandshakeOperation, Ticket, Error, bRetryable))
+		{
+			bCombatSessionAccepted = true;
+			Instance->NotifyClientConnected();
+		}
+	}
+}
+
+void AmultiplayerCoopPlayerController::ClientSetReconnectTicket_Implementation(FGuid Ticket)
+{
+	if (UmultiplayerGameInstance* Instance = GetGameInstance<UmultiplayerGameInstance>()) Instance->SetReconnectTicket(this, Ticket);
+}
+
+// 基类 Destroyed 会先销毁或解除 Pawn，再通知 Logout；这里必须在调用 Super 之前保存。
+void AmultiplayerCoopPlayerController::Destroyed()
+{
+	if (AmultiplayerGameMode* Mode = GetWorld()->GetAuthGameMode<AmultiplayerGameMode>()) Mode->SaveCombatSession(this);
+	Super::Destroyed();
+}
+
+void AmultiplayerCoopPlayerController::PawnLeavingGame()
+{
+	if (AmultiplayerGameMode* Mode = GetWorld()->GetAuthGameMode<AmultiplayerGameMode>()) Mode->SaveCombatSession(this);
+	Super::PawnLeavingGame();
 }
 
 //VictoryAction状态修改
@@ -80,7 +137,7 @@ void AmultiplayerCoopPlayerController::RequestRestartCurrentRound()
 //接收请求并做权威校验（防重入，状态校验，权威校验，规则校验）
 void AmultiplayerCoopPlayerController::ServerRequestRestartCurrentRound_Implementation()
 {
-	if (bServerRestartPending)
+	if (!bCombatSessionAccepted || bServerRestartPending)
 	{
 		return;
 	}

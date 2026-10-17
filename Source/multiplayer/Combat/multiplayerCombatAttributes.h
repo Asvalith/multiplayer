@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "AbilitySystemComponent.h"
 #include "AttributeSet.h"
+#include "GameplayEffectExecutionCalculation.h"
 #include "multiplayerCombatAttributes.generated.h"
 
 #define MULTIPLAYER_COMBAT_ATTRIBUTE_ACCESSORS(PropertyName) \
@@ -52,6 +53,12 @@ public:
 	FGameplayAttributeData IncomingDamage;
 	MULTIPLAYER_COMBAT_ATTRIBUTE_ACCESSORS(IncomingDamage)
 
+	// 来源攻击加成与目标护甲参与同一服务器结算；零值保留当前 Demo 的默认伤害。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Attributes") FGameplayAttributeData AttackPower;
+	MULTIPLAYER_COMBAT_ATTRIBUTE_ACCESSORS(AttackPower)
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|Attributes") FGameplayAttributeData Armor;
+	MULTIPLAYER_COMBAT_ATTRIBUTE_ACCESSORS(Armor)
+
 private:
 	// 将复制后的血量交回 GAS，更新属性委托及预测账本。
 	UFUNCTION()
@@ -68,6 +75,17 @@ private:
 	// 通知 GAS 最大能量已经同步。
 	UFUNCTION()
 	void OnRep_MaxEnergy(const FGameplayAttributeData& OldMaxEnergy);
+};
+
+// 只在服务器执行：伤害基础值 + 来源攻击加成 - 目标护甲；再交属性集处理防御和死亡。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerCombatDamageExecution : public UGameplayEffectExecutionCalculation
+{
+	GENERATED_BODY()
+public:
+	UmultiplayerCombatDamageExecution();
+	virtual void Execute_Implementation(const FGameplayEffectCustomExecutionParameters& Parameters,
+		FGameplayEffectCustomExecutionOutput& Output) const override;
 };
 
 #undef MULTIPLAYER_COMBAT_ATTRIBUTE_ACCESSORS

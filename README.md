@@ -18,19 +18,37 @@
 
 `gas-combat` 分支在原有合作角色上接入 GAS，使用独立关卡 `/Game/Combat/Maps/CombatTest` 验证战斗，不替换原机关关卡。
 
-- **左键攻击**：服务器生成能量弹，命中敌人造成 25 点伤害，冷却 0.5 秒；队友不会受到伤害。
+- **左键攻击**：起手约 0.16 秒后由服务器生成能量弹，随后收招约 0.37 秒；命中敌人造成 25 点伤害，冷却 0.5 秒，队友不会受到伤害。
 - **Q 防御**：消耗 20 能量，持续 3 秒、减伤 50%，冷却 8 秒；所属客户端先预测消耗、冷却和防御效果，服务器确认或拒绝后由 GAS 核对结果。
 - **E 治疗**：消耗 25 能量，治疗 600cm 内最低血量比例的受伤友军或自己 30 点，冷却 6 秒；没有合法目标时不消耗，不能穿墙治疗。
+- **R 范围施法 / 右键取消**：消耗 30 能量，起手约 0.32 秒后，对前方 650cm 落点、半径 220cm 内无遮挡敌人结算一次 35 点伤害与 1.5 秒眩晕，再播放约 1.11 秒释放与收招动作；冷却 5 秒。起手提交资源与冷却，取消不退款，取消、眩晕、死亡或断线均会结束未完成的技能任务，已经结算的伤害不会倒退。
 - **服务器维护战斗状态**：GAS 管理属性、消耗、冷却和状态标签；玩家与敌人共用伤害和死亡处理。死亡后取消技能、停止移动并退出机关占用，敌人额外停止 AI 并清理尸体。
-- **基础敌人**：服务器生成 3 个敌人，使用 NavMesh 追击存活玩家，进入射程且视线无遮挡后通过 GAS 攻击。
+- **行为树敌人**：服务器生成 3 个敌人，行为树与黑板负责选目标、追击或攻击；原生 MoveTo 通过 NavMesh 和 CMC 移动，进入射程且视线无遮挡后请求 GAS 攻击。目标死亡、退出或失去控制后清除目标，敌人死亡时停止行为树与寻路。
+- **受控与恢复**：眩晕使用单份限时效果，再次施加刷新时长；受控时事件驱动地停止行为树与移动，全部限制解除后重新决策，保留原移动模式。死亡清理真实冷却与控制效果，不仅隐藏界面。
+- **配置与动作**：`Content/Combat/DA_CombatConfig` 集中技能规则、特效和音效引用。玩家动作重定向到 Quinn，敌人直接复用素材包骨骼和动作；薄原生 AnimInstance 读取实际速度和方向。玩家动画副本移除不兼容的模板足部 IK，避免静止辅助骨将脚锁住；原 Co-op 动画模板不变。攻击、治疗、范围施法、受击和死亡分别使用 Montage，保留上半身动作层与完整死亡动作。接入内容位于 `Content/Combat/Presentation/ARPG`，不运行素材包的技能或伤害框架。
+- **特效与 HUD**：GameplayCue 仅负责音画，弹体自行管理尾迹；已连接 ARPG 包的 Cascade 火球起手、弹体、命中和治疗效果，并保留 Niagara 配置兼容。命中与治疗使用源包声音，其他部分音效仍为占位。沿用原 `Content/Combat/UI/BP_CombatHUD`，原 `WBP_CombatHUD` 只追加 `ARPGCombatVisuals` 子控件，保留原事件图、绑定和准星；左下四个小技能图标排列在生命、能量条上方，去掉面板灰底，保留名称、按键和冷却反馈。子控件通过事件更新状态，活动冷却与读条期间才启用短时 Timer。
+
+R 起手的地面范围标记改用 `M_CombatAreaMarker` 静态贴花，读取施法上下文的命中位置与地面法线，半径沿用 220cm；取消、眩晕、死亡或施法结束时清理。不再把源包的追踪毒矛特效当作落点圈，释放后的 `NS_Posion_Magic_Area1` 只作装饰，不代表精确范围；伤害、消耗和冷却规则不变。
+
+第三方动画与特效素材不随源码分发。`Content/Combat` 的表现资产仍引用本地 `Content/AdvancedARPGCombat`、`Content/Mage` 和 `Content/Pack_Effects_2`；复现完整画面需自行取得素材授权并按原路径迁入。原始压缩包、预览视频及烹饪生成日志也不提交。
 
 ~~~powershell
 .\Scripts\RunLocalDedicatedServer.ps1 -Play -Map /Game/Combat/Maps/CombatTest -Port 7777
 ~~~
 
-攻击和治疗使用 ServerOnly，防御使用 LocalPredicted；请求经过所属角色的 ASC，伤害、治疗目标及最终战斗状态由服务器决定。角色移动仍使用原生 CMC。独立战斗 HUD 使用 UMG 蓝图显示血量、能量、防御状态及剩余时间，原合作 HUD 保持不变。
+四项技能均使用 LocalPredicted：所属客户端预测自身消耗、冷却、施法与防御表现；请求经过所属角色的 ASC，服务器检查存活、接纳、控制状态、资源、冷却与合法目标。接受或拒绝后由 GAS 的 PredictionKey 接管或撤销预测效果。范围技能只局部清理同次预测键的纯施法状态，不向客户端开放资源、冷却或伤害效果的任意移除。客户端不预测目标扣血、治疗回血或权威投射物生成，不提供世界回滚。角色移动仍使用原生 CMC，UMG 蓝图管理布局，展示层负责订阅、初始化与退出解绑。
 
-已通过编译、基础规则回归和一个 DS 加两个客户端的 Normal、Harsh 战斗同步测试，检查真实预测键的确认、资源不足拒绝、死亡拒绝及两端最终状态。技能与对应效果按攻击、防御、治疗分组，敌人生成和追击集中在同一组源码中。
+能量及最大能量仅复制给所属连接，血量、死亡与防御标签供其他玩家观察。直线匀速能量弹仅复制初始位置、速度和服务器发射时间，客户端按估算的服务器时钟重建显示；服务器继续执行扫掠、伤害与销毁。此策略针对当前无重力、不反弹、不追踪的弹道，避免持续发送位置；估算时钟和销毁通知仍有网络延迟，不承诺双端实时零误差。
+
+断线恢复使用本局服务器签发的短时票据。GameInstance 负责有限重试，所属 Controller 完成握手，GameMode 从服务器快照恢复血量、能量、位置、死亡及剩余冷却、防御和眩晕；离线时间正常扣除，不恢复半次施法，也不返还已付资源。票据缓存保留 120 秒，票据不进入地址或日志，在线会话不能被同票据重复领取；恢复回调失败会归还旧票据。这是匿名直连 Demo 的会话恢复，不是账号认证：丢弃票据仍可作为新访客加入。
+
+2026-10-17 的 DX12 离屏 `Multiplayer.Combat.` 回归为 **32 项通过、0 警告、0 失败**。新增检查覆盖 Q 护盾脚底定位与跟随、敌人 GAS 血条事件和真实双脚迈动；脚步检查使用组件空间足骨，排除角色整体平移造成的误判。敌人素材接入后，DS 双客户端 Harsh 施法生命周期复测通过；最终足部 IK 修复另通过上述 32 项回归，不把此前网络报告算作该资产版本的重新联网验收。历史 Normal/Harsh 四技能及重连结果保留分阶段记录，离屏检查不等于完整视觉验收。[记录与边界](Tests/README.md)。技能与效果集中在 Ability 源码，敌人决策与生成集中在 Enemy 源码，音画与界面订阅集中在 Presentation 源码；不在行为树或界面里另写一套技能结算。
+
+2026-10-15 三技能版本的固定负载对照使用同机 DS + 两个客户端、NullRHI、Normal 网络：预热 3 秒，采样 15 秒，30 发真实能量弹与 60 次能量更新，前后各取两个有效样本。与既有 30Hz 位置复制版本相比，初始发射状态方案的服务器总出站字节率中位数由 **6,603.85 降至 3,083.97 B/s（约 53.3%）**，实测服务器帧率为 **30.03 → 29.94 FPS**，包率为 **60.06 → 59.88 包/秒**。计数包含两条连接的协议、玩法及测试流量，不是单独弹体流量，也不代表新增表现后的带宽；不据此推导 CPU、人数容量或视觉平滑度。[样本与测量口径](Tests/Evidence/GASProjectileTrajectory.json)
+
+行为树资产为 `Content/Combat/AI/BT_CombatEnemy`，黑板为 `BB_CombatEnemy`。两个业务键分别保存 `TargetActor` 和 `CanAttack`，不在敌人类、行为树和 GAS 中各存一套目标或冷却。
+
+树的优先级为：**可攻击 → 请求 GAS 攻击并等待；否则有目标 → 原生 MoveTo 并等待；没有目标或路径失败 → 等待后重试**。黑板条件变化会中止旧分支，技能消耗、冷却、命中伤害及死亡仍由 GAS 处理；行为树不直接修改血量，也不手动设置角色位置。
 
 ## 目录结构
 
@@ -159,10 +177,10 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 ~~~
 
 - **输入校验与操作互斥**：仅接受 hostname / IPv4 与端口形式的地址，拒绝混入地图路径和 Travel 参数。忙碌时拒绝新请求，不覆盖现有连接地址。
-- **成功确认**：本地 PlayerController 进入 `PlayingState` 后通知 GameInstance；连接期限覆盖“已经发出 Travel，但尚未进入游戏”的情况，不把请求发出当作成功。
+- **成功确认**：本地 PlayerController 进入 `PlayingState` 后发起所属会话握手，服务器接纳并完成恢复的回执到达后才通知 GameInstance；不把地图加载、收到 Pawn 或发出 Travel 当作连接完成。
 - **取消与回调重入**：先提交连接状态，再通知监听者；后续 Travel 核对操作编号，防止通知过程中退出后，旧流程仍继续连接。连接期限回调检查操作编号，重连回调检查连接阶段。
 - **全局事件归属**：网络失败按 World / GameInstance / NetDriver 过滤，避免同进程其他实例的错误污染本连接；服务端 Travel 失败转交 GameMode 恢复重开流程。
-- **有限重连**：默认按 1、2、4 秒等待后重试，成功清理旧计时器，主动退出取消重试。重新连接后读取仍在运行的 DS 保存的共享进度和机关状态。
+- **有限重连**：默认按 1、2、4 秒等待后重试，成功清理旧计时器，主动退出取消重试并清理该地址的个人票据。短时断线重新连接后恢复本局服务器保存的个人快照，并重新接收共享进度和机关状态；整体回合重开使用新回合状态。
 - **独立服务器生命周期**：任一客户端退出不关闭 DS，另一玩家继续游戏。服务器进程与本地启动脚本的资源清理由各自入口负责。
 
 ## 网络成本优化与工程措施
@@ -224,8 +242,9 @@ Connected → ReconnectWaiting → Reconnecting → Connected
 | 目标登记、胜利与重开 | [GameMode](Source/multiplayer/Core/multiplayerGameMode.cpp) |
 | 共享快照与通知重入保护 | [CoopGameState](Source/multiplayer/Core/multiplayerCoopGameState.cpp) |
 | 玩家输入与原生移动接入 | [Character](Source/multiplayer/Player/multiplayerCharacter.cpp) |
+| 敌人生命周期、行为树节点与刷怪 | [CombatEnemy](Source/multiplayer/Combat/multiplayerCombatEnemy.cpp) |
 | 所属玩家 RPC 与操作状态 | [CoopPlayerController](Source/multiplayer/Player/multiplayerCoopPlayerController.cpp) |
-| 钥匙触碰与安装提交 | [CoopKey](Source/multiplayer/Mechanisms/multiplayerCoopKey.cpp)、[KeySocket](Source/multiplayer/Mechanisms/multiplayerKeySocket.cpp) |
+| 钥匙触碰、插槽接收与安装提交 | [CoopKey](Source/multiplayer/Mechanisms/multiplayerCoopKey.cpp)（保留钥匙和插槽两个 Actor，源码就近组织） |
 | 占用记录与生命周期 | [PlayerOccupancyComponent](Source/multiplayer/Mechanisms/multiplayerPlayerOccupancyComponent.cpp) |
 | 合作门与压力板 | [CoopGate](Source/multiplayer/Mechanisms/multiplayerCoopGate.cpp)、[PressurePlate](Source/multiplayer/Mechanisms/multiplayerPressurePlate.cpp) |
 | 平台启停与轨道运动 | [MovingPlatform](Source/multiplayer/Mechanisms/multiplayerMovingPlatform.cpp)、[TransporterComponent](Source/multiplayer/Mechanisms/multiplayerTransporterComponent.cpp) |

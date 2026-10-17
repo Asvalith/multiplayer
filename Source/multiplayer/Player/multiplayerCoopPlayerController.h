@@ -33,6 +33,11 @@ class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerControlle
 	GENERATED_BODY()
 
 public:
+	// 只表示本控制器已经过服务器接纳，不把进入 PlayingState 当作恢复完成。
+	bool HasAcceptedCombatSession() const { return bCombatSessionAccepted; }
+	UFUNCTION(Server, Reliable)
+	void ServerEstablishCombatSession(FGuid Ticket, uint64 Operation);
+
 	// 对外操作与状态查询。
 	/** 请求服务器重开；GameMode 再次检查胜利状态与重复请求。 */
 	UFUNCTION(BlueprintCallable, Category = "Coop|Flow")
@@ -66,6 +71,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	/** 控制状态进入 Playing 时确认本地连接就绪，不承担实例初始化。 */
 	virtual void BeginPlayingState() override;
+	virtual void Destroyed() override;
+	virtual void PawnLeavingGame() override;
 	/** 接收服务器的返回菜单通知，转入项目自己的退出入口。 */
 	virtual void ClientReturnToMainMenuWithTextReason_Implementation(
 		const FText& ReturnReason) override;
@@ -80,6 +87,18 @@ protected:
 	void ClientRestartFailed(const FText& Reason);
 
 private:
+	friend class AmultiplayerGameMode;
+	UFUNCTION(Client, Reliable)
+	void ClientCombatSessionResult(FGuid Ticket, uint64 Operation, const FText& Error, bool bRetryable);
+	// 正常服务器切图清旧回合票据；失败恢复时服务器可重新下发仍然有效的本局票据。
+	UFUNCTION(Client, Reliable)
+	void ClientSetReconnectTicket(FGuid Ticket);
+	FGuid ServerCombatTicket;
+	uint64 ClientHandshakeOperation = 0;
+	FTimerHandle CombatHandshakeTimer;
+	bool bCombatSessionAccepted = false;
+	bool bCombatHandshakeSubmitted = false;
+
 	// 本地操作状态统一从这里更新，界面只接收反馈，不维护第二份请求锁。
 	void SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message);
 

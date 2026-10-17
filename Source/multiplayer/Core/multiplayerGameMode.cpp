@@ -11,6 +11,7 @@
 #include "Player/multiplayerCoopPlayerController.h"
 #include "Core/multiplayerLog.h"
 #include "UObject/ConstructorHelpers.h"
+#include "TimerManager.h"
 #if !UE_BUILD_SHIPPING
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -59,6 +60,140 @@ void AmultiplayerGameMode::InitGameState()
 		InitialState.RequiredKeys = Config.RequiredKeys;
 		CoopState->ApplyAuthoritativeState(InitialState);
 	}
+}
+
+// 引擎先创建/接管 Pawn，但服务器接纳前保持战斗与移动关闭；不新增逐帧握手轮询。
+void AmultiplayerGameMode::RestartPlayer(AController* NewPlayer)
+{
+	AmultiplayerCoopPlayerController* Controller = Cast<AmultiplayerCoopPlayerController>(NewPlayer);
+	// 本 Demo 没有个人复活规则；已接纳玩家不能借内置 RestartPlayer 刷新血量、资源或冷却。
+	if (Controller && Controller->HasAcceptedCombatSession()) return;
+	Super::RestartPlayer(NewPlayer);
+}
+
+void AmultiplayerGameMode::FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation)
+{
+	// Pawn 已创建、Possess/PlayingState 尚未通知；本地权威玩家的同步握手也不会被随后重新关门。
+	if (Cast<AmultiplayerCoopPlayerController>(NewPlayer))
+		if (auto* Character = Cast<AmultiplayerCombatCharacter>(NewPlayer->GetPawn())) Character->SetCombatSessionReady(false);
+	Super::FinishRestartPlayer(NewPlayer, StartRotation);
+	// ACharacter::Restart 在 Possess 中恢复默认移动模式；未确认的远端玩家仍须禁行。
+	if (auto* Controller = Cast<AmultiplayerCoopPlayerController>(NewPlayer); Controller && !Controller->HasAcceptedCombatSession())
+		if (auto* Character = Cast<AmultiplayerCombatCharacter>(Controller->GetPawn())) Character->SetCombatSessionReady(false);
+}
+
+void AmultiplayerGameMode::PostLogin(APlayerController* NewPlayer)
+{
+	Super::PostLogin(NewPlayer);
+	AmultiplayerCoopPlayerController* Controller = Cast<AmultiplayerCoopPlayerController>(NewPlayer);
+	if (!Controller || Controller->HasAcceptedCombatSession()) return;
+	GetWorldTimerManager().SetTimer(Controller->CombatHandshakeTimer, FTimerDelegate::CreateWeakLambda(Controller, [Controller]
+	{
+		if (!Controller->HasAcceptedCombatSession())
+		{
+			Controller->bCombatHandshakeSubmitted = true;
+			Controller->ClientCombatSessionResult(FGuid(), 0, NSLOCTEXT("Multiplayer", "CombatHandshakeTimeout", "会话确认超时，请重新连接服务器。"), false);
+			Controller->SetLifeSpan(1.0f);
+		}
+	}), 15.0f, false);
+}
+
+// 验证、消费票据和恢复集中在同一权威入口；票据只在内存与所属 Controller RPC 中传递。
+bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket,
+	FGuid& OutTicket, FText& OutError, bool& bRetryable)
+{
+	OutTicket.Invalidate(); OutError = FText::GetEmpty(); bRetryable = false;
+	AmultiplayerCombatCharacter* Character = Controller ? Cast<AmultiplayerCombatCharacter>(Controller->GetPawn()) : nullptr;
+	if (!Character || !Controller->HasAuthority() || Controller->GetWorld() != GetWorld()
+		|| Controller->HasAcceptedCombatSession() || Character->IsCombatReady())
+	{
+		OutError = NSLOCTEXT("Multiplayer", "CombatSessionNotReady", "玩家尚未就绪，无法确认会话。");
+		return false;
+	}
+	const double Now = FPlatformTime::Seconds();
+	for (auto It = CombatSessions.CreateIterator(); It; ++It)
+		if (!It.Value().Controller.IsValid() && It.Value().ExpiresAt <= Now) It.RemoveCurrent();
+	FCombatSession Session;
+	FGuid PreviousKey;
+	if (Ticket.IsValid())
+	{
+		PreviousKey = Ticket;
+		FCombatSession* Previous = CombatSessions.Find(Ticket);
+		if (!Previous)
+			for (auto& Entry : CombatSessions)
+				if (Entry.Value.PreviousTicket == Ticket) { Previous = &Entry.Value; PreviousKey = Entry.Key; break; }
+		if (!Previous)
+		{
+			OutError = NSLOCTEXT("Multiplayer", "CombatSessionExpired", "重连凭据已失效或服务器已经重启，请重新加入。");
+			return false;
+		}
+		if (Previous->Controller.IsValid())
+		{
+			bRetryable = true;
+			OutError = NSLOCTEXT("Multiplayer", "CombatSessionStillOnline", "原会话仍在线，等待断线清理后重试。");
+			return false;
+		}
+		Session = MoveTemp(*Previous);
+		CombatSessions.Remove(PreviousKey);
+		// 保留客户端真正持有的那张票据；连续丢失轮换回执时仍可使用，但不能绕过同一个在线锁。
+		Session.PreviousTicket = Ticket;
+	}
+	else if (CombatSessions.Num() >= 32)
+	{
+		OutError = NSLOCTEXT("Multiplayer", "CombatSessionCacheFull", "服务器暂时无法接纳新会话，请稍后重试。");
+		return false;
+	}
+	const FmultiplayerCombatResumeState SavedState = Session.State;
+	const FCombatSession RecoverySession = Session;
+	const float OfflineSeconds = static_cast<float>(FMath::Max(0.0, Now - Session.SavedAt));
+	FGuid IssuedTicket;
+	do { IssuedTicket = FGuid::NewGuid(); } while (CombatSessions.Contains(IssuedTicket));
+	Session.Controller = Controller;
+	CombatSessions.Add(IssuedTicket, MoveTemp(Session));
+	Controller->ServerCombatTicket = IssuedTicket;
+	if (Ticket.IsValid()) Character->RestoreResumeState(SavedState, OfflineSeconds);
+	if (!IsValid(Character) || !IsValid(Controller) || Controller->GetPawn() != Character)
+	{
+		// 恢复通知允许同步销毁/换Pawn；失败不能消费用户仅有的旧票据。
+		CombatSessions.Remove(IssuedTicket);
+		if (PreviousKey.IsValid()) CombatSessions.Add(PreviousKey, RecoverySession);
+		if (IsValid(Controller)) Controller->ServerCombatTicket.Invalidate();
+		bRetryable = true;
+		OutError = NSLOCTEXT("Multiplayer", "CombatRestoreFailed", "个人状态恢复未完成，请重新连接。");
+		return false;
+	}
+	Controller->bCombatSessionAccepted = true;
+	Character->SetCombatSessionReady(true);
+	OutTicket = IssuedTicket;
+	UE_LOG(LogMultiplayer, Display, TEXT("Combat session accepted: restored=%d; shared round state retained."), Ticket.IsValid());
+	return true;
+}
+
+void AmultiplayerGameMode::SaveCombatSession(AmultiplayerCoopPlayerController* Controller)
+{
+	if (!Controller || !Controller->HasAcceptedCombatSession()) return;
+	FCombatSession* Session = CombatSessions.Find(Controller->ServerCombatTicket);
+	AmultiplayerCombatCharacter* Character = Cast<AmultiplayerCombatCharacter>(Controller->GetPawn());
+	if (!Session || Session->Controller.Get() != Controller || !Character) return;
+	Session->State = Character->CaptureResumeState();
+	Session->SavedAt = FPlatformTime::Seconds();
+	Session->ExpiresAt = Session->SavedAt + 120.0;
+	Session->Controller.Reset();
+	Character->SetCombatSessionReady(false);
+}
+
+void AmultiplayerGameMode::Logout(AController* Exiting)
+{
+	SaveCombatSession(Cast<AmultiplayerCoopPlayerController>(Exiting));
+	Super::Logout(Exiting);
+}
+
+APlayerController* AmultiplayerGameMode::ProcessClientTravel(FString& URL, bool bSeamless, bool bAbsolute)
+{
+	// 新回合的 GameMode 没有旧票据缓存；清理 RPC 必须先于引擎发送 ClientTravel。
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		if (auto* Controller = Cast<AmultiplayerCoopPlayerController>(It->Get())) Controller->ClientSetReconnectTicket(FGuid());
+	return Super::ProcessClientTravel(URL, bSeamless, bAbsolute);
 }
 
 //装钥匙
@@ -178,6 +313,8 @@ bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 		&& (World->NextURL.IsEmpty() || World->NextURL == FailedRestart.TravelURL);
 	if (bCanRestoreWorld)
 	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+			if (auto* Controller = Cast<AmultiplayerCoopPlayerController>(It->Get())) Controller->ClientSetReconnectTicket(Controller->ServerCombatTicket);
 		// 上面已排除其他跳转接管；引擎也可能先清空本次失败 URL，因此两种情况都恢复本次快照。
 		World->NextURL.Empty();
 		// 重试仍需保留客户端接收 Travel RPC 的时间，不能把切图倒计时清零。

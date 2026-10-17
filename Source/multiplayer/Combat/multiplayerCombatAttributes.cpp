@@ -3,6 +3,8 @@
 #include "Combat/multiplayerCombatAttributes.h"
 
 #include "Combat/multiplayerCombatTags.h"
+#include "Combat/multiplayerCombatCharacter.h"
+#include "Combat/multiplayerCombatConfig.h"
 #include "GameplayEffectExtension.h"
 #include "Net/UnrealNetwork.h"
 
@@ -21,8 +23,9 @@ void UmultiplayerCombatAttributes::GetLifetimeReplicatedProps(TArray<FLifetimePr
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerCombatAttributes, Health, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerCombatAttributes, MaxHealth, COND_None, REPNOTIFY_Always);
-	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerCombatAttributes, Energy, COND_None, REPNOTIFY_Always);
-	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerCombatAttributes, MaxEnergy, COND_None, REPNOTIFY_Always);
+	// 血量供其他玩家观察；能量只给所属玩家显示和预测，不向无关连接转发。
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerCombatAttributes, Energy, COND_OwnerOnly, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UmultiplayerCombatAttributes, MaxEnergy, COND_OwnerOnly, REPNOTIFY_Always);
 }
 
 // 限制聚合值；死亡后保持零血量，本版本的治疗不承担复活职责。
@@ -58,13 +61,14 @@ void UmultiplayerCombatAttributes::PostGameplayEffectExecute(const FGameplayEffe
 	{
 		float Damage = FMath::Max(0.0f, GetIncomingDamage());
 		SetIncomingDamage(0.0f);
-		if (bDead || Damage == 0.0f)
+		const AmultiplayerCombatCharacter* Character = Cast<AmultiplayerCombatCharacter>(Data.Target.GetAvatarActor());
+		if (bDead || Damage == 0.0f || (Character != nullptr && !Character->IsCombatReady()))
 		{
 			return;
 		}
 		if (Data.Target.HasMatchingGameplayTag(CombatTags::State_Defending))
 		{
-			Damage *= 0.5f;
+			Damage *= Character ? Character->GetCombatConfig().DefenseDamageMultiplier : .5f;
 		}
 		SetHealth(FMath::Clamp(GetHealth() - Damage, 0.0f, GetMaxHealth()));
 	}
@@ -102,4 +106,41 @@ void UmultiplayerCombatAttributes::OnRep_Energy(const FGameplayAttributeData& Ol
 void UmultiplayerCombatAttributes::OnRep_MaxEnergy(const FGameplayAttributeData& OldMaxEnergy)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UmultiplayerCombatAttributes, MaxEnergy, OldMaxEnergy);
+}
+
+namespace
+{
+	struct FCombatDamageCaptures
+	{
+		DECLARE_ATTRIBUTE_CAPTUREDEF(AttackPower);
+		DECLARE_ATTRIBUTE_CAPTUREDEF(Armor);
+		FCombatDamageCaptures()
+		{
+			// 攻击加成在创建效果时快照；护甲在效果实际命中时读取目标聚合值。
+			DEFINE_ATTRIBUTE_CAPTUREDEF(UmultiplayerCombatAttributes, AttackPower, Source, true);
+			DEFINE_ATTRIBUTE_CAPTUREDEF(UmultiplayerCombatAttributes, Armor, Target, false);
+		}
+	};
+	const FCombatDamageCaptures& DamageCaptures() { static const FCombatDamageCaptures Value; return Value; }
+}
+
+UmultiplayerCombatDamageExecution::UmultiplayerCombatDamageExecution()
+{
+	RelevantAttributesToCapture.Add(DamageCaptures().AttackPowerDef);
+	RelevantAttributesToCapture.Add(DamageCaptures().ArmorDef);
+}
+
+void UmultiplayerCombatDamageExecution::Execute_Implementation(const FGameplayEffectCustomExecutionParameters& Parameters,
+	FGameplayEffectCustomExecutionOutput& Output) const
+{
+	const FGameplayEffectSpec& Spec = Parameters.GetOwningSpec();
+	FAggregatorEvaluateParameters Evaluation;
+	Evaluation.SourceTags = Spec.CapturedSourceTags.GetAggregatedTags();
+	Evaluation.TargetTags = Spec.CapturedTargetTags.GetAggregatedTags();
+	float Attack = 0, Armor = 0;
+	Parameters.AttemptCalculateCapturedAttributeMagnitude(DamageCaptures().AttackPowerDef, Evaluation, Attack);
+	Parameters.AttemptCalculateCapturedAttributeMagnitude(DamageCaptures().ArmorDef, Evaluation, Armor);
+	const float Damage = FMath::Max(0.f, Spec.GetSetByCallerMagnitude(CombatTags::Data_Damage, false) + Attack - FMath::Max(0.f, Armor));
+	if (FMath::IsFinite(Damage) && Damage > 0)
+		Output.AddOutputModifier(FGameplayModifierEvaluatedData(UmultiplayerCombatAttributes::GetIncomingDamageAttribute(), EGameplayModOp::Additive, Damage));
 }

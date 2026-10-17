@@ -26,13 +26,19 @@ public class multiplayer : ModuleRules
 			"GameplayAbilities",
 			"GameplayTags",
 			"GameplayTasks",
+			"Niagara",
+			"AIModule",
 			"UMG",
 			"Slate",
 			"SlateCore"
 		});
 
 		// 默认菜单、JSON 解析及测试用玩家连接标识只在实现文件中使用。
-		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline", "AIModule", "NavigationSystem" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline", "NavigationSystem", "NetCore" });
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "AssetTools", "AnimGraph", "BlueprintGraph", "KismetCompiler", "IKRig", "IKRigEditor", "UMGEditor" });
+		}
 
 	}
 }

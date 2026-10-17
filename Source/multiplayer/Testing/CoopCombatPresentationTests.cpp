@@ -1,0 +1,950 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+#include "Misc/AutomationTest.h"
+#include "AbilitySystemComponent.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/Skeleton.h"
+#include "Blueprint/UserWidget.h"
+#include "Camera/CameraComponent.h"
+#include "Camera/CameraTypes.h"
+#include "Combat/multiplayerCombatAbility.h"
+#include "Combat/multiplayerCombatCharacter.h"
+#include "Combat/multiplayerCombatConfig.h"
+#include "Combat/multiplayerCombatEnemy.h"
+#include "Combat/multiplayerCombatPresentation.h"
+#include "Combat/multiplayerCombatProjectile.h"
+#include "Combat/multiplayerCombatTags.h"
+#include "Components/Border.h"
+#include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/DecalComponent.h"
+#include "Components/Image.h"
+#include "Components/Overlay.h"
+#include "Components/ProgressBar.h"
+#include "Components/SizeBox.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "Components/WidgetComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "Misc/OutputDeviceRedirector.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "Particles/ParticleSystem.h"
+#include "Particles/ParticleSystemComponent.h"
+#include "Player/multiplayerCharacter.h"
+#include "Slate/SObjectWidget.h"
+#include "TimerManager.h"
+#include "UObject/UnrealType.h"
+#include "UObject/UObjectIterator.h"
+#if WITH_EDITOR
+#include "Animation/AnimBlueprint.h"
+#include "AnimGraphNode_LayeredBoneBlend.h"
+#include "AnimGraphNode_Slot.h"
+#include "EdGraph/EdGraph.h"
+#endif
+
+namespace
+{
+	// 真实碰撞世界只验证相机计算，不创建窗口、控制器或网络连接，也不修改蓝图资产。
+	struct FCombatPresentationWorld
+	{
+		UWorld* World;
+		uint64 PreviousFrame = GFrameCounter;
+
+		FCombatPresentationWorld()
+		{
+			UWorld::InitializationValues Values;
+			Values.CreatePhysicsScene(true).ShouldSimulatePhysics(false).EnableTraceCollision(true)
+				.CreateNavigation(false).CreateAISystem(false);
+			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true,
+				ERHIFeatureLevel::Num, &Values);
+			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+			World->InitializeActorsForPlay(FURL());
+			World->SetBegunPlay(true);
+			Box(FVector(0, 0, -10), FVector(5000, 5000, 10));
+		}
+
+		~FCombatPresentationWorld()
+		{
+			World->EndPlay(EEndPlayReason::Quit);
+			GEngine->DestroyWorldContext(World);
+			World->DestroyWorld(false);
+			GFrameCounter = PreviousFrame;
+		}
+
+		void Advance()
+		{
+			for (int32 Frame = 0; Frame < 2; ++Frame)
+			{
+				++GFrameCounter;
+				World->Tick(LEVELTICK_All, .02f);
+			}
+		}
+
+		// 加载保存的实际角色蓝图并执行其构造脚本；禁用 AI 和移动，避免碰撞定位被追击或落地干扰。
+		AmultiplayerCombatCharacter* Character(UClass* Class, const FVector& Location)
+		{
+			const FTransform Transform(FRotator::ZeroRotator, Location);
+			auto* Result = World->SpawnActorDeferred<AmultiplayerCombatCharacter>(Class, Transform,
+				nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			if (!Result) return nullptr;
+			Result->AutoPossessPlayer = EAutoReceiveInput::Disabled;
+			Result->AutoPossessAI = EAutoPossessAI::Disabled;
+			Result->FinishSpawning(Transform);
+			Result->GetCharacterMovement()->DisableMovement();
+			Result->GetCharacterMovement()->SetComponentTickEnabled(false);
+			return Result;
+		}
+
+		AActor* Box(const FVector& Location, const FVector& Extent)
+		{
+			AActor* Actor = World->SpawnActor<AActor>();
+			UBoxComponent* Shape = NewObject<UBoxComponent>(Actor);
+			Actor->SetRootComponent(Shape);
+			Shape->SetBoxExtent(Extent);
+			Shape->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			Shape->SetCollisionObjectType(ECC_WorldStatic);
+			Shape->SetCollisionResponseToAllChannels(ECR_Block);
+			Shape->RegisterComponent();
+			Actor->SetActorLocation(Location);
+			return Actor;
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatCameraObstructionTest, "Multiplayer.Combat.CameraObstruction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 近身角色不能将镜头推入玩家身体；墙体仍须收缩弹簧臂，不能靠关闭全部相机碰撞修复。
+bool FCoopCombatCameraObstructionTest::RunTest(const FString& Parameters)
+{
+	UClass* PlayerClass = LoadClass<AmultiplayerCharacter>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
+	UClass* EnemyClass = LoadClass<AmultiplayerCombatEnemy>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"));
+	if (!TestNotNull(TEXT("Saved combat player blueprint exists"), PlayerClass)
+		|| !TestNotNull(TEXT("Saved combat enemy blueprint exists"), EnemyClass)) return false;
+
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(PlayerClass, FVector(0, 0, 200));
+	if (!TestNotNull(TEXT("Actual combat player spawned"), Player)) return false;
+	USpringArmComponent* Arm = Player->FindComponentByClass<USpringArmComponent>();
+	TInlineComponentArray<UCameraComponent*> Cameras;
+	Player->GetComponents(Cameras);
+	TestEqual(TEXT("Actual player has exactly one camera"), Cameras.Num(), 1);
+	if (!TestNotNull(TEXT("Actual player inherited its spring arm"), Arm) || Cameras.Num() != 1) return false;
+	UCameraComponent* Camera = Cameras[0];
+	TestTrue(TEXT("Actual camera is active after construction"), Camera->IsActive());
+	TestTrue(TEXT("Actual camera is attached to the spring arm"), Camera->GetAttachParent() == Arm);
+	TestEqual(TEXT("Actual camera uses the spring-arm endpoint"), Camera->GetAttachSocketName(), USpringArmComponent::SocketName);
+	TestTrue(TEXT("Actual player retains the 400cm arm"), FMath::IsNearlyEqual(Arm->TargetArmLength, 400.f));
+	TestTrue(TEXT("World obstruction testing remains enabled"), Arm->bDoCollisionTest);
+	TestTrue(TEXT("Fixture has no player controller"), Player->GetController() == nullptr);
+
+	struct FCameraObservation
+	{
+		float Distance;
+		bool bFixed;
+		FHitResult Hit;
+	};
+	// 使用和弹簧臂相同的探针记录阻挡组件，再比对 CalcCamera 真正返回的视点，而非只检查 CDO。
+	const auto Observe = [&](const FString& Phase)
+	{
+		Fixture.Advance();
+		FMinimalViewInfo View;
+		Player->CalcCamera(.02f, View);
+		const FVector Origin = Arm->GetComponentLocation() + Arm->TargetOffset;
+		FCameraObservation Result;
+		Result.Distance = FVector::Distance(Origin, View.Location);
+		Result.bFixed = Arm->IsCollisionFixApplied();
+		FCollisionQueryParams Query(SCENE_QUERY_STAT(CombatCameraObstruction), false, Player);
+		Fixture.World->SweepSingleByChannel(Result.Hit, Origin, Arm->GetUnfixedCameraPosition(),
+			FQuat::Identity, Arm->ProbeChannel, FCollisionShape::MakeSphere(Arm->ProbeSize), Query);
+		AddInfo(FString::Printf(TEXT("CombatCamera phase=%s distance=%.2f fixed=%d arm=%.2f active=%d "
+			"view=%s component=%s hitActor=%s hitComponent=%s startPenetrating=%d"),
+			*Phase, Result.Distance, Result.bFixed, Arm->TargetArmLength, Camera->IsActive(),
+			*View.Location.ToCompactString(), *Camera->GetComponentLocation().ToCompactString(),
+			*GetNameSafe(Result.Hit.GetActor()), *GetNameSafe(Result.Hit.GetComponent()), Result.Hit.bStartPenetrating));
+		TestTrue(*FString::Printf(TEXT("%s CalcCamera uses the active component"), *Phase),
+			View.Location.Equals(Camera->GetComponentLocation(), .01f));
+		return Result;
+	};
+
+	const FCameraObservation Empty = Observe(TEXT("Empty"));
+	TestTrue(TEXT("Unobstructed actual player uses full arm length"), FMath::IsNearlyEqual(Empty.Distance, 400.f, .5f));
+	TestFalse(TEXT("Player does not collide with its own camera probe"), Empty.bFixed);
+
+	struct FDefaultResponse
+	{
+		FString Role;
+		ECollisionResponse Capsule;
+		ECollisionResponse Mesh;
+	};
+	TArray<FDefaultResponse> Defaults;
+	Defaults.Add({ TEXT("OwningPlayer"), Player->GetCapsuleComponent()->GetCollisionResponseToChannel(ECC_Camera),
+		Player->GetMesh()->GetCollisionResponseToChannel(ECC_Camera) });
+	for (UClass* BlockerClass : { PlayerClass, EnemyClass })
+	{
+		const FString Role = BlockerClass == PlayerClass ? TEXT("OtherPlayer") : TEXT("Enemy");
+		auto* Blocker = Fixture.Character(BlockerClass, FVector(-80, 0, 200));
+		if (!TestNotNull(*FString::Printf(TEXT("%s actual blueprint spawned"), *Role), Blocker)) return false;
+		UCapsuleComponent* Capsule = Blocker->GetCapsuleComponent();
+		USkeletalMeshComponent* Mesh = Blocker->GetMesh();
+		Defaults.Add({ Role, Capsule->GetCollisionResponseToChannel(ECC_Camera), Mesh->GetCollisionResponseToChannel(ECC_Camera) });
+		AddInfo(FString::Printf(TEXT("CombatCamera defaults role=%s capsule=%d mesh=%d radius=%.2f"),
+			*Role, static_cast<int32>(Defaults.Last().Capsule), static_cast<int32>(Defaults.Last().Mesh), Capsule->GetScaledCapsuleRadius()));
+		TestTrue(*FString::Printf(TEXT("%s has no controller or AI"), *Role), Blocker->GetController() == nullptr);
+		Observe(Role + TEXT("Default"));
+
+		// 显式保留故障对照：只修改测试实例，即使生产默认值已修复，也必须能复现旧的近身挤镜头。
+		Capsule->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+		Mesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+		const FCameraObservation Blocked = Observe(Role + TEXT("Block"));
+		TestTrue(*FString::Printf(TEXT("%s block response contracts the arm"), *Role), Blocked.bFixed);
+		TestTrue(*FString::Printf(TEXT("%s block reproduces a view inside the owning capsule"), *Role),
+			Blocked.Distance < Player->GetCapsuleComponent()->GetScaledCapsuleRadius());
+		TestTrue(*FString::Printf(TEXT("%s is the camera obstruction"), *Role), Blocked.Hit.GetActor() == Blocker);
+
+		Capsule->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		Mesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		const FCameraObservation Ignored = Observe(Role + TEXT("Ignore"));
+		TestTrue(*FString::Printf(TEXT("%s ignore response restores the full arm"), *Role),
+			FMath::IsNearlyEqual(Ignored.Distance, 400.f, .5f));
+		TestFalse(*FString::Printf(TEXT("%s no longer triggers collision correction"), *Role), Ignored.bFixed);
+		Blocker->Destroy();
+	}
+
+	AActor* Wall = Fixture.Box(FVector(-200, 0, 200), FVector(10, 300, 300));
+	const FCameraObservation Walled = Observe(TEXT("Wall"));
+	TestTrue(TEXT("World wall still contracts the camera arm"), Walled.bFixed);
+	TestTrue(TEXT("World wall, not the player, caused the obstruction"), Walled.Hit.GetActor() == Wall);
+	TestTrue(TEXT("Camera remains before the wall rather than passing through it"), Walled.Distance > 100.f && Walled.Distance < 200.f);
+
+	// 最后检查真实资产实例的原始响应；故障对照的手工 Ignore 不能掩盖生产角色仍旧配置错误。
+	for (const FDefaultResponse& Response : Defaults)
+	{
+		TestTrue(*FString::Printf(TEXT("%s actual capsule defaults to Camera Ignore"), *Response.Role), Response.Capsule == ECR_Ignore);
+		TestTrue(*FString::Printf(TEXT("%s actual mesh defaults to Camera Ignore"), *Response.Role), Response.Mesh == ECR_Ignore);
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatHUDEventLifecycleTest, "Multiplayer.Combat.HUDEventLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 加载真实 WBP，推进真实 GAS/Timer 并读取显示结果；不截图，不把无 RHI 的逻辑测试说成画面验收。
+bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("Slate is initialized for UMG construction without a viewport"), FSlateApplication::IsInitialized())) return false;
+	UClass* WidgetClass = LoadClass<UmultiplayerCombatWidget>(nullptr,
+		TEXT("/Game/Combat/Presentation/UI/WBP_ARPGCombatVisuals.WBP_ARPGCombatVisuals_C"));
+	if (!TestNotNull(TEXT("Actual combat HUD blueprint exists"), WidgetClass)) return false;
+
+	FCombatPresentationWorld Fixture;
+	const auto Advance = [&](float Seconds)
+	{
+		for (float Elapsed = 0; Elapsed < Seconds;)
+		{
+			const float Step = FMath::Min(.02f, Seconds - Elapsed);
+			++GFrameCounter;
+			Fixture.World->Tick(LEVELTICK_All, Step);
+			Elapsed += Step;
+		}
+	};
+	auto* Player = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 0, 100));
+	auto* Widget = CreateWidget<UmultiplayerCombatWidget>(Fixture.World, WidgetClass);
+	if (!TestNotNull(TEXT("HUD fixture character spawned"), Player)
+		|| !TestNotNull(TEXT("Actual HUD is created with the fixture world"), Widget)) return false;
+	// TakeWidget 按引擎正常路径调用 NativeConstruct，无需窗口、AddToViewport 或 GPU 读回。
+	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Widget->TakeWidget());
+	if (!TestTrue(TEXT("Slate wrapper owns the constructed actual HUD"), Slate->GetWidgetObject() == Widget)) return false;
+	UFunction* BindFunction = Widget->FindFunction(TEXT("BindPawn"));
+	if (!TestNotNull(TEXT("Pawn binding remains a reflected lifecycle entry"), BindFunction)) return false;
+	const auto Bind = [&](APawn* Previous, APawn* Current)
+	{
+		struct FBindPawnParameters { APawn* PreviousPawn; APawn* NewPawn; } Arguments{Previous, Current};
+		Widget->ProcessEvent(BindFunction, &Arguments);
+	};
+	// UE5.5 没有 ObjectHasAnyTimers；公开 ListTimers 同时列出活动/暂停/待执行项，按完整对象路径一次检查。
+	const auto HasWidgetTimer = [&]
+	{
+		FStringOutputDevice Output;
+		GLog->AddOutputDevice(&Output);
+		Fixture.World->GetTimerManager().ListTimers();
+		GLog->RemoveOutputDevice(&Output);
+		return Output.Contains(Widget->GetPathName(), ESearchCase::CaseSensitive);
+	};
+	const auto Damage = [](AmultiplayerCombatCharacter* Target, float Amount)
+	{
+		UAbilitySystemComponent* ASC = Target->GetAbilitySystemComponent();
+		FGameplayEffectSpecHandle Spec = ASC->MakeOutgoingSpec(UmultiplayerDamageEffect::StaticClass(), 1.f,
+			ASC->MakeEffectContext());
+		Spec.Data->SetSetByCallerMagnitude(CombatTags::Data_Damage, Amount);
+		ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+	};
+	UTextBlock* HealthText = Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("HealthText")));
+	UTextBlock* EnergyText = Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("EnergyText")));
+	UTextBlock* StateText = Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("StateText")));
+	UTextBlock* AreaCooldownText = Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("AreaCooldownText")));
+	UTextBlock* FeedbackText = Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("FeedbackText")));
+	UProgressBar* HealthBar = Cast<UProgressBar>(Widget->GetWidgetFromName(TEXT("HealthBar")));
+	UProgressBar* CastBar = Cast<UProgressBar>(Widget->GetWidgetFromName(TEXT("CastBar")));
+	UBorder* CastingPanel = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("CastingPanel")));
+	UBorder* FeedbackPanel = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("FeedbackPanel")));
+	if (!TestNotNull(TEXT("HUD health text"), HealthText) || !TestNotNull(TEXT("HUD energy text"), EnergyText)
+		|| !TestNotNull(TEXT("HUD state text"), StateText) || !TestNotNull(TEXT("HUD area cooldown"), AreaCooldownText)
+		|| !TestNotNull(TEXT("HUD feedback"), FeedbackText) || !TestNotNull(TEXT("HUD health bar"), HealthBar)
+		|| !TestNotNull(TEXT("HUD cast bar"), CastBar) || !TestNotNull(TEXT("HUD casting panel"), CastingPanel)
+		|| !TestNotNull(TEXT("HUD feedback panel"), FeedbackPanel)) return false;
+
+	// 检查保存的左下布局和设计尺寸；这里不把无视口的控件属性当成像素级画面验收。
+	UVerticalBox* Vitals = Cast<UVerticalBox>(Widget->GetWidgetFromName(TEXT("ARPGVitalsStack")));
+	UBorder* Skills = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("ARPGSkillsPanel")));
+	UBorder* Stats = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("ARPGStatsPanel")));
+	if (!TestNotNull(TEXT("Skills and vitals share one vertical stack"), Vitals)
+		|| !TestNotNull(TEXT("Actual ARPG skills panel exists"), Skills)
+		|| !TestNotNull(TEXT("Actual ARPG stats panel exists"), Stats)) return false;
+	UCanvasPanelSlot* VitalsSlot = Cast<UCanvasPanelSlot>(Vitals->Slot);
+	if (!TestNotNull(TEXT("The shared vitals stack has one canvas placement"), VitalsSlot)) return false;
+	TestTrue(TEXT("Skills and vitals are anchored together at bottom left"),
+		VitalsSlot->GetAnchors().Minimum.Equals(FVector2D(0, 1))
+		&& VitalsSlot->GetAnchors().Maximum.Equals(FVector2D(0, 1))
+		&& VitalsSlot->GetAlignment().Equals(FVector2D(0, 1)));
+	TestEqual(TEXT("The stack contains only skills and stats"), Vitals->GetChildrenCount(), 2);
+	TestEqual(TEXT("Skills are the upper row of the shared stack"), Vitals->GetChildIndex(Skills->GetParent()), 0);
+	TestEqual(TEXT("Stats are the lower row of the shared stack"), Vitals->GetChildIndex(Stats->GetParent()), 1);
+	TestTrue(TEXT("Skills and stats panels never draw a backing block"),
+		Skills->Background.DrawAs == ESlateBrushDrawType::NoDrawType
+		&& Stats->Background.DrawAs == ESlateBrushDrawType::NoDrawType);
+	const TCHAR* IconNames[] = { TEXT("AttackIcon"), TEXT("DefenseIcon"), TEXT("HealIcon"), TEXT("AreaIcon") };
+	const TCHAR* SlotNames[] = { TEXT("AttackSlot"), TEXT("DefenseSlot"), TEXT("HealSlot"), TEXT("AreaSlot") };
+	const TCHAR* CounterNames[] = { TEXT("AttackCooldownText"), TEXT("DefenseCooldownText"), TEXT("HealCooldownText"), TEXT("AreaCooldownText") };
+	UImage* Icons[4] = {};
+	UBorder* SkillSlots[4] = {};
+	UTextBlock* Counters[4] = {};
+	FLinearColor CounterColors[4];
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Icons); ++Index)
+	{
+		Icons[Index] = Cast<UImage>(Widget->GetWidgetFromName(FName(IconNames[Index])));
+		SkillSlots[Index] = Cast<UBorder>(Widget->GetWidgetFromName(FName(SlotNames[Index])));
+		Counters[Index] = Cast<UTextBlock>(Widget->GetWidgetFromName(FName(CounterNames[Index])));
+		if (!TestNotNull(IconNames[Index], Icons[Index]) || !TestNotNull(SlotNames[Index], SkillSlots[Index])
+			|| !TestNotNull(CounterNames[Index], Counters[Index])) return false;
+		UOverlay* IconLayer = Cast<UOverlay>(Icons[Index]->GetParent());
+		USizeBox* IconSize = IconLayer ? Cast<USizeBox>(IconLayer->GetParent()) : nullptr;
+		if (!TestNotNull(TEXT("Each skill icon has its own size box"), IconSize)) return false;
+		TestTrue(TEXT("40-unit skill icons at design scale 2 are 80 by 80"),
+			IconSize->IsWidthOverride() && IconSize->IsHeightOverride()
+			&& FMath::IsNearlyEqual(IconSize->GetWidthOverride(), 80.f)
+			&& FMath::IsNearlyEqual(IconSize->GetHeightOverride(), 80.f));
+		CounterColors[Index] = Counters[Index]->GetColorAndOpacity().GetSpecifiedColor();
+		TestTrue(TEXT("Cooldown text starts bright and opaque"),
+			CounterColors[Index].A > .99f && CounterColors[Index].GetLuminance() > .8f);
+	}
+	const auto CheckSkillPresentation = [&](const TCHAR* Phase)
+	{
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Icons); ++Index)
+		{
+			TestTrue(*FString::Printf(TEXT("%s %s keeps NoDraw and a transparent background"), Phase, SlotNames[Index]),
+				SkillSlots[Index]->Background.DrawAs == ESlateBrushDrawType::NoDrawType
+				&& FMath::IsNearlyZero(SkillSlots[Index]->GetBrushColor().A));
+			TestTrue(*FString::Printf(TEXT("%s %s remains readable independently of icon dimming"), Phase, CounterNames[Index]),
+				SkillSlots[Index]->GetIsEnabled() && SkillSlots[Index]->GetContentColorAndOpacity().Equals(FLinearColor::White)
+				&& Counters[Index]->GetColorAndOpacity().GetSpecifiedColor().Equals(CounterColors[Index])
+				&& FMath::IsNearlyEqual(Counters[Index]->GetRenderOpacity(), 1.f));
+		}
+	};
+	const FLinearColor Unavailable(.4f, .4f, .4f, 1.f);
+
+	Bind(nullptr, Player);
+	TestEqual(TEXT("Binding reads the health snapshot without waiting for a future event"), HealthText->GetText().ToString(), FString(TEXT("100 / 100")));
+	TestEqual(TEXT("Binding reads the energy snapshot"), EnergyText->GetText().ToString(), FString(TEXT("100 / 100")));
+	TestTrue(TEXT("Idle casting panel is collapsed"), CastingPanel->GetVisibility() == ESlateVisibility::Collapsed);
+	TestTrue(TEXT("Idle state text is collapsed"), StateText->GetVisibility() == ESlateVisibility::Collapsed);
+	TestFalse(TEXT("Idle HUD has no bound timer"), HasWidgetTimer());
+	for (const UImage* Icon : Icons) TestTrue(TEXT("Available skills start at full icon brightness"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	CheckSkillPresentation(TEXT("Idle"));
+
+	Damage(Player, 40);
+	TestEqual(TEXT("Real damage updates health text synchronously through its event"), HealthText->GetText().ToString(), FString(TEXT("60 / 100")));
+	TestTrue(TEXT("Real damage updates the health bar"), FMath::IsNearlyEqual(HealthBar->GetPercent(), .6f));
+	TestFalse(TEXT("Attribute updates do not start HUD polling"), HasWidgetTimer());
+	Player->Defend();
+	TestTrue(TEXT("Defense appears immediately without advancing a display timer"), StateText->GetText().ToString().Contains(TEXT("防御")));
+	TestEqual(TEXT("Predicted-style resource events refresh the energy display"), EnergyText->GetText().ToString(), FString(TEXT("80 / 100")));
+	TestTrue(TEXT("A real cooldown starts the short display timer"), HasWidgetTimer());
+	TestTrue(TEXT("Defense cooldown dims only its unavailable icon"), Icons[1]->GetColorAndOpacity().Equals(Unavailable)
+		&& Icons[0]->GetColorAndOpacity().Equals(FLinearColor::White));
+	Player->CastArea();
+	TestTrue(TEXT("A real area ability entered casting"), Player->IsCasting());
+	TestTrue(TEXT("Casting event shows the previously hidden panel immediately"), CastingPanel->GetVisibility() != ESlateVisibility::Collapsed);
+	TestFalse(TEXT("Active cooldown displays its number"), AreaCooldownText->GetText().IsEmpty());
+	Advance(.2f);
+	TestTrue(TEXT("Only active casting advances its display progress"), CastBar->GetPercent() > 0);
+	for (const UImage* Icon : Icons) TestTrue(TEXT("Casting dims the unavailable skill icons"), Icon->GetColorAndOpacity().Equals(Unavailable));
+	CheckSkillPresentation(TEXT("Casting"));
+	Player->CancelCast();
+	TestFalse(TEXT("Cancellation clears the real casting state"), Player->IsCasting());
+	TestTrue(TEXT("Cancellation hides the panel immediately"), CastingPanel->GetVisibility() == ESlateVisibility::Collapsed);
+	TestTrue(TEXT("Cancellation retains the committed cooldown display"), HasWidgetTimer());
+	TestTrue(TEXT("Cancellation restores ready icons but not the committed area cooldown"),
+		Icons[0]->GetColorAndOpacity().Equals(FLinearColor::White) && Icons[3]->GetColorAndOpacity().Equals(Unavailable));
+	TestFalse(TEXT("Committed area cooldown retains readable digits after cancellation"), AreaCooldownText->GetText().IsEmpty());
+	CheckSkillPresentation(TEXT("Cooldown"));
+	Advance(9.f);
+	TestTrue(TEXT("Expired area cooldown clears its number"), AreaCooldownText->GetText().IsEmpty());
+	TestTrue(TEXT("Expired defense clears its state text"), StateText->GetText().IsEmpty());
+	TestFalse(TEXT("All cooldowns expired so the display timer stops"), HasWidgetTimer());
+	for (const UImage* Icon : Icons) TestTrue(TEXT("Expired cooldowns restore available icon brightness"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	CheckSkillPresentation(TEXT("Expired"));
+
+	auto* Fresh = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 1200, 100));
+	if (!TestNotNull(TEXT("Replacement pawn spawned"), Fresh)) return false;
+	Bind(Player, Fresh);
+	TestEqual(TEXT("Pawn replacement immediately displays its own snapshot"), HealthText->GetText().ToString(), FString(TEXT("100 / 100")));
+	Damage(Player, 10);
+	Player->Defend();
+	Player->OnCombatMessage.Broadcast(FText::FromString(TEXT("旧角色提示")));
+	TestEqual(TEXT("Old pawn attribute events no longer change the HUD"), HealthText->GetText().ToString(), FString(TEXT("100 / 100")));
+	TestTrue(TEXT("Old pawn state events no longer change the HUD"), StateText->GetText().IsEmpty());
+	TestTrue(TEXT("Old pawn feedback is unsubscribed"), FeedbackText->GetText().IsEmpty());
+	TestFalse(TEXT("Old pawn cooldowns do not restart HUD timers"), HasWidgetTimer());
+	Fresh->ApplyStun(.25f);
+	TestTrue(TEXT("Real stun immediately updates the state area"), StateText->GetText().ToString().Contains(TEXT("眩晕")));
+	TestFalse(TEXT("Static stun state needs no periodic display timer"), HasWidgetTimer());
+	Advance(.4f);
+	TestTrue(TEXT("Stun removal event clears the state area"), StateText->GetText().IsEmpty());
+	Fresh->SetCombatSessionReady(false);
+	TestTrue(TEXT("Admission changes update the state area"), StateText->GetText().ToString().Contains(TEXT("连接")));
+	Fresh->SetCombatSessionReady(true);
+	TestTrue(TEXT("Admission completion hides the empty state area"), StateText->GetVisibility() == ESlateVisibility::Collapsed);
+	Damage(Fresh, 1000);
+	TestTrue(TEXT("Real death immediately displays its persistent state"), StateText->GetText().ToString().Contains(TEXT("死亡")));
+	TestFalse(TEXT("Death does not leave a HUD refresh timer"), HasWidgetTimer());
+
+	auto* Third = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 2400, 100));
+	if (!TestNotNull(TEXT("Feedback and destruction fixture spawned"), Third)) return false;
+	Bind(Fresh, Third);
+	Third->OnCombatMessage.Broadcast(FText::FromString(TEXT("测试提示")));
+	TestEqual(TEXT("Feedback events show the current message"), FeedbackText->GetText().ToString(), FString(TEXT("测试提示")));
+	TestTrue(TEXT("Feedback panel is visible only while needed"), FeedbackPanel->GetVisibility() != ESlateVisibility::Collapsed);
+	TestTrue(TEXT("Feedback owns a single expiration timer"), HasWidgetTimer());
+	Advance(2.2f);
+	TestTrue(TEXT("Feedback expires without a perpetual polling loop"), FeedbackText->GetText().IsEmpty());
+	TestTrue(TEXT("Expired feedback panel is collapsed"), FeedbackPanel->GetVisibility() == ESlateVisibility::Collapsed);
+	TestFalse(TEXT("Expired one-shot feedback leaves no HUD timer"), HasWidgetTimer());
+	Third->CastArea();
+	TestTrue(TEXT("Destroy fixture entered casting"), Third->IsCasting());
+	Third->Destroy();
+	TestTrue(TEXT("Pawn destruction hides its casting panel"), CastingPanel->GetVisibility() == ESlateVisibility::Collapsed);
+	TestFalse(TEXT("Pawn destruction clears all widget-owned timers"), HasWidgetTimer());
+
+	auto* Fourth = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 3600, 100));
+	if (!TestNotNull(TEXT("Native destruction fixture spawned"), Fourth)) return false;
+	Bind(nullptr, Fourth);
+	Fourth->CastArea();
+	Fourth->OnCombatMessage.Broadcast(FText::FromString(TEXT("退出前提示")));
+	TestTrue(TEXT("Native destruction begins with active display work"), HasWidgetTimer());
+	// 公开 Slate 生命周期实际调用 NativeDestruct；不直接绕过它手动清理生产 Timer。
+	Slate->ResetWidget();
+	TestFalse(TEXT("NativeDestruct clears both widget timers"), HasWidgetTimer());
+	const FString DetachedHealth = HealthText->GetText().ToString();
+	const FString DetachedState = StateText->GetText().ToString();
+	Damage(Fourth, 10);
+	Fourth->CancelCast();
+	Fourth->OnCombatMessage.Broadcast(FText::FromString(TEXT("退出后不应显示")));
+	TestEqual(TEXT("NativeDestruct unbinds attribute events"), HealthText->GetText().ToString(), DetachedHealth);
+	TestEqual(TEXT("NativeDestruct unbinds state events"), StateText->GetText().ToString(), DetachedState);
+	TestTrue(TEXT("NativeDestruct unbinds feedback events"), FeedbackText->GetText().IsEmpty());
+	TestFalse(TEXT("Late events cannot restart a detached HUD timer"), HasWidgetTimer());
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAnimationIntegrationTest, "Multiplayer.Combat.AnimationIntegration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 检查保存的实际资产与运行时播放，而非只检查生成脚本；这不替代真人观看动作衔接。
+bool FCoopCombatAnimationIntegrationTest::RunTest(const FString& Parameters)
+{
+	const FString Folder = TEXT("/Game/Combat/Presentation/Animations/");
+	for (const TCHAR* Name : {TEXT("AM_Attack"), TEXT("AM_Heal"), TEXT("AM_Death"), TEXT("AM_AreaCast"), TEXT("AM_Hit")})
+	{
+		UAnimMontage* Montage = LoadObject<UAnimMontage>(nullptr, *(Folder + Name + TEXT(".") + Name));
+		if (!TestNotNull(TEXT("Saved action montage exists"), Montage)) return false;
+		if (!TestEqual(TEXT("Each montage has exactly one slot track"), Montage->SlotAnimTracks.Num(), 1)) return false;
+		const bool bFullBody = Montage->GetName() == TEXT("AM_Death") || Montage->GetName() == TEXT("AM_Hit");
+		TestEqual(TEXT("Only death and hit replace the full-body pose"), Montage->SlotAnimTracks[0].SlotName,
+			FName(bFullBody ? TEXT("DefaultSlot") : TEXT("UpperBody")));
+		float NaturalLength = 0;
+		for (const FAnimSegment& Segment : Montage->SlotAnimTracks[0].AnimTrack.AnimSegments)
+		{
+			UAnimSequenceBase* Sequence = Segment.GetAnimReference();
+			if (!TestNotNull(TEXT("Segment references a real animation"), Sequence)) return false;
+			TestTrue(TEXT("Montage segments retain natural playback speed"), FMath::IsNearlyEqual(Segment.AnimPlayRate, 1.f));
+			TestTrue(TEXT("Segment is not compressed by cropping its end"), FMath::IsNearlyEqual(Segment.AnimEndTime, Sequence->GetPlayLength(), .001f));
+			NaturalLength += Sequence->GetPlayLength();
+		}
+		TestTrue(TEXT("Montage preserves complete source duration"), FMath::IsNearlyEqual(NaturalLength, Montage->GetPlayLength(), .001f));
+	}
+#if WITH_EDITOR
+	for (const TCHAR* Name : {TEXT("ABP_CombatLocomotion"), TEXT("ABP_CombatQuinn")})
+	{
+		UAnimBlueprint* Blueprint = LoadObject<UAnimBlueprint>(nullptr, *(Folder + Name + TEXT(".") + Name));
+		if (!TestNotNull(TEXT("Actual combat locomotion blueprint exists"), Blueprint)) return false;
+		TestTrue(TEXT("Locomotion blueprint has a valid generated class"), Blueprint->GeneratedClass && Blueprint->Status != BS_Error);
+		TArray<UEdGraph*> Graphs;
+		Blueprint->GetAllGraphs(Graphs);
+		int32 UpperSlots = 0, FullSlots = 0, UpperLayers = 0;
+		for (const UEdGraph* Graph : Graphs)
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (auto* Slot = Cast<UAnimGraphNode_Slot>(Node))
+				{
+					UpperSlots += Slot->Node.SlotName == TEXT("UpperBody");
+					FullSlots += Slot->Node.SlotName == TEXT("DefaultSlot");
+				}
+				if (auto* Layer = Cast<UAnimGraphNode_LayeredBoneBlend>(Node))
+					for (const FInputBlendPose& Pose : Layer->Node.LayerSetup)
+						for (const FBranchFilter& Branch : Pose.BranchFilters)
+							UpperLayers += Branch.BoneName == TEXT("spine_01");
+			}
+		const bool bInherited = Blueprint->GetName() == TEXT("ABP_CombatQuinn");
+		const int32 ExpectedNodes = bInherited ? 0 : 1;
+		TestEqual(TEXT("Child inherits its action slot without adding a duplicate"), UpperSlots, ExpectedNodes);
+		TestEqual(TEXT("Full-body slot exists only once in the animation hierarchy"), FullSlots, ExpectedNodes);
+		TestEqual(TEXT("Spine layering exists only once in the animation hierarchy"), UpperLayers, ExpectedNodes);
+		if (bInherited) TestEqual(TEXT("Quinn inherits the validated combat locomotion blueprint"),
+			Blueprint->ParentClass->GetName(), FString(TEXT("ABP_CombatLocomotion_C")));
+	}
+#endif
+	FCombatPresentationWorld Fixture;
+	UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
+	if (!TestNotNull(TEXT("Actual saved combat player exists"), PlayerClass)) return false;
+	auto* Player = Fixture.Character(PlayerClass, FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("Actual animated pawn spawned"), Player)) return false;
+	UAnimInstance* Animation = Player->GetMesh()->GetAnimInstance();
+	if (!TestNotNull(TEXT("Actual pawn instantiates its animation blueprint"), Animation)) return false;
+	Player->Attack();
+	UAnimMontage* Attack = Player->GetActionMontage(EMultiplayerCombatAnimation::Attack);
+	TestTrue(TEXT("Attack actually starts its montage through GAS"), Animation->Montage_IsPlaying(Attack));
+	TestTrue(TEXT("Short attack cooldown does not speed up the entire animation"), FMath::IsNearlyEqual(Animation->Montage_GetPlayRate(Attack), 1.f));
+	Player->CastArea();
+	UAnimMontage* Area = Player->GetActionMontage(EMultiplayerCombatAnimation::Area);
+	if (!TestNotNull(TEXT("Actual pawn uses the area montage"), Area)) return false;
+	const int32 Release = Area->GetSectionIndex(TEXT("Release"));
+	if (!TestTrue(TEXT("Area montage contains a release boundary"), Release != INDEX_NONE)) return false;
+	const float Windup = Area->CompositeSections[Release].GetTime();
+	const auto& Rule = Player->GetCombatConfig().Area;
+	TestTrue(TEXT("Saved config windup follows the complete source animation"), FMath::IsNearlyEqual(Rule.Windup, Windup, .001f));
+	TestTrue(TEXT("Saved config recovery retains release and recovery clips"), FMath::IsNearlyEqual(Rule.Recovery, Area->GetPlayLength() - Windup, .001f));
+	TestTrue(TEXT("Area starts at natural speed with the saved config"), FMath::IsNearlyEqual(Animation->Montage_GetPlayRate(Area), 1.f, .001f));
+	Player->CancelCast();
+	TestFalse(TEXT("Cancel releases the gameplay casting lock"), Player->IsCasting());
+	TestFalse(TEXT("Cancel stops the currently playing cast montage"), Animation->Montage_IsPlaying(Area));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatCascadeLifecycleTest, "Multiplayer.Combat.CascadeLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+
+// 用迁入的真实 Cascade 检查附着、二选一与收尾；需要渲染环境，但不把组件检查当作画面验收。
+bool FCoopCombatCascadeLifecycleTest::RunTest(const FString& Parameters)
+{
+	UParticleSystem* Cascade = LoadObject<UParticleSystem>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/DemoAssets/ReplenishmentCast/P_AscendTakeoffFalle.P_AscendTakeoffFalle"));
+	if (!TestNotNull(TEXT("Imported healing Cascade exists"), Cascade)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("Cascade fixture player spawned"), Player)) return false;
+	auto* Config = NewObject<UmultiplayerCombatConfig>(Player);
+	Config->DefenseFeedback.CascadeEffect = Cascade;
+	Config->DefenseFeedback.Effect = NewObject<UNiagaraSystem>(Config);
+	Config->ProjectileCascadeEffect = Cascade;
+	Config->ProjectileEffect = Config->DefenseFeedback.Effect;
+	auto* ConfigProperty = FindFProperty<FObjectPropertyBase>(Player->GetClass(), TEXT("CombatConfig"));
+	if (!TestNotNull(TEXT("Character config remains selectable"), ConfigProperty)) return false;
+	ConfigProperty->SetObjectPropertyValue_InContainer(Player, Config);
+
+	auto* Cue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
+	if (!TestNotNull(TEXT("Cascade cue spawned"), Cue)) return false;
+	Cue->GameplayCueTag = CombatTags::Cue_Defense;
+	FGameplayCueParameters CueParameters;
+	Cue->OnActive_Implementation(Player, CueParameters);
+	const auto Loop = [&]() -> UParticleSystemComponent*
+	{
+		const auto* Property = FindFProperty<FObjectPropertyBase>(Cue->GetClass(), TEXT("LoopCascadeEffect"));
+		return Property ? Cast<UParticleSystemComponent>(Property->GetObjectPropertyValue_InContainer(Cue)) : nullptr;
+	};
+	UParticleSystemComponent* First = Loop();
+	if (!TestNotNull(TEXT("Active cue creates its Cascade component"), First)) return false;
+	TestTrue(TEXT("Cue Cascade uses the selected imported template"), First->Template == Cascade);
+	TestTrue(TEXT("Persistent cue follows the character root"), First->GetAttachParent() == Player->GetRootComponent());
+	const auto* NiagaraProperty = FindFProperty<FObjectPropertyBase>(Cue->GetClass(), TEXT("LoopEffect"));
+	TestTrue(TEXT("Selecting Cascade suppresses the configured Niagara"), NiagaraProperty
+		&& NiagaraProperty->GetObjectPropertyValue_InContainer(Cue) == nullptr);
+	Cue->WhileActive_Implementation(Player, CueParameters);
+	TestTrue(TEXT("WhileActive does not duplicate the persistent component"), Loop() == First);
+	const FVector Before = First->GetComponentLocation();
+	Player->SetActorLocation(Player->GetActorLocation() + FVector(200, 0, 0));
+	TestTrue(TEXT("Attached Cascade actually moves with its target"), First->GetComponentLocation().Equals(Before + FVector(200, 0, 0), .1f));
+	Cue->OnRemove_Implementation(Player, CueParameters);
+	TestNull(TEXT("Effect removal releases the stored component"), Loop());
+	TestFalse(TEXT("Effect removal unregisters the old particle"), First->IsRegistered());
+	Cue->WhileActive_Implementation(Player, CueParameters);
+	UParticleSystemComponent* Restored = Loop();
+	if (!TestNotNull(TEXT("Late relevance can restore a fresh persistent component"), Restored)) return false;
+	Cue->Recycle();
+	TestNull(TEXT("Cue recycling clears its persistent presentation"), Loop());
+	TestFalse(TEXT("Cue recycling unregisters the restored particle"), Restored->IsRegistered());
+	Cue->WhileActive_Implementation(Player, CueParameters);
+	UParticleSystemComponent* EndedWithCue = Loop();
+	if (!TestNotNull(TEXT("World-exit fixture has an active effect"), EndedWithCue)) return false;
+	// 普通结束走 Cue 回收；这里模拟关卡移除的 EndPlay，不用 Destroy 违反 GAS 的回收约定。
+	Cue->RouteEndPlay(EEndPlayReason::RemovedFromWorld);
+	TestFalse(TEXT("Cue EndPlay cleans up an effect even without OnRemove"), EndedWithCue->IsRegistered());
+
+	const FTransform Transform(FRotator::ZeroRotator, FVector(0, 500, 150));
+	auto* Projectile = Fixture.World->SpawnActorDeferred<AmultiplayerCombatProjectile>(AmultiplayerCombatProjectile::StaticClass(),
+		Transform, Player, Player, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!TestNotNull(TEXT("Cascade projectile spawned"), Projectile)) return false;
+	Projectile->Initialize(Player, 25.f, 1600.f);
+	Projectile->FinishSpawning(Transform);
+	UParticleSystemComponent* Trail = Projectile->FindComponentByClass<UParticleSystemComponent>();
+	if (!TestNotNull(TEXT("Projectile creates its Cascade trail"), Trail)) return false;
+	TestTrue(TEXT("Projectile trail follows the collision root"), Trail->GetAttachParent() == Projectile->GetRootComponent());
+	TestNull(TEXT("Projectile does not also create its configured Niagara"), Projectile->FindComponentByClass<UNiagaraComponent>());
+	TInlineComponentArray<UParticleSystemComponent*> Trails;
+	Projectile->GetComponents(Trails);
+	TestEqual(TEXT("Projectile owns exactly one trail"), Trails.Num(), 1);
+	const FVector TrailBefore = Trail->GetComponentLocation();
+	Projectile->SetActorLocation(Projectile->GetActorLocation() + FVector(200, 0, 0));
+	TestTrue(TEXT("Projectile trail actually follows flight movement"), Trail->GetComponentLocation().Equals(TrailBefore + FVector(200, 0, 0), .1f));
+	Projectile->Destroy();
+	TestFalse(TEXT("Projectile EndPlay destroys its trail"), Trail->IsRegistered());
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatGroundMarkerTest, "Multiplayer.Combat.GroundMarker",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 用真实材质与 Cue 检查地面标记的世界坐标、投射法线和回收，不把组件属性检查说成画面验收。
+bool FCoopCombatGroundMarkerTest::RunTest(const FString& Parameters)
+{
+	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr,
+		TEXT("/Game/Combat/Presentation/Materials/M_CombatAreaMarker.M_CombatAreaMarker"));
+	UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
+	if (!TestNotNull(TEXT("Saved area marker material exists"), Material)
+		|| !TestNotNull(TEXT("Actual marker player blueprint exists"), PlayerClass)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(PlayerClass, FVector(1000, 2000, 100));
+	auto* Cue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
+	if (!TestNotNull(TEXT("Non-origin marker caster spawned"), Player)
+		|| !TestNotNull(TEXT("Actual marker cue spawned"), Cue)) return false;
+	const auto& Config = Player->GetCombatConfig();
+	TestTrue(TEXT("The actual player config selects the saved marker material"), Config.AreaMarkerMaterial.Get() == Material);
+	Cue->GameplayCueTag = CombatTags::Cue_Casting;
+	const auto ParametersAt = [&](const FVector& Point, const FVector& Normal)
+	{
+		FGameplayCueParameters Result;
+		Result.EffectContext = Player->GetAbilitySystemComponent()->MakeEffectContext();
+		FHitResult Hit;
+		Hit.bBlockingHit = true;
+		Hit.Location = Hit.ImpactPoint = Point;
+		Hit.Normal = Hit.ImpactNormal = Normal;
+		Result.EffectContext.AddHitResult(Hit);
+		Result.Location = Player->GetActorLocation();
+		Result.RawMagnitude = Config.AreaRadius;
+		return Result;
+	};
+	const auto Markers = [&]
+	{
+		TArray<UDecalComponent*> Result;
+		for (TObjectIterator<UDecalComponent> It; It; ++It)
+			if (It->GetWorld() == Fixture.World && It->IsRegistered()) Result.Add(*It);
+		return Result;
+	};
+	const FVector PredictedPoint(1100, 2400, 2);
+	// 零法线必须回退到 Up；故意让 Parameters.Location 与 Hit 不同，防止误用施法者位置。
+	const FGameplayCueParameters Predicted = ParametersAt(PredictedPoint, FVector::ZeroVector);
+	Cue->OnActive_Implementation(Player, Predicted);
+	TArray<UDecalComponent*> Active = Markers();
+	if (!TestEqual(TEXT("Casting creates exactly one real ground decal"), Active.Num(), 1)) return false;
+	UDecalComponent* First = Active[0];
+	TestTrue(TEXT("The decal uses the saved marker material"), First->GetDecalMaterial() == Material);
+	TestTrue(TEXT("The ground marker takes its center from the effect-context hit"),
+		First->GetComponentLocation().Equals(PredictedPoint, .1f));
+	TestTrue(TEXT("Missing hit normal projects down toward the ground"), First->GetForwardVector().Equals(-FVector::UpVector, .001f));
+	TestTrue(TEXT("Marker projection extents follow the configured area radius"),
+		First->DecalSize.Equals(FVector(32, Config.AreaRadius, Config.AreaRadius), .001f));
+	TestNull(TEXT("A ground marker is not attached to the moving caster"), First->GetAttachParent());
+	Player->SetActorLocation(Player->GetActorLocation() + FVector(300, 150, 0));
+	Fixture.Advance();
+	TestTrue(TEXT("Moving the caster cannot drag the fixed ground center"),
+		First->GetComponentLocation().Equals(PredictedPoint, .1f));
+
+	const FVector AuthorityPoint(1200, 2450, 30);
+	const FVector AuthorityNormal = FVector(.2f, -.3f, 1.f).GetSafeNormal();
+	const FGameplayCueParameters Authority = ParametersAt(AuthorityPoint, AuthorityNormal);
+	Cue->WhileActive_Implementation(Player, Authority);
+	Active = Markers();
+	TestEqual(TEXT("An authoritative context update does not duplicate the decal"), Active.Num(), 1);
+	TestTrue(TEXT("The existing predicted marker is updated rather than replaced"), Active.Num() == 1 && Active[0] == First);
+	TestTrue(TEXT("The marker adopts the authoritative ground center"), First->GetComponentLocation().Equals(AuthorityPoint, .1f));
+	TestTrue(TEXT("The decal projection follows the authoritative slope normal"),
+		First->GetForwardVector().Equals(-AuthorityNormal, .001f));
+	Cue->WhileActive_Implementation(Player, Authority);
+	TestEqual(TEXT("Repeated WhileActive notifications remain idempotent"), Markers().Num(), 1);
+	Cue->OnRemove_Implementation(Player, Authority);
+	TestFalse(TEXT("Removing casting unregisters the previous marker"), First->IsRegistered());
+	TestEqual(TEXT("Removing casting leaves no registered marker"), Markers().Num(), 0);
+	Fixture.Advance();
+	TestEqual(TEXT("No marker returns merely from advancing after removal"), Markers().Num(), 0);
+
+	// 新的 WhileActive 是合法的晚相关恢复；不能把它误判成已取消异步回调的复活。
+	Cue->WhileActive_Implementation(Player, Authority);
+	Active = Markers();
+	if (!TestEqual(TEXT("Late relevance can restore one marker"), Active.Num(), 1)) return false;
+	UDecalComponent* Restored = Active[0];
+	Cue->Recycle();
+	TestFalse(TEXT("Cue recycling unregisters its marker"), Restored->IsRegistered());
+	TestEqual(TEXT("Cue recycling leaves no marker component"), Markers().Num(), 0);
+	Cue->WhileActive_Implementation(Player, Authority);
+	Active = Markers();
+	if (!TestEqual(TEXT("World-exit fixture has one active marker"), Active.Num(), 1)) return false;
+	UDecalComponent* EndedWithCue = Active[0];
+	Cue->RouteEndPlay(EEndPlayReason::RemovedFromWorld);
+	TestFalse(TEXT("World removal unregisters a marker without requiring OnRemove"), EndedWithCue->IsRegistered());
+	TestEqual(TEXT("World removal leaves no marker component"), Markers().Num(), 0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDefenseFeetTest, "Multiplayer.Combat.DefenseFeet",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+
+// Q 素材已经自带向上偏移，组件原点必须放在脚底；实际 Niagara 在移动和缩放后也不能重复抬高。
+bool FCoopCombatDefenseFeetTest::RunTest(const FString& Parameters)
+{
+	UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
+	if (!TestNotNull(TEXT("Actual defense player blueprint exists"), PlayerClass)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(PlayerClass, FVector(1000, 2000, 300));
+	if (!TestNotNull(TEXT("Defense origin probe uses the actual player"), Player)) return false;
+	UNiagaraSystem* Shield = Player->GetCombatConfig().DefenseFeedback.Effect.LoadSynchronous();
+	if (!TestNotNull(TEXT("Actual Q Niagara shield is loaded"), Shield)) return false;
+	TestTrue(TEXT("Defense uses the imported water shield"), Shield->GetName() == TEXT("NS_Water_Magic_Shield"));
+	TestTrue(TEXT("Actual Q does not replace Niagara with a Cascade fallback"), Player->GetCombatConfig().DefenseFeedback.CascadeEffect.IsNull());
+	for (const float Scale : { .75f, 1.5f })
+	{
+		Player->SetActorScale3D(FVector(Scale));
+		auto* Cue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
+		if (!TestNotNull(TEXT("Defense cue spawned"), Cue)) return false;
+		Cue->GameplayCueTag = CombatTags::Cue_Defense;
+		FGameplayCueParameters CueParameters;
+		Cue->OnActive_Implementation(Player, CueParameters);
+		const auto* Property = FindFProperty<FObjectPropertyBase>(Cue->GetClass(), TEXT("LoopEffect"));
+		const auto Loop = [&]() -> UNiagaraComponent*
+		{
+			return Property ? Cast<UNiagaraComponent>(Property->GetObjectPropertyValue_InContainer(Cue)) : nullptr;
+		};
+		UNiagaraComponent* First = Loop();
+		if (!TestNotNull(TEXT("Actual defense cue creates its Niagara component"), First)) return false;
+		const FVector Feet = Player->GetActorLocation() - Player->GetActorUpVector()
+			* Player->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		TestTrue(TEXT("Q uses the actual configured Niagara system"), First->GetAsset() == Shield);
+		TestTrue(TEXT("Q origin is at scaled capsule feet, not capsule center"), First->GetComponentLocation().Equals(Feet, .1f));
+		TestTrue(TEXT("Q remains attached to the character root"), First->GetAttachParent() == Player->GetRootComponent());
+		TestTrue(TEXT("Keep-world attachment does not multiply character scale into the authored shield"), First->GetComponentScale().Equals(FVector::OneVector, .001f));
+		const FVector Delta(260, -130, 50);
+		Player->SetActorLocation(Player->GetActorLocation() + Delta);
+		TestTrue(TEXT("Moving the player immediately moves the shield feet origin"), First->GetComponentLocation().Equals(Feet + Delta, .1f));
+		Cue->WhileActive_Implementation(Player, CueParameters);
+		TestTrue(TEXT("Repeated Q state recovery does not create another shield"), Loop() == First);
+		Cue->OnRemove_Implementation(Player, CueParameters);
+		TestNull(TEXT("Defense removal clears the Niagara reference"), Loop());
+		TestFalse(TEXT("Defense removal unregisters the previous Niagara component"), First->IsRegistered());
+		Cue->WhileActive_Implementation(Player, CueParameters);
+		UNiagaraComponent* Restored = Loop();
+		if (!TestNotNull(TEXT("Late relevance restores the defense presentation"), Restored)) return false;
+		Cue->Recycle();
+		TestNull(TEXT("Cue recycle clears the restored defense reference"), Loop());
+		TestFalse(TEXT("Cue recycle unregisters the restored defense"), Restored->IsRegistered());
+		Cue->WhileActive_Implementation(Player, CueParameters);
+		UNiagaraComponent* Ending = Loop();
+		if (!TestNotNull(TEXT("World-exit probe has an active defense"), Ending)) return false;
+		Cue->RouteEndPlay(EEndPlayReason::RemovedFromWorld);
+		TestFalse(TEXT("World exit cleans the defense even without an explicit remove event"), Ending->IsRegistered());
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatEnemyHealthPresentationTest, "Multiplayer.Combat.EnemyHealthPresentation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 复用敌人骨骼、动画和条形布局，但属性来自自己的 GAS；真实伤害后不推进一帧也应立即更新。
+bool FCoopCombatEnemyHealthPresentationTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("Enemy health construction has an initialized Slate application"), FSlateApplication::IsInitialized())) return false;
+	UClass* EnemyClass = LoadClass<AmultiplayerCombatEnemy>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"));
+	if (!TestNotNull(TEXT("Actual enemy blueprint exists"), EnemyClass)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Enemy = Cast<AmultiplayerCombatEnemy>(Fixture.Character(EnemyClass, FVector(0, 0, 100)));
+	if (!TestNotNull(TEXT("Actual enemy is spawned without a source-pack AI controller"), Enemy)) return false;
+	USkeleton* SourceSkeleton = LoadObject<USkeleton>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SK_CombatMannequin.SK_CombatMannequin"));
+	if (!TestNotNull(TEXT("Imported enemy skeleton exists"), SourceSkeleton)
+		|| !TestNotNull(TEXT("Enemy has its imported skeletal mesh"), Enemy->GetMesh()->GetSkeletalMeshAsset())) return false;
+	TestTrue(TEXT("Enemy directly reuses the source skeleton"), Enemy->GetMesh()->GetSkeletalMeshAsset()->GetSkeleton() == SourceSkeleton);
+	UAnimInstance* Animation = Enemy->GetMesh()->GetAnimInstance();
+	if (!TestNotNull(TEXT("Enemy instantiates its adapted animation blueprint"), Animation)) return false;
+	TestTrue(TEXT("Enemy animation reads CMC through our native parent"), Animation->IsA<UmultiplayerCombatAnimInstance>());
+	for (const TCHAR* PropertyName : { TEXT("AttackMontage"), TEXT("AreaMontage"), TEXT("HealMontage"), TEXT("HitMontage"), TEXT("DeathMontage") })
+	{
+		const auto* Property = FindFProperty<FObjectPropertyBase>(Enemy->GetClass(), PropertyName);
+		UAnimMontage* Montage = Property ? Cast<UAnimMontage>(Property->GetObjectPropertyValue_InContainer(Enemy)) : nullptr;
+		if (!TestNotNull(TEXT("Enemy action has a compatible montage"), Montage)) return false;
+		TestTrue(TEXT("Enemy action montage uses its source skeleton"), Montage->GetSkeleton() == SourceSkeleton);
+	}
+	UWidgetComponent* Component = Enemy->FindComponentByClass<UWidgetComponent>();
+	if (!TestNotNull(TEXT("Enemy owns a real health widget component"), Component)) return false;
+	TestTrue(TEXT("Health widget is screen-space and attached to the capsule"), Component->GetWidgetSpace() == EWidgetSpace::Screen
+		&& Component->GetAttachParent() == Enemy->GetCapsuleComponent());
+	auto* Outer = Cast<UmultiplayerEnemyHealthWidget>(Component->GetUserWidgetObject());
+	if (!TestNotNull(TEXT("Enemy BeginPlay created the actual native-backed health layout"), Outer)) return false;
+	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Outer->TakeWidget());
+	auto* Inner = Cast<UmultiplayerEnemyHealthWidget>(Outer->GetWidgetFromName(TEXT("Health")));
+	if (!TestNotNull(TEXT("Source outer layout contains our adapted inner health widget"), Inner)) return false;
+	auto* Bar = Cast<UProgressBar>(Inner->GetWidgetFromName(TEXT("HealthBar")));
+	auto* BackBar = Cast<UProgressBar>(Inner->GetWidgetFromName(TEXT("LerpAttributeBar")));
+	auto* Text = Cast<UTextBlock>(Inner->GetWidgetFromName(TEXT("HealthText")));
+	if (!TestNotNull(TEXT("Enemy has its real source-style foreground bar"), Bar)
+		|| !TestNotNull(TEXT("Enemy has its real source-style background bar"), BackBar)
+		|| !TestNotNull(TEXT("Enemy has numeric health text"), Text)) return false;
+	TestEqual(TEXT("Construction reads the initial GAS snapshot"), Text->GetText().ToString(), FString::Printf(TEXT("%.0f / %.0f"), Enemy->GetHealth(), Enemy->GetMaxHealth()));
+	TestTrue(TEXT("Only the inner widget subscribes to health events"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner)
+		&& !Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Outer));
+	const auto Damage = [](AmultiplayerCombatCharacter* Target, float Amount)
+	{
+		UAbilitySystemComponent* ASC = Target->GetAbilitySystemComponent();
+		FGameplayEffectSpecHandle Spec = ASC->MakeOutgoingSpec(UmultiplayerDamageEffect::StaticClass(), 1.f, ASC->MakeEffectContext());
+		Spec.Data->SetSetByCallerMagnitude(CombatTags::Data_Damage, Amount);
+		ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+	};
+	Damage(Enemy, 25.f);
+	TestTrue(TEXT("GAS damage updates the foreground immediately without a display tick"), FMath::IsNearlyEqual(Bar->GetPercent(), Enemy->GetHealth() / Enemy->GetMaxHealth()));
+	TestTrue(TEXT("The source-style background is updated without a source timer"), FMath::IsNearlyEqual(BackBar->GetPercent(), Bar->GetPercent()));
+	TestEqual(TEXT("GAS damage immediately updates numeric health"), Text->GetText().ToString(), FString::Printf(TEXT("%.0f / %.0f"), Enemy->GetHealth(), Enemy->GetMaxHealth()));
+
+	auto* Replacement = Fixture.Character(EnemyClass, FVector(0, 1000, 100));
+	if (!TestNotNull(TEXT("Health rebind target spawned"), Replacement)) return false;
+	Outer->BindCharacter(Replacement);
+	TestFalse(TEXT("Rebinding removes the old enemy's subscription"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
+	const FString FreshText = Text->GetText().ToString();
+	Damage(Enemy, 10.f);
+	TestEqual(TEXT("The previous enemy can no longer change the rebound bar"), Text->GetText().ToString(), FreshText);
+	Damage(Replacement, 1000.f);
+	TestFalse(TEXT("Real GAS damage commits replacement death"), Replacement->IsAlive());
+	TestTrue(TEXT("Death immediately hides the actual inner health layout"), Inner->GetVisibility() == ESlateVisibility::Collapsed);
+	TestTrue(TEXT("Death immediately empties the health bar"), FMath::IsNearlyZero(Bar->GetPercent()));
+	FStringOutputDevice Timers;
+	GLog->AddOutputDevice(&Timers);
+	Fixture.World->GetTimerManager().ListTimers();
+	GLog->RemoveOutputDevice(&Timers);
+	TestFalse(TEXT("Neither enemy health layout owns a polling timer"), Timers.Contains(Outer->GetPathName(), ESearchCase::CaseSensitive)
+		|| Timers.Contains(Inner->GetPathName(), ESearchCase::CaseSensitive));
+	Slate->ResetWidget();
+	TestFalse(TEXT("NativeDestruct unbinds the inner observer"), Replacement->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
+	Outer->BindCharacter(Enemy);
+	Enemy->Destroy();
+	TestFalse(TEXT("Enemy EndPlay removes its health subscription"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
+	TestNull(TEXT("Enemy EndPlay releases the component's user widget"), Component->GetUserWidgetObject());
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAttackAnimationTimingTest, "Multiplayer.Combat.AttackAnimationTiming",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 实际角色蓝图按配置等待出手；取消只撤销尚未出手的动作，不能追回已经生成的真实投射物。
+bool FCoopCombatAttackAnimationTimingTest::RunTest(const FString& Parameters)
+{
+	UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
+	if (!TestNotNull(TEXT("Actual animated player blueprint exists"), PlayerClass)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(PlayerClass, FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("Attack timing player spawned"), Player)
+		|| !TestNotNull(TEXT("Actual player has an attack montage"), Player->GetActionMontage(EMultiplayerCombatAnimation::Attack))) return false;
+	const FmultiplayerCombatSkillRule Rule = Player->GetCombatConfig().Attack;
+	if (!TestTrue(TEXT("Actual attack has a positive windup"), Rule.Windup > 0)) return false;
+	const auto Advance = [&](float Seconds)
+	{
+		for (float Elapsed = 0; Elapsed < Seconds;)
+		{
+			const float Step = FMath::Min(.01f, Seconds - Elapsed);
+			++GFrameCounter;
+			Fixture.World->Tick(LEVELTICK_All, Step);
+			Elapsed += Step;
+		}
+	};
+	const auto CountProjectiles = [&]
+	{
+		int32 Count = 0;
+		for (TActorIterator<AmultiplayerCombatProjectile> It(Fixture.World); It; ++It) ++Count;
+		return Count;
+	};
+	int32 TotalSpawned = 0;
+	const FDelegateHandle Spawned = Fixture.World->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateLambda(
+		[&](AActor* Actor) { if (Actor->IsA<AmultiplayerCombatProjectile>()) ++TotalSpawned; }));
+	UAbilitySystemComponent* ASC = Player->GetAbilitySystemComponent();
+	const FGameplayTagContainer AttackTag(CombatTags::Ability_Attack);
+	const auto ResetAttackCooldown = [&]
+	{
+		ASC->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(CombatTags::Cooldown_Attack));
+	};
+	Player->Attack();
+	TestEqual(TEXT("Starting the montage does not immediately fire"), CountProjectiles(), 0);
+	Advance(Rule.Windup * .5f);
+	TestEqual(TEXT("No projectile exists before the configured release"), CountProjectiles(), 0);
+	ASC->CancelAbilities(&AttackTag);
+	Advance(Rule.Windup + .05f);
+	TestEqual(TEXT("Cancelled windup cannot fire from its old delay"), TotalSpawned, 0);
+
+	ResetAttackCooldown();
+	Player->Attack();
+	Advance(Rule.Windup + .03f);
+	TestEqual(TEXT("A completed windup creates exactly one real projectile"), CountProjectiles(), 1);
+	TestEqual(TEXT("Release creates only one projectile in total"), TotalSpawned, 1);
+	Player->ApplyStun(.1f);
+	Advance(Rule.Recovery + .13f);
+	TestEqual(TEXT("Post-release stun does not create another projectile"), TotalSpawned, 1);
+	TestEqual(TEXT("Post-release stun does not retract the existing projectile"), CountProjectiles(), 1);
+
+	ResetAttackCooldown();
+	Player->Attack();
+	Advance(Rule.Windup * .5f);
+	Player->ApplyStun(.2f);
+	Advance(Rule.Windup + Rule.Recovery + .25f);
+	TestEqual(TEXT("Stun during a later windup cannot produce a new projectile"), TotalSpawned, 1);
+	TestFalse(TEXT("The final stun has expired normally"), Player->IsStunned());
+	Fixture.World->RemoveOnActorSpawnedHandler(Spawned);
+	AddInfo(FString::Printf(TEXT("Actual attack timing: windup=%.6f recovery=%.6f spawned=%d"), Rule.Windup, Rule.Recovery, TotalSpawned));
+	return !HasAnyErrors();
+}
+
+#endif

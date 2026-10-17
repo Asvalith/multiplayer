@@ -1,0 +1,420 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "createdAtUtc": "2026-10-15T10:58:39Z",
+  "interpretation": "Exploratory same-machine, same-v2-workload before/after build comparison with two accepted Normal samples per build. Median server-accounted outbound bytes/second fell 53.30039764418101%; packet frequency did not meaningfully improve. Not a CPU, capacity, latency or visual-quality claim.",
+  "pathBase": "project-root",
+  "environment": {
+    "machine": "THE",
+    "engineAssociation": "5.5",
+    "executableVersion": "++UE5+Release-5.5-CL-40574608",
+    "executableSha256": "f85102a960bda9e33c86bb791a29677299bbb784f363edaae27245c052a5deac",
+    "buildKind": "editor-game",
+    "map": "/Game/Combat/Maps/CombatTest",
+    "nullRhi": true,
+    "topology": "One local dedicated server and two separate remote client processes",
+    "profile": "Normal",
+    "packetEmulation": { "PktLag": 0, "PktLagVariance": 0, "PktLoss": 0 },
+    "clientMaxFps": 60,
+    "gameplayConfigSha256": "019591a214a95d7b1e8f2cf8faa768ce104b87003a3df33d8f43dd93b0de4511",
+    "defaultEngineIniSha256": "18b2578f976635e12f573ce241eaf6b40edf23e28ccd1f8bfde2912b4b5dd9c7",
+    "visualValidation": false
+  },
+  "workload": {
+    "scheduleVersion": "projectile-energy-v2",
+    "warmupSeconds": 3,
+    "targetSampleSeconds": 15,
+    "projectileSpawns": 30,
+    "projectileIntervalSeconds": 0.5,
+    "projectileSpeedCmPerSecond": 1600,
+    "projectileLifetimeSeconds": 3,
+    "energyUpdates": 60,
+    "energyIntervalSeconds": 0.25,
+    "energyValues": [30, 70],
+    "connectionCount": 2,
+    "serverMaxFps": 30,
+    "acceptedMeasuredServerFpsRange": [28, 34],
+    "maximumSampleSeconds": 15.25,
+    "maximumWarmupSeconds": 3.25,
+    "maximumScheduleDelayExclusiveSeconds": 0.25,
+    "fixture": "After connection readiness, destroy all enemy spawners, enemies, their AI controllers and pre-existing projectiles; freeze both player pawns at Z=4000; reset public health to 100; verify an unobstructed upward projectile corridor before warmup.",
+    "duringSample": "The server directly calls FireProjectile(25,1600) and SetNumericAttributeBase(Energy,30/70). This does not activate Attack/Defend/Heal abilities, their prediction RPCs, costs, cooldown effects or montages.",
+    "testProtocol": "Both versions replicate the sampling-stage transition. No newly added per-projectile test RPC is sent during the window. New LaunchState receipts and the health73/final-owner-energy70 verification are sent after EndBytes/EndPackets are captured, in TrafficVerify.",
+    "ownerOnlyEnergyEnabledBeforeAndAfter": true,
+    "attribution": "Baseline already used OwnerOnly Energy/MaxEnergy and 30Hz native visual interpolation with continuous FRepMovement. The new projectile reconstructs a constant-velocity visual trajectory from COND_InitialOnly origin, velocity and server launch time, with continuous FRepMovement disabled. OwnerOnly savings must not be attributed to this comparison.",
+    "projectileNetHzMeaning": "The reported 30Hz remains an actor replication/relevancy scheduling limit; after the change it is not a continuous position-send rate.",
+    "windowBoundary": "The final projectiles are still alive at the 15-second cutoff. Equal fixed windows are compared, not all 30 complete projectile lifetimes or a per-shot byte cost."
+  },
+  "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+  "counterScope": "All server-accounted outbound traffic to both clients, including protocol/packet overhead, ACKs, retransmissions and game/test traffic. Not a NIC packet capture, per-connection breakdown, projectile-only counter or GAS-only cost.",
+  "provenance": {
+    "gitBaseCommit": "e3292ed2cd687531456ee9db1469c732a9144228",
+    "dirtyWorktree": true,
+    "moduleRuntimeLoadVerified": false,
+    "moduleHashMeaning": "Reports hash the project module on disk, not an independently attested loaded runtime module. Before and BeforeExtra record the same module hash even though their disk-source manifests differ because editing continued before rebuilding. Source fingerprints must not be presented as proof that those exact sources produced the loaded baseline binary.",
+    "comparisonLimit": "Several product/test files changed between builds. The sampling workload is held equivalent and avoids handshake, ability activation and AI execution during sampling; this is not a single-change, statistically controlled ablation.",
+    "reports": [
+      {
+        "id": "before",
+        "rawReport": "Saved/CombatNetworkCompletion/TrafficBefore/report.json",
+        "rawReportSha256": "021bbd3aa0324a9e0f7738fc38d3640bbf2a772cf36480dc5859f10c0e4d8c54",
+        "runId": "20261015-102158-d3040fd2",
+        "rawBatchStatus": "failed",
+        "moduleOnDiskSha256": "87959f31316793696d39cd3a300522ec0e4ef03280dc80a510fb9dc32e769253",
+        "sourceFingerprintSha256": "b365effdb99facd6aa570f43668e7794f6ff5a486e4f3233352f6130a3f3d852",
+        "acceptedCaseIds": ["002-CombatTraffic-Normal-2"],
+        "excludedCaseIds": ["001-CombatTraffic-Normal-1"]
+      },
+      {
+        "id": "beforeExtra",
+        "rawReport": "Saved/CombatNetworkCompletion/TrafficBeforeExtra/report.json",
+        "rawReportSha256": "3db39e143e53c1573c2316a2ad380f61eb393ad868ab262f0c7a3f8398c66d5d",
+        "runId": "20261015-102928-4623b86a",
+        "rawBatchStatus": "passed",
+        "moduleOnDiskSha256": "87959f31316793696d39cd3a300522ec0e4ef03280dc80a510fb9dc32e769253",
+        "sourceFingerprintSha256": "039e25873e22929c010929cf92f2827f8f70514aa59961cc7010fceed10031dc",
+        "acceptedCaseIds": ["001-CombatTraffic-Normal-1"],
+        "excludedCaseIds": []
+      },
+      {
+        "id": "after",
+        "rawReport": "Saved/CombatNetworkCompletion/TrafficAfter/report.json",
+        "rawReportSha256": "42f6dd512c501e188ac9d355dec7f0303c1a52aabc83c8f05838cc90dec2fee2",
+        "runId": "20261015-105553-850687c5",
+        "rawBatchStatus": "passed",
+        "moduleOnDiskSha256": "00dc33a2030dba10a0a62f3305a72baf05f9acb8c4420b3cb9ad235bdabd61c2",
+        "sourceFingerprintSha256": "7344270338d23ed18aaacb45c7b3b52cc0c71107eb5b537534a37ab84e3bae1a",
+        "acceptedCaseIds": ["001-CombatTraffic-Normal-1", "002-CombatTraffic-Normal-2"],
+        "excludedCaseIds": []
+      }
+    ]
+  },
+  "beforeSamples": [
+    {
+      "reportId": "before",
+      "caseId": "002-CombatTraffic-Normal-2",
+      "status": "passed",
+      "trajectoryMode": "continuous-FRepMovement-with-native-visual-interpolation",
+      "metrics": {
+        "category": "combatTraffic",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+        "scope": "server-all-client-connections",
+        "scheduleVersion": "projectile-energy-v2",
+        "warmupSeconds": 3.016991499811411,
+        "targetSampleSeconds": 15,
+        "elapsedSeconds": 15.091769497841597,
+        "beginOutTotalBytes": 34433,
+        "endOutTotalBytes": 134021,
+        "outBytes": 99588,
+        "beginOutTotalPackets": 517,
+        "endOutTotalPackets": 1421,
+        "outPackets": 904,
+        "bytesPerSecond": 6598.828587611475,
+        "packetsPerSecond": 59.9001992529298,
+        "projectileSpawns": 30,
+        "energyUpdates": 60,
+        "connectionCount": 2,
+        "projectileIntervalSeconds": 0.5,
+        "energyIntervalSeconds": 0.25,
+        "maxScheduleDelaySeconds": 0.1321284994482994,
+        "projectileNetHz": 30,
+        "frameSamples": 452,
+        "framesPerSecond": 29.9500996264649,
+        "serverNetTickRate": 30,
+        "maxFps": 30
+      }
+    },
+    {
+      "reportId": "beforeExtra",
+      "caseId": "001-CombatTraffic-Normal-1",
+      "status": "passed",
+      "trajectoryMode": "continuous-FRepMovement-with-native-visual-interpolation",
+      "metrics": {
+        "category": "combatTraffic",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+        "scope": "server-all-client-connections",
+        "scheduleVersion": "projectile-energy-v2",
+        "warmupSeconds": 3.07331820204854,
+        "targetSampleSeconds": 15,
+        "elapsedSeconds": 15.044779099524021,
+        "beginOutTotalBytes": 39475,
+        "endOutTotalBytes": 138904,
+        "outBytes": 99429,
+        "beginOutTotalPackets": 592,
+        "endOutTotalPackets": 1498,
+        "outPackets": 906,
+        "bytesPerSecond": 6608.870714701666,
+        "packetsPerSecond": 60.22022616660843,
+        "projectileSpawns": 30,
+        "energyUpdates": 60,
+        "connectionCount": 2,
+        "projectileIntervalSeconds": 0.5,
+        "energyIntervalSeconds": 0.25,
+        "maxScheduleDelaySeconds": 0.13132670149207115,
+        "projectileNetHz": 30,
+        "frameSamples": 453,
+        "framesPerSecond": 30.110113083304213,
+        "serverNetTickRate": 30,
+        "maxFps": 30
+      }
+    }
+  ],
+  "afterSamples": [
+    {
+      "reportId": "after",
+      "caseId": "001-CombatTraffic-Normal-1",
+      "status": "passed",
+      "metrics": {
+        "category": "combatTraffic",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+        "scope": "server-all-client-connections",
+        "scheduleVersion": "projectile-energy-v2",
+        "trajectoryMode": "initialLaunchState",
+        "replicateMovement": false,
+        "projectileNetHzMeaning": "actor-relevancy-check-limit-not-position-stream",
+        "warmupSeconds": 3.1262379996478558,
+        "targetSampleSeconds": 15,
+        "elapsedSeconds": 15.090808000415564,
+        "beginOutTotalBytes": 37844,
+        "endOutTotalBytes": 84408,
+        "outBytes": 46564,
+        "beginOutTotalPackets": 562,
+        "endOutTotalPackets": 1466,
+        "outPackets": 904,
+        "bytesPerSecond": 3085.58693469016,
+        "packetsPerSecond": 59.90401574091368,
+        "projectileSpawns": 30,
+        "energyUpdates": 60,
+        "connectionCount": 2,
+        "projectileIntervalSeconds": 0.5,
+        "energyIntervalSeconds": 0.25,
+        "maxScheduleDelaySeconds": 0.11894519999623299,
+        "projectileNetHz": 30,
+        "frameSamples": 452,
+        "framesPerSecond": 29.95200787045684,
+        "serverNetTickRate": 30,
+        "maxFps": 30
+      }
+    },
+    {
+      "reportId": "after",
+      "caseId": "002-CombatTraffic-Normal-2",
+      "status": "passed",
+      "metrics": {
+        "category": "combatTraffic",
+        "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+        "scope": "server-all-client-connections",
+        "scheduleVersion": "projectile-energy-v2",
+        "trajectoryMode": "initialLaunchState",
+        "replicateMovement": false,
+        "projectileNetHzMeaning": "actor-relevancy-check-limit-not-position-stream",
+        "warmupSeconds": 3.0308672972023487,
+        "targetSampleSeconds": 15,
+        "elapsedSeconds": 15.035576097667217,
+        "beginOutTotalBytes": 37735,
+        "endOutTotalBytes": 84080,
+        "outBytes": 46345,
+        "beginOutTotalPackets": 559,
+        "endOutTotalPackets": 1459,
+        "outPackets": 900,
+        "bytesPerSecond": 3082.3561198423563,
+        "packetsPerSecond": 59.858032319735045,
+        "projectileSpawns": 30,
+        "energyUpdates": 60,
+        "connectionCount": 2,
+        "projectileIntervalSeconds": 0.5,
+        "energyIntervalSeconds": 0.25,
+        "maxScheduleDelaySeconds": 0.12938519939780235,
+        "projectileNetHz": 30,
+        "frameSamples": 450,
+        "framesPerSecond": 29.929016159867523,
+        "serverNetTickRate": 30,
+        "maxFps": 30
+      }
+    }
+  ],
+  "excludedSamples": [
+    {
+      "reportId": "before",
+      "caseId": "001-CombatTraffic-Normal-1",
+      "status": "failed",
+      "reason": "Measured server FPS 21.74 was below the required 28..34. The sample has no successful combatTraffic metric event and is excluded from every comparison statistic, despite recording 30 spawns and 60 energy changes.",
+      "roundedAssertionOnly": true,
+      "assertionDetail": "Fixed workload: warmup=3.040s sample=15.040s FPS=21.74 (required28..34) spawns=30 energyUpdates=60 maxDelay=0.133s; bytes=38994->123129 packets=550->1204",
+      "reportedMeasuredServerFps": 21.74,
+      "beginOutTotalBytes": 38994,
+      "endOutTotalBytes": 123129,
+      "outBytes": 84135,
+      "beginOutTotalPackets": 550,
+      "endOutTotalPackets": 1204,
+      "outPackets": 654
+    }
+  ],
+  "statistics": {
+    "acceptedBeforeSamples": 2,
+    "acceptedAfterSamples": 2,
+    "excludedBeforeSamples": 1,
+    "method": "For each field, range is the min/max of the two accepted samples; the median for n=2 is their arithmetic midpoint. ReductionPercent = 100 * (1 - afterMedian / beforeMedian). Primary comparison uses bytesPerSecond, not unequal-duration raw byte counts. No confidence interval or statistical-significance claim is made.",
+    "bytesPerSecond": {
+      "before": { "median": 6603.84965115657, "min": 6598.828587611475, "max": 6608.870714701666 },
+      "after": { "median": 3083.971527266258, "min": 3082.3561198423563, "max": 3085.58693469016 },
+      "reductionPercent": 53.30039764418101
+    },
+    "packetsPerSecond": {
+      "before": { "median": 60.06021270976912, "min": 59.9001992529298, "max": 60.22022616660843 },
+      "after": { "median": 59.88102403032436, "min": 59.858032319735045, "max": 59.90401574091368 },
+      "reductionPercent": 0.2983483929879793
+    },
+    "outBytes": {
+      "before": { "median": 99508.5, "min": 99429, "max": 99588 },
+      "after": { "median": 46454.5, "min": 46345, "max": 46564 },
+      "reductionPercent": 53.31604837777677
+    },
+    "outPackets": {
+      "before": { "median": 905, "min": 904, "max": 906 },
+      "after": { "median": 902, "min": 900, "max": 904 },
+      "reductionPercent": 0.33149171270717703
+    },
+    "framesPerSecond": {
+      "before": { "median": 30.03010635488456, "min": 29.9500996264649, "max": 30.110113083304213 },
+      "after": { "median": 29.94051201516218, "min": 29.929016159867523, "max": 29.95200787045684 }
+    },
+    "elapsedSeconds": {
+      "before": { "median": 15.068274298682809, "min": 15.044779099524021, "max": 15.091769497841597 },
+      "after": { "median": 15.06319204904139, "min": 15.035576097667217, "max": 15.090808000415564 }
+    },
+    "packetsPerServerFrame": { "beforeSamples": [2, 2], "afterSamples": [2, 2] },
+    "packetInterpretation": "All four samples count exactly two outbound packets per server frame. The 0.2983483929879793% median packet-rate change equals the median FPS change, so no meaningful reduction in packet-send frequency is established; the observed gain is fewer bytes inside the existing cadence."
+  },
+  "validation": {
+    "status": "passed",
+    "verifiedAtUtc": "2026-10-15T11:05:20Z",
+    "finalBuild": "Build6",
+    "moduleOnDiskSha256": "00dc33a2030dba10a0a62f3305a72baf05f9acb8c4420b3cb9ad235bdabd61c2",
+    "allFourNetworkReportsRecordSameModule": true,
+    "currentModuleOnDiskHashMatches": true,
+    "moduleRuntimeLoadVerified": false,
+    "provenanceMeaning": "The four final reports and the module currently on disk have the same recorded SHA256. The build, native tests, map AI and blueprint logs were produced in the final Build6 validation sequence. These records do not independently attest the loaded runtime module hash. Earlier CombatReady/Reconnect reports below are historical and are not counted as final-build acceptance.",
+    "networkReports": [
+      {
+        "rawReport": "Saved/CombatNetworkCompletion/CombatFinal/report.json",
+        "rawReportSha256": "db10c18cc3fd9ffc6d10ca6954efa527459f4195aa277ad08154b2b5a3c1167e",
+        "runId": "20261015-110036-d0a73e86",
+        "status": "passed",
+        "moduleOnDiskSha256": "00dc33a2030dba10a0a62f3305a72baf05f9acb8c4420b3cb9ad235bdabd61c2",
+        "passedCaseIds": ["001-Combat-Normal-1", "002-Combat-Harsh-1"],
+        "scope": "Normal/Harsh automated combat authority, real local cost/cooldown prediction, confirmation without double cost, rejection/rollback, and legal retry assertions. Does not certify configured animation or rendered trajectory quality."
+      },
+      {
+        "rawReport": "Saved/CombatNetworkCompletion/CombatReconnectFinal/report.json",
+        "rawReportSha256": "13a08d5dd403e155589e02462b22ec458a9ae6e8bcc57475ed14fa0ff7557703",
+        "runId": "20261015-110251-10e63adf",
+        "status": "passed",
+        "moduleOnDiskSha256": "00dc33a2030dba10a0a62f3305a72baf05f9acb8c4420b3cb9ad235bdabd61c2",
+        "passedCaseIds": ["001-CombatReconnect-Normal-1", "002-CombatReconnect-Harsh-1"],
+        "scope": "Normal/Harsh real connection recovery, server-owned personal-state restore, ticket active/invalid/rotation/lost-receipt boundaries, and partner/shared-state continuity. Anonymous bearer-ticket limitations remain unchanged."
+      },
+      {
+        "rawReport": "Saved/CombatNetworkCompletion/RideRegression/report.json",
+        "rawReportSha256": "ee5ed9661860e8862d763f640ef230422e6d2380b1703cffe088f53762be85f1",
+        "runId": "20261015-105827-fd2736e7",
+        "status": "passed",
+        "moduleOnDiskSha256": "00dc33a2030dba10a0a62f3305a72baf05f9acb8c4420b3cb9ad235bdabd61c2",
+        "passedCaseIds": ["001-RideMotion-Normal-1", "002-RideMotion-Harsh-1"],
+        "scope": "Normal/Harsh existing moving-platform RideMotion regression at configured30Hz with PlatformInertia. Automated motion/correction assertions are not manual visual acceptance."
+      },
+      {
+        "rawReport": "Saved/CombatNetworkCompletion/TrafficAfter/report.json",
+        "rawReportSha256": "42f6dd512c501e188ac9d355dec7f0303c1a52aabc83c8f05838cc90dec2fee2",
+        "runId": "20261015-105553-850687c5",
+        "status": "passed",
+        "moduleOnDiskSha256": "00dc33a2030dba10a0a62f3305a72baf05f9acb8c4420b3cb9ad235bdabd61c2",
+        "passedCaseIds": ["001-CombatTraffic-Normal-1", "002-CombatTraffic-Normal-2"],
+        "scope": "The two Normal after-samples already recorded in afterSamples; not additional performance samples."
+      }
+    ],
+    "nativeMechanisms": {
+      "rawLog": "Saved/Logs/CombatNetworkFinalMechanisms.log",
+      "rawLogSha256": "cdff474016302b53df723a2c917cf4d003694d9dd86e2b5cbacfa05d73038c27",
+      "status": "passed",
+      "performed": 8,
+      "passed": 8,
+      "passedTestPaths": [
+        "Multiplayer.Combat.AdmissionAndResume",
+        "Multiplayer.Combat.BehaviorAssets",
+        "Multiplayer.Combat.BehaviorDecision",
+        "Multiplayer.Combat.BehaviorLifecycle",
+        "Multiplayer.Combat.CoreRules",
+        "Multiplayer.Combat.HealingAuthority",
+        "Multiplayer.Combat.ProjectileInterpolation",
+        "Multiplayer.Combat.ProjectileWall"
+      ],
+      "scope": "Existing native mechanism tests; ProjectileInterpolation retains its legacy test name but verifies the new initial-launch trajectory contract."
+    },
+    "mapAI": {
+      "rawLog": "Saved/Logs/CombatNetworkFinalMapAI.log",
+      "rawLogSha256": "3f0e6e2e80c11755f8998968f48a73676599bc835c484268b35934d12b7d31aa",
+      "status": "passed",
+      "testPath": "Multiplayer.Combat.MapAI",
+      "map": "/Game/Combat/Maps/CombatTest",
+      "spawnProjectedToNavigation": true,
+      "pathPartial": false,
+      "reportedChaseTravelCm": 525.6,
+      "reportedFinalDistanceCm": 374.6,
+      "reportedHealthBefore": 100,
+      "reportedHealthAfter": 75,
+      "scope": "Real saved-map navigation, behavior-tree pursuit and authoritative projectile damage; not fabricated movement or a complete AI-navigation coverage claim."
+    },
+    "blueprints": {
+      "rawLog": "Saved/Logs/CombatNetworkFinalBlueprints.log",
+      "rawLogSha256": "093ca99689197640f5da9ca9afc009afbe3ceb1c50c8fe1cd7eaeb531b556c84",
+      "status": "passed",
+      "allowlistedBlueprintsCompiled": 16,
+      "compilerErrors": 0,
+      "compilerWarnings": 0,
+      "blueprintsFailedToLoad": 0,
+      "commandletResult": 0,
+      "scope": "CompileAllBlueprints for the explicit16-asset gameplay/UI allowlist, not every blueprint in the project or visual acceptance."
+    },
+    "build": {
+      "rawLog": "Saved/Logs/CombatNetworkCompletionBuild6.log",
+      "rawLogSha256": "5a9c70cfa75ef2395bf94e99fdf302fd55a17359dab627e82be7244fe219e88a",
+      "status": "passed",
+      "target": "multiplayerEditor",
+      "reportedTotalExecutionSeconds": 6.65,
+      "scope": "Final editor module build/link and metadata completed successfully; not a packaged-client or dedicated-server-target build."
+    }
+  },
+  "historicalSupportingCorrectnessRuns": [
+    {
+      "rawReport": "Saved/CombatNetworkCompletion/CombatReady/report.json",
+      "rawReportSha256": "1fe9218e74a88c99ff1a40dd04261a664971bca726be334fa31897adc3fc285f",
+      "runId": "20261015-104620-1cbb228f",
+      "status": "passed",
+      "moduleOnDiskSha256": "61731d75daac1fb08c4d0bcbe83998a6a25a98e667d581aad6c0d70ccdd5a908",
+      "moduleRuntimeLoadVerified": false,
+      "passedCaseIds": ["001-Combat-Normal-1", "002-Combat-Harsh-1"],
+      "scope": "Automated combat authority, prediction confirmation/rejection and rollback assertions. Not an animation or rendered-trajectory acceptance."
+    },
+    {
+      "rawReport": "Saved/CombatNetworkCompletion/Reconnect/report.json",
+      "rawReportSha256": "973b8eb94b0b4186c6b00a43482c204c985b7ec35439e1d39f540aecc84130d2",
+      "runId": "20261015-105315-4f12b650",
+      "status": "passed",
+      "moduleOnDiskSha256": "e2f0e424ed49e744b060da78b3de5d9799561bf5aeec4d550e2cace2cb4f334d",
+      "moduleRuntimeLoadVerified": false,
+      "passedCaseIds": ["001-CombatReconnect-Normal-1", "002-CombatReconnect-Harsh-1"],
+      "scope": "Automated real-connection recovery, server-owned personal-state restore and ticket-boundary assertions while partner/shared state is retained. Not account authentication."
+    }
+  ],
+  "limits": {
+    "weakNetwork": "Traffic before/after measurements are Normal only. Final Combat, Reconnect and RideMotion Normal/Harsh reports record the same module hash as TrafficAfter, as listed in validation. These correctness passes are not a Harsh traffic comparison or proof for all packet-loss/latency conditions. Older runs remain explicitly historical; emulator settings are not measured RTT and runtime module-hash attestation is not emitted.",
+    "cpu": "No CPU, server frame-time distribution or profiling measurement is produced. Server projectile collision sweeps remain authoritative; clients still update visuals every frame. Bandwidth reduction is not proof of a CPU speedup.",
+    "capacity": "Only one local DS with two clients on one machine and one map was measured. Do not extrapolate player capacity, Internet deployment bandwidth or packaged-build throughput from four short samples.",
+    "visual": "NullRHI runs do not certify appearance or smoothness. GameState server-time estimation has no half-RTT compensation and can be biased; initial time synchronization may directly adjust visual position. Clients do not collide, so a projectile may visually overshoot an impact until authoritative destruction arrives. This is not zero-error projectile prediction or server rewind.",
+    "authorityAndLifetime": "Clients receive server-authored origin/velocity/time, never submit damage or targets, and do not decide impact or destruction. The server keeps the 3-second lifespan. Initial actor-channel creation, initial launch state, ownership and destruction still use the network; renewed relevance may send initial state again. The 30Hz actor scheduling setting does not mean zero replication work.",
+    "anonymousSessions": "Reconnect tickets are opaque in-memory bearer credentials for this server round, not account/device authentication. The offline snapshot retention is 120 seconds; server restart/new round invalidates the cache. A malicious client can discard a ticket and request a new anonymous session, so this does not prevent new-identity resource resets, credential theft or authenticated-account abuse.",
+    "statistics": "Two accepted samples per build are exploratory. The excluded low-FPS attempt remains disclosed. No significance, latency improvement, visual equivalence, full-combat byte attribution or per-projectile lifetime cost is claimed.",
+    "olderEvidence": "Tests/Evidence/GASNetworkOptimization.json is a separate earlier public-energy/60Hz-to-OwnerOnly/30Hz comparison and is not merged with this incremental trajectory comparison."
+  }
+}

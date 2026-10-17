@@ -1,13 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "multiplayer.h"
+#include "Core/multiplayerLog.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/CoreDelegates.h"
 #include "Testing/CoopNetTestDriver.h"
-
+// 日志分类只在一个实现文件中定义；各模块引用头文件声明，方便按 LogMultiplayer 筛选双端记录。
+DEFINE_LOG_CATEGORY(LogMultiplayer);
 
 //测试安全性
- class FMultiplayerModule : public FDefaultGameModuleImpl
+class FMultiplayerModule : public FDefaultGameModuleImpl
 {
 public:
 	virtual void StartupModule() override

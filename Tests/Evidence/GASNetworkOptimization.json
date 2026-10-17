@@ -1,0 +1,284 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "interpretation": "Exploratory same-machine fixed mixed workload, two accepted samples per build; not a capacity, per-actor, CPU or visual-quality claim.",
+  "environment": {
+    "engineAssociation": "5.5",
+    "executableVersion": "++UE5+Release-5.5-CL-40574608",
+    "buildKind": "editor-game",
+    "map": "/Game/Combat/Maps/CombatTest",
+    "nullRhi": true,
+    "topology": "One local dedicated server and two separate remote client processes",
+    "visualValidation": false
+  },
+  "workload": {
+    "scheduleVersion": "projectile-energy-v2",
+    "warmupSeconds": 3,
+    "sampleSeconds": 15,
+    "projectileIntervalSeconds": 0.5,
+    "projectileSpawns": 30,
+    "energyIntervalSeconds": 0.25,
+    "energyUpdates": 60,
+    "energyValues": [
+      30,
+      70
+    ],
+    "maxFps": 30,
+    "minMeasuredServerFps": 28,
+    "maxMeasuredServerFps": 34,
+    "connections": 2
+  },
+  "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+  "counterScope": "All server outbound traffic to both clients, including packet overhead, ACKs, test traffic and game traffic; not a NIC capture.",
+  "baseline": {
+    "product": "Original public Energy/MaxEnergy replication, projectile configured60Hz with direct client position updates; current v2 measurement fixture.",
+    "gitBaseCommit": "e3292ed2cd687531456ee9db1469c732a9144228",
+    "sourceFingerprintSha256": "409879eb5515e341171395e3ed07d9f0e3f25e4de04dd8f982db99139cad63c5",
+    "moduleOnDiskSha256": "720760fd9aeb257324540a9bf8d8450669578e4e3a222c67961ca28dd63af2ee",
+    "moduleRuntimeLoadVerified": false,
+    "rawReport": "Saved/GASNetV2Baseline/report.json",
+    "rawReportSha256": "979071f500f0419398c27cf3606765d96df8817fb9d8759688d824efd6ddd05e",
+    "rawBatchStatus": "failed",
+    "acceptedSamples": [
+      {
+        "caseId": "001-CombatTraffic-Normal-1",
+        "runId": "20261015-055332-ceee053d",
+        "metricEvent": {
+          "metrics": {
+            "category": "combatTraffic",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+            "scope": "server-all-client-connections",
+            "scheduleVersion": "projectile-energy-v2",
+            "warmupSeconds": 3.0433030016720295,
+            "targetSampleSeconds": 15,
+            "elapsedSeconds": 15.086385499686003,
+            "beginOutTotalBytes": 36375,
+            "endOutTotalBytes": 154865,
+            "outBytes": 118490,
+            "beginOutTotalPackets": 543,
+            "endOutTotalPackets": 1445,
+            "outPackets": 902,
+            "bytesPerSecond": 7854.1013022944535,
+            "packetsPerSecond": 59.78900645345259,
+            "projectileSpawns": 30,
+            "energyUpdates": 60,
+            "connectionCount": 2,
+            "projectileIntervalSeconds": 0.5,
+            "energyIntervalSeconds": 0.25,
+            "maxScheduleDelaySeconds": 0.12230139970779419,
+            "projectileNetHz": 60,
+            "frameSamples": 451,
+            "framesPerSecond": 29.894503226726297,
+            "serverNetTickRate": 30,
+            "maxFps": 30
+          },
+          "mode": "CombatTraffic",
+          "role": "Server",
+          "token": "20261015-055332-ceee053d-1",
+          "status": "METRIC",
+          "phase": "TrafficSampling",
+          "detail": "NetDriver-accounted outbound traffic includes packet overhead, ACKs, retransmissions and all game/test traffic; not a NIC packet trace",
+          "elapsed": 40.15830260142684
+        }
+      },
+      {
+        "caseId": "002-CombatTraffic-Normal-2",
+        "runId": "20261015-055332-ceee053d",
+        "metricEvent": {
+          "metrics": {
+            "category": "combatTraffic",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+            "scope": "server-all-client-connections",
+            "scheduleVersion": "projectile-energy-v2",
+            "warmupSeconds": 3.0703576989471912,
+            "targetSampleSeconds": 15,
+            "elapsedSeconds": 15.002351000905037,
+            "beginOutTotalBytes": 33994,
+            "endOutTotalBytes": 153037,
+            "outBytes": 119043,
+            "beginOutTotalPackets": 505,
+            "endOutTotalPackets": 1401,
+            "outPackets": 896,
+            "bytesPerSecond": 7934.956327366195,
+            "packetsPerSecond": 59.72397259242552,
+            "projectileSpawns": 30,
+            "energyUpdates": 60,
+            "connectionCount": 2,
+            "projectileIntervalSeconds": 0.5,
+            "energyIntervalSeconds": 0.25,
+            "maxScheduleDelaySeconds": 0.13291090354323387,
+            "projectileNetHz": 60,
+            "frameSamples": 448,
+            "framesPerSecond": 29.86198629621276,
+            "serverNetTickRate": 30,
+            "maxFps": 30
+          },
+          "mode": "CombatTraffic",
+          "role": "Server",
+          "token": "20261015-055332-ceee053d-2",
+          "status": "METRIC",
+          "phase": "TrafficSampling",
+          "detail": "NetDriver-accounted outbound traffic includes packet overhead, ACKs, retransmissions and all game/test traffic; not a NIC packet trace",
+          "elapsed": 40.296947199851274
+        }
+      }
+    ]
+  },
+  "optimized": {
+    "product": "Energy/MaxEnergy OwnerOnly; projectile configured30Hz; client visual interpolation0.05s, collision and simulation remain server-authoritative.",
+    "gitBaseCommit": "e3292ed2cd687531456ee9db1469c732a9144228",
+    "sourceFingerprintSha256": "db01ba7c211b560ad0a2d21a0dadbad3df9b19335edc68dd26d529eeb35af077",
+    "moduleOnDiskSha256": "a747a0bd91fc19f93ba71b335813816314c9cf9bace3881df4e4a1ec4bb9e5df",
+    "moduleRuntimeLoadVerified": false,
+    "rawReport": "Saved/GASNetV2Optimized/report.json",
+    "rawReportSha256": "842802135f50fd846f7a0c2a15818a4d70db6669daa1ff307de14857fd62f522",
+    "rawBatchStatus": "passed",
+    "acceptedSamples": [
+      {
+        "caseId": "001-CombatTraffic-Normal-1",
+        "runId": "20261015-060503-c4a2921d",
+        "metricEvent": {
+          "metrics": {
+            "category": "combatTraffic",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+            "scope": "server-all-client-connections",
+            "scheduleVersion": "projectile-energy-v2",
+            "warmupSeconds": 3.008425999432802,
+            "targetSampleSeconds": 15,
+            "elapsedSeconds": 15.111032899469137,
+            "beginOutTotalBytes": 33046,
+            "endOutTotalBytes": 132993,
+            "outBytes": 99947,
+            "beginOutTotalPackets": 492,
+            "endOutTotalPackets": 1394,
+            "outPackets": 902,
+            "bytesPerSecond": 6614.173939328212,
+            "packetsPerSecond": 59.69148542001308,
+            "projectileSpawns": 30,
+            "energyUpdates": 60,
+            "connectionCount": 2,
+            "projectileIntervalSeconds": 0.5,
+            "energyIntervalSeconds": 0.25,
+            "maxScheduleDelaySeconds": 0.1295638009905815,
+            "projectileNetHz": 30,
+            "frameSamples": 451,
+            "framesPerSecond": 29.84574271000654,
+            "serverNetTickRate": 30,
+            "maxFps": 30
+          },
+          "mode": "CombatTraffic",
+          "role": "Server",
+          "token": "20261015-060503-c4a2921d-1",
+          "status": "METRIC",
+          "phase": "TrafficSampling",
+          "detail": "NetDriver-accounted outbound traffic includes packet overhead, ACKs, retransmissions and all game/test traffic; not a NIC packet trace",
+          "elapsed": 39.76873340085149
+        }
+      },
+      {
+        "caseId": "002-CombatTraffic-Normal-2",
+        "runId": "20261015-060503-c4a2921d",
+        "metricEvent": {
+          "metrics": {
+            "category": "combatTraffic",
+            "counterSource": "UNetDriver.OutTotalBytes/OutTotalPackets",
+            "scope": "server-all-client-connections",
+            "scheduleVersion": "projectile-energy-v2",
+            "warmupSeconds": 3.032669100910425,
+            "targetSampleSeconds": 15,
+            "elapsedSeconds": 15.040403600782156,
+            "beginOutTotalBytes": 36702,
+            "endOutTotalBytes": 136006,
+            "outBytes": 99304,
+            "beginOutTotalPackets": 549,
+            "endOutTotalPackets": 1447,
+            "outPackets": 898,
+            "bytesPerSecond": 6602.482395807239,
+            "packetsPerSecond": 59.7058445927143,
+            "projectileSpawns": 30,
+            "energyUpdates": 60,
+            "connectionCount": 2,
+            "projectileIntervalSeconds": 0.5,
+            "energyIntervalSeconds": 0.25,
+            "maxScheduleDelaySeconds": 0.11964689940214157,
+            "projectileNetHz": 30,
+            "frameSamples": 449,
+            "framesPerSecond": 29.85292229635715,
+            "serverNetTickRate": 30,
+            "maxFps": 30
+          },
+          "mode": "CombatTraffic",
+          "role": "Server",
+          "token": "20261015-060503-c4a2921d-2",
+          "status": "METRIC",
+          "phase": "TrafficSampling",
+          "detail": "NetDriver-accounted outbound traffic includes packet overhead, ACKs, retransmissions and all game/test traffic; not a NIC packet trace",
+          "elapsed": 40.76394980028272
+        }
+      }
+    ]
+  },
+  "excluded": {
+    "rule": "Only cases with passing assertions and one valid v2 metric are accepted. No failed case is used for rates or medians.",
+    "baselineV2Rejected": [
+      {
+        "runId": "20261015-055332-ceee053d",
+        "caseId": "003-CombatTraffic-Normal-3",
+        "status": "failed",
+        "reason": "Driver failure: ServerTrafficSchedule Fixed 3s warmup/15s sample, 30 actual spawns, 60 energy changes; actual server FPS 28..34, scheduling delay <0.25s and no counter wrap"
+      },
+      {
+        "runId": "20261015-055714-9063e0a5",
+        "caseId": "001-CombatTraffic-Normal-1",
+        "status": "failed",
+        "reason": "Driver failure: ServerTrafficSchedule Fixed 3s warmup/15s sample, 30 actual spawns, 60 energy changes; actual server FPS 28..34, scheduling delay <0.25s and no counter wrap"
+      }
+    ],
+    "earlierV1Runs": "Excluded entirely: v1 used differing actual server frame rates (about33 versus61fps) and cannot support the before/after percentage."
+  },
+  "results": {
+    "baselineBytesPerSecondMedian": 7894.528814830324,
+    "optimizedBytesPerSecondMedian": 6608.328167567726,
+    "bytesPerSecondReductionPercent": 16.2923041695205,
+    "baselineBytesPerSecondRange": [
+      7854.1013022944535,
+      7934.956327366195
+    ],
+    "optimizedBytesPerSecondRange": [
+      6602.482395807239,
+      6614.173939328212
+    ],
+    "baselinePacketsPerSecondMedian": 59.756489522939056,
+    "optimizedPacketsPerSecondMedian": 59.69866500636369,
+    "baselineFramesPerSecondMedian": 29.878244761469528,
+    "optimizedFramesPerSecondMedian": 29.849332503181845,
+    "comparableFrameRateTolerancePercent": 5,
+    "attribution": "Combined change only; does not isolate resource-routing savings from projectile-frequency savings."
+  },
+  "validation": {
+    "networkReport": "Saved/GASNetCombatRegression/report.json",
+    "networkReportSha256": "e1294ca7c677ec94a004a69853f660d2ec2e9aaf2ccb3c10689e31ad4bec038d",
+    "networkCases": [
+      {
+        "id": "001-Combat-Normal-1",
+        "profile": "Normal",
+        "status": "passed"
+      },
+      {
+        "id": "002-Combat-Harsh-1",
+        "profile": "Harsh",
+        "status": "passed"
+      }
+    ],
+    "mechanismLog": "Saved/Logs/GASNetMechanismTests.log",
+    "mechanismTests": [
+      "Multiplayer.Combat.CoreRules",
+      "Multiplayer.Combat.ProjectileInterpolation",
+      "Multiplayer.Combat.ProjectileWall"
+    ],
+    "mechanismPassed": true,
+    "finalBuildLog": "Saved/Logs/GASNetVerifiedBuild.log",
+    "visualAcceptance": false,
+    "replicationCpuMeasured": false
+  }
+}

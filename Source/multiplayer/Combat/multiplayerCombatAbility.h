@@ -9,6 +9,8 @@
 #include "Combat/multiplayerCombatConfig.h"
 #include "multiplayerCombatAbility.generated.h"
 
+class AmultiplayerCombatCharacter;
+
 // UE5.5禁止客户端任意移除权威GE；只开放“结束本次本地施法”的窄入口，不开放资源/CD移除。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerCombatAbilitySystem : public UAbilitySystemComponent
@@ -16,6 +18,14 @@ class MULTIPLAYER_API UmultiplayerCombatAbilitySystem : public UAbilitySystemCom
 	GENERATED_BODY()
 public:
 	void EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey);
+	// 重连恢复只调整新效果的下一跳时刻，沿用 GE 自己的 TimerHandle 和清理链路。
+	void SetPeriodicEffectDelay(FActiveGameplayEffectHandle Handle, float FirstDelay);
+	virtual void NotifyAbilityFailed(FGameplayAbilitySpecHandle Handle, UGameplayAbility* Ability,
+		const FGameplayTagContainer& FailureReason) override;
+protected:
+	// 远程定向技能必须随激活提交瞄准；服务器 AI 的直接激活不经过此 RPC 入口。
+	virtual void InternalServerTryActivateAbility(FGameplayAbilitySpecHandle Handle, bool InputPressed,
+		const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData) override;
 };
 
 // 三个技能共用 GAS 本地预测、连接接纳与死亡限制；最终玩法结果仍由服务器决定。
@@ -26,9 +36,12 @@ class MULTIPLAYER_API UmultiplayerCombatAbility : public UGameplayAbility
 
 public:
 	UmultiplayerCombatAbility();
+	EMultiplayerCombatSkill GetCombatSkill() const { return Skill; }
 	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
 		const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags = nullptr,
 		const FGameplayTagContainer* TargetTags = nullptr, FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
+	virtual bool ShouldAbilityRespondToEvent(const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayEventData* Payload) const override;
 protected:
 	// 所有技能的资源与冷却从同一份规则读取；效果继续交给 GAS 预测与确认。
 	virtual bool CheckCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
@@ -39,7 +52,7 @@ protected:
 		FGameplayAbilityActivationInfo ActivationInfo) const override;
 	virtual void CommitExecute(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayAbilityActivationInfo ActivationInfo) override;
-	const FmultiplayerCombatSkillRule& GetRule() const;
+	FmultiplayerCombatSkillRule GetRule() const;
 	EMultiplayerCombatSkill Skill = EMultiplayerCombatSkill::Attack;
 	// InstancedPerActor 会复用实例；同步取消后再激活时，旧调用栈不能继续推动新一轮技能。
 	uint32 ActivationRevision = 0;
@@ -54,6 +67,30 @@ class MULTIPLAYER_API UmultiplayerDamageEffect : public UGameplayEffect
 public:
 	// 伤害由服务器通过 Data.Damage 写入本次效果。
 	UmultiplayerDamageEffect();
+};
+
+// 护盾是独立持续属性；获得护盾使用 GE，承伤顺序由同一属性集负责。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerShieldEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerShieldEffect();
+};
+
+// 同一来源刷新持续时间但不推迟下一跳，不同来源各自保留效果句柄。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerBurningEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerBurningEffect();
+};
+
+// 禁锢与眩晕共用禁行权限，但禁锢不会取消攻击或治疗。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerRootEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerRootEffect();
 };
 
 UCLASS(Blueprintable)
@@ -84,7 +121,32 @@ protected:
 private:
 	UFUNCTION() void ReleaseProjectile();
 	UFUNCTION() void FinishAttack();
+	FRotator AimRotation = FRotator::ZeroRotator;
 	bool bProjectileReleased = false;
+};
+
+// 小兵近战：行为树提供目标，GAS 管理起手、一次命中和收招；客户端只接收动作与结果。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerEnemyMeleeAbility : public UmultiplayerCombatAbility
+{
+	GENERATED_BODY()
+public:
+	UmultiplayerEnemyMeleeAbility();
+	virtual bool CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayTagContainer* SourceTags = nullptr, const FGameplayTagContainer* TargetTags = nullptr,
+		FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
+protected:
+	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
+	virtual void EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
+private:
+	UFUNCTION() void ReleaseMelee();
+	UFUNCTION() void FinishMelee();
+	TWeakObjectPtr<AmultiplayerCombatCharacter> AttackTarget;
+	FActiveGameplayEffectHandle CastingEffect;
+	bool bReleased = false;
+	bool bEndingMelee = false;
 };
 
 // 防御：消耗、冷却、限时效果和技能。
@@ -113,6 +175,14 @@ class MULTIPLAYER_API UmultiplayerDefendingEffect : public UGameplayEffect
 public:
 	// 三秒内授予防御标签，减伤由属性结算层统一执行。
 	UmultiplayerDefendingEffect();
+};
+
+// Q 的短弹反窗口独立于较长减伤效果；结束时只移除自己的标签引用。
+UCLASS()
+class MULTIPLAYER_API UmultiplayerParryEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+public: UmultiplayerParryEffect();
 };
 
 // 防御：由限时 GameplayEffect 授予减伤状态，重复施放不会叠加。

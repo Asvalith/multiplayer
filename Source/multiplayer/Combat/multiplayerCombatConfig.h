@@ -12,7 +12,7 @@ class UParticleSystem;
 class USoundBase;
 
 UENUM(BlueprintType)
-enum class EMultiplayerCombatSkill : uint8 { Attack, Defend, Heal, Area };
+enum class EMultiplayerCombatSkill : uint8 { Attack, Defend, Heal, Area, Dash };
 
 // 配置是只读规则，不保存剩余冷却、已扣资源或正在施法等运行状态。
 USTRUCT(BlueprintType)
@@ -53,13 +53,29 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Defend{20, 8, 0, 0, 3};
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Heal{25, 6, 30, 600};
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Area{30, 5, 35, 650, 1.5f, 5.f / 6.f, 11.f / 6.f};
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Dash{15, 3, 0, 450, .35f};
+	// 弹反只在 Q 起手短窗口生效，方向和次数由服务器用同一配置复核。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.05")) float ParryWindow = .3f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "-1", ClampMax = "1")) float ParryFrontDot = .5f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", ClampMax = "8")) int32 MaxProjectileReflections = 2;
+	// 有仍能行动的队友才进入倒地；倒地、救援和终局死亡是不同状态。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1")) float BleedoutDuration = 20.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.1")) float RescueDuration = 2.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "50")) float RescueRange = 250.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "10")) float AreaRadius = 220;
+	// 接入素材时校准 Scale_All=1 的视觉半径；只缩放表现，不参与命中或伤害判定。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "10")) float AreaEffectReferenceRadius = 400.f;
 	// 地面圈只标示同一个技能落点和半径，不用追踪型粒子代替范围边界。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UMaterialInterface> AreaMarkerMaterial;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100")) float ProjectileSpeed = 1600;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UNiagaraSystem> ProjectileEffect;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UParticleSystem> ProjectileCascadeEffect;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", ClampMax = "1")) float DefenseDamageMultiplier = .5f;
+	// 新规则可按角色配置启用，默认保留原关卡的技能数值；剩余盾和效果时长不写回配置。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float DefenseShieldAmount = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float BurningDamagePerTick = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.05")) float BurningDuration = 4.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float AreaRootDuration = 0;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatFeedback AttackFeedback;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatFeedback ImpactFeedback;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatFeedback HealFeedback;

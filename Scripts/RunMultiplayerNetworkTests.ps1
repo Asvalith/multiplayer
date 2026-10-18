@@ -1,9 +1,11 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('RideMotion', 'Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle')][string]$Scenario = 'RideMotion',
+    [ValidateSet('RideMotion', 'Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle', 'CombatExpansion', 'CoopEscape')][string]$Scenario = 'RideMotion',
     [ValidateSet('Normal', 'Moderate', 'Harsh')][string[]]$Profiles = @('Normal', 'Moderate', 'Harsh'),
     [ValidateRange(1, 100)][int]$Repeat = 3,
     [ValidateRange(30, 1800)][int]$TimeoutSeconds = 180,
+    [ValidateRange(640, 3840)][int]$RenderWidth = 1280,
+    [ValidateRange(360, 2160)][int]$RenderHeight = 720,
     [ValidateRange(1, 60)][int]$PlatformNetHz = 30,
     [ValidateSet('OrderedVelocity', 'PlatformInertia')][string]$PlatformSyncMode = 'PlatformInertia',
     [ValidateSet('Moving', 'Static')][string]$PlatformMotion = 'Moving',
@@ -15,6 +17,8 @@ param(
     [string]$OutputDirectory = '',
     [switch]$Visible,
     [switch]$Offscreen,
+    [switch]$VisualAcceptance,
+    [switch]$EscapeMovementDiagnostic,
     [switch]$PlanOnly,
     [switch]$SelfTest
 )
@@ -22,6 +26,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($Visible -and $Offscreen) { throw 'Choose Visible or Offscreen, not both.' }
+if ($EscapeMovementDiagnostic -and $Scenario -ne 'CoopEscape') { throw 'EscapeMovementDiagnostic requires CoopEscape and is not an acceptance pass.' }
+if ($VisualAcceptance -and ((-not ($Visible -or $Offscreen)) -or $Scenario -notin @('Combat', 'CombatLifecycle', 'CombatExpansion'))) {
+    throw 'VisualAcceptance requires rendered clients and Combat, CombatLifecycle or CombatExpansion. It is a controlled fixture, not a normal escape playthrough.'
+}
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ProjectPath = Join-Path $ProjectRoot 'multiplayer.uproject'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -123,15 +131,51 @@ function Get-SourceManifest {
 
 function Get-RequiredAssertions {
     param([string]$Mode = 'RideMotion')
+    if ($Mode -eq 'CoopEscape') {
+        $required = @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerEscapeMap', 'ServerEscapeAdmission',
+            'ServerEscapeWaves', 'ServerEscapeDamage', 'ServerEscapeLearned', 'ServerEscapeSupplies',
+            'ServerEscapeKeys12', 'ServerEscapeKeys34', 'ServerEscapeGate', 'ServerEscapeWon', 'ServerEscapeRestarted',
+            'Complete', 'PartnerComplete')
+        foreach ($prefix in @('Primary', 'Partner')) {
+            foreach ($stage in @('Ready', 'DashLearned', 'DashUsed', 'DamageObserved', 'WavesCleared', 'Supply', 'Keys12', 'Keys34', 'Gate', 'Won', 'Restarted')) {
+                $required += "${prefix}Escape${stage}"
+            }
+        }
+        return $required
+    }
+    if ($Mode -eq 'CombatExpansion') {
+        $required = @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerExpansionFixture', 'ServerExpansionAdmissionBaseline', 'ServerExpansionFloor',
+            'PrimaryExpansionRules', 'PartnerExpansionRules', 'PrimaryExpansionDashLearned', 'ServerExpansionDashLearned',
+            'PrimaryExpansionDashRunActive', 'PartnerExpansionDashRunActive',
+            'PrimaryExpansionDashRootObserved', 'PartnerExpansionDashRootObserved', 'ServerExpansionDashRootInterrupt',
+            'ServerExpansionDashRejectFixture', 'PrimaryExpansionDashRejectRejected', 'PrimaryExpansionDashRejectLocalRollback',
+            'ServerExpansionDashRejected', 'PrimaryExpansionDashRollback', 'PartnerExpansionDashRollback',
+            'ServerExpansionParryFixture', 'ServerExpansionParryLaunch', 'ServerExpansionParry', 'ServerExpansionParrySingleDamage',
+            'ServerExpansionGrowthAward', 'ServerExpansionGrowthRequests', 'ServerExpansionDowned',
+            'PartnerExpansionRescueCancelSent', 'ServerExpansionRescueCancel', 'ServerExpansionRescueStun', 'ServerExpansionRescueSuccess',
+            'Complete', 'PartnerComplete')
+        foreach ($case in @('Run', 'Root', 'Reject')) {
+            $required += @("PrimaryExpansionDash${case}Ready", "PartnerExpansionDash${case}Ready",
+                "PrimaryExpansionDash${case}Predicted", "PrimaryExpansionDash${case}RepeatedInput")
+            if ($case -ne 'Reject') { $required += @("ServerExpansionDash${case}", "PrimaryExpansionDash${case}Ended", "PartnerExpansionDash${case}Ended") }
+        }
+        foreach ($name in @('ParryReady', 'ParryObserved', 'ParryDamage', 'GrowthReady', 'GrowthApplied', 'Downed',
+            'RescueCancelActive', 'RescueCancelStopped', 'RescueStunActive', 'RescueStunStopped', 'RescueSuccessActive', 'RescueSuccessDone')) {
+            $required += @("PrimaryExpansion$name", "PartnerExpansion$name")
+        }
+        foreach ($case in @('Cancel', 'Stun', 'Success')) { $required += "PartnerExpansionRescue${case}Requested" }
+        return $required
+    }
     if ($Mode -eq 'Combat') {
-        $required = @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerCombatFixture', 'ServerCombatSpawn',
+        $required = @('DedicatedAuthority', 'PartnerReady', 'Join', 'ServerCombatFixture', 'ServerCombatPlayerBaseline', 'ServerCombatHealTargetReady', 'ServerCombatSpawn',
+            'ServerCombatTargetingFloor', 'ServerCombatTargetPreview', 'PrimaryTargetPreview', 'PartnerTargetPreview', 'PrimaryHealPreview', 'PartnerHealPreview',
             'ServerCombatCurrentState', 'ServerCombatAttack', 'ServerCombatDefense', 'ServerCombatHeal',
             'ServerCombatEnemyDeath', 'ServerCombatPlayerDeath', 'PrimaryCurrentState', 'PartnerCurrentState',
             'PrimaryAttack', 'PartnerAttack', 'PrimaryDefense', 'PartnerDefense', 'PrimaryHeal', 'PartnerHeal',
             'PrimaryDefensePredicted', 'PrimaryDefenseRepeatedInput', 'PrimaryDefenseConfirmed',
             'PrimaryAttackPredicted', 'PrimaryAttackRepeatedInput', 'PrimaryAttackConfirmed',
             'PrimaryHealPredicted', 'PrimaryHealRepeatedInput', 'PrimaryHealConfirmed',
-            'ServerCombatResourceFixture', 'ServerCombatResourceRejected', 'PrimaryResourceReady', 'PartnerResourceReady',
+            'ServerCombatResourceFixture', 'ServerCombatResourceRejected', 'ServerAttackMissingAimNoLateProjectile', 'PrimaryResourceReady', 'PartnerResourceReady',
             'PrimaryResourcePredicted', 'PrimaryResourceRepeatedInput', 'PrimaryResourceRejected', 'PrimaryResourceRollback', 'PartnerResourceRollback',
             'PrimaryResourceLocalRollback',
             'ServerCombatDeathFixture', 'PrimaryDeathReady', 'PartnerDeathReady', 'PrimaryDeathPredicted', 'PrimaryDeathRepeatedInput', 'PrimaryDeathRejected',
@@ -141,7 +185,7 @@ function Get-RequiredAssertions {
             'ServerCombatResourceRoutingFixture', 'ServerCombatResourceRouting', 'PartnerDefenseResourcesHidden', 'PartnerResourceRollbackResourcesHidden',
             'PrimaryPublicMaxHealth', 'PartnerPublicMaxHealth', 'PartnerOwnedResources', 'PrimaryPrivateResourcesHidden',
             'PrimaryEnemyDeath', 'PartnerEnemyDeath', 'PrimaryPlayerDeath', 'PartnerPlayerDeath', 'Complete', 'PartnerComplete')
-        foreach ($case in @('AttackCooldown', 'DefenseCooldown', 'HealCooldown', 'HealEnergy', 'AreaCooldown', 'AreaEnergy', 'HealNoTarget')) {
+        foreach ($case in @('AttackCooldown', 'AttackMissingAim', 'DefenseCooldown', 'HealCooldown', 'HealEnergy', 'AreaCooldown', 'AreaEnergy', 'HealNoTarget')) {
             $required += @("Primary${case}Ready", "Partner${case}Ready", "Server${case}Fixture",
                 "Primary${case}Predicted", "Primary${case}RepeatedInput", "Primary${case}Rejected", "Primary${case}Rollback", "Server${case}Rejected",
                 "Primary${case}RetryReady", "Partner${case}RetryReady", "Primary${case}RetryPredicted", "Primary${case}RetryRepeatedInput",
@@ -164,6 +208,7 @@ function Get-RequiredAssertions {
             'ServerAreaSingleDamage', 'ServerAreaCancelNoDamage', 'ServerAreaStunInterrupt', 'ServerAreaStunNoDamage',
             'ServerAreaCancelCooldownRetained', 'ServerAreaConfirmedCancelCooldownRetained', 'ServerAreaConfirmedCancelNoDamage',
             'PrimaryAreaConfirmedCancelAuthorityObserved', 'PrimaryAreaConfirmedCancelSent',
+            'PrimaryAreaReleaseInputPreview', 'PrimaryAreaReleaseInputReleased',
             'PrimaryAreaCancelSent', 'PrimaryAreaStunObserved', 'PartnerAreaStunObserved', 'Complete', 'PartnerComplete')
         foreach ($case in @('Release', 'Cancel', 'ConfirmedCancel', 'Stun')) {
             $required += @("PrimaryArea${case}Ready", "PartnerArea${case}Ready", "PrimaryArea${case}Predicted",
@@ -173,6 +218,12 @@ function Get-RequiredAssertions {
             $required += @("PrimaryMovement${case}Ready", "PartnerMovement${case}Ready",
                 "PrimaryMovement${case}", "PartnerMovement${case}", "ServerMovement${case}")
         }
+        foreach ($case in @('Snapshot', 'Moving')) {
+            $required += @("PrimaryAim${case}Ready", "PartnerAim${case}Ready", "PrimaryAim${case}Predicted",
+                "ServerAim${case}Direction", "ServerAim${case}Launch", "ServerAim${case}SingleDamage",
+                "PrimaryAim${case}Outcome", "PartnerAim${case}Outcome")
+        }
+        $required += 'ServerAimMovingCMC'
         return $required
     }
     if ($Mode -eq 'CombatReconnect') {
@@ -182,7 +233,18 @@ function Get-RequiredAssertions {
             'PrimaryReconnectLiveBefore', 'PrimaryReconnectLiveDrop', 'PrimaryReconnectLive',
             'PrimaryReconnectDeadBefore', 'PrimaryReconnectDeadDrop', 'PrimaryReconnectDead',
             'PartnerReconnectLiveBefore', 'PartnerReconnectLive', 'PartnerReconnectDeadBefore', 'PartnerReconnectDead',
-            'PrimaryReconnectControl', 'PartnerReconnectControl', 'Complete', 'PartnerComplete')
+            'PrimaryReconnectControl', 'PartnerReconnectControl', 'Complete', 'PartnerComplete',
+            'ServerReconnectPersistentFixture', 'ServerReconnectBurnReference', 'ServerReconnectBurnOffline',
+            'ServerReconnectPersistentElapsed', 'ServerReconnectBurnPhase', 'ServerReconnectDeadPersistent',
+            'PrimaryReconnectPersistent', 'PartnerReconnectPersistent', 'PrimaryReconnectDeadPersistent', 'PartnerReconnectDeadPersistent',
+            'ServerReconnectGrowthAward', 'ServerReconnectGrowthFixture', 'PrimaryReconnectLoadoutReady', 'PartnerReconnectLoadoutReady',
+            'ServerReconnectGrowth', 'PrimaryReconnectGrowth', 'PartnerReconnectGrowth',
+            'ServerReconnectDashCooldown', 'PrimaryReconnectDashCooldown',
+            'ServerReconnectDeadGrowth', 'PrimaryReconnectDeadGrowth', 'PartnerReconnectDeadGrowth',
+            'ServerReconnectDownedFixture', 'ServerReconnectDownedStarted', 'PrimaryReconnectDownedReady', 'PartnerReconnectDownedReady',
+            'PartnerReconnectOldRescueRequested', 'PrimaryReconnectDownedBefore', 'PartnerReconnectDownedBefore', 'PrimaryReconnectDownedDrop',
+            'ServerReconnectDowned', 'ServerReconnectDownedGrowth', 'ServerReconnectDownedElapsed',
+            'PrimaryReconnectDowned', 'PartnerReconnectDowned', 'PrimaryReconnectDownedGrowth', 'PartnerReconnectDownedGrowth', 'ServerReconnectDownedBleedout')
     }
     return @('DedicatedAuthority', 'PartnerReady', 'Join', 'MotionStand', 'MotionWalk', 'MotionJump', 'MotionReverse',
         'ServerMotionStand', 'ServerMotionWalk', 'ServerMotionReverse', 'ServerMotionJump', 'MotionServerObserved', 'PartnerComplete')
@@ -194,6 +256,54 @@ function Test-FiniteNumber {
     return $null -ne $Value -and
         [double]::TryParse([string]$Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number) -and
         -not [double]::IsNaN($number) -and -not [double]::IsInfinity($number)
+}
+
+function Get-VisualRequiredAssertions {
+    param([string]$Mode)
+    'ServerVisualFixture'
+    'PrimaryVisualPresentationReady'
+    'PartnerVisualPresentationReady'
+    $stages = switch ($Mode) {
+        'Combat' { @('BasicAttack', 'BasicDefense', 'BasicHeal', 'SelfHeal', 'TargetingDefense', 'TargetingArea', 'TargetingDashLocked', 'TargetingHeal') }
+        'CombatLifecycle' { @('AreaReleaseCasting', 'AreaReleaseResult', 'AreaStunCasting', 'AreaStunStopped') }
+        'CombatExpansion' { @('DashActive', 'DashEnded', 'Downed', 'RescueActive', 'RescueDone', 'TargetingDashReady') }
+        default { @() }
+    }
+    foreach ($prefix in @('Primary', 'Partner')) { foreach ($stage in $stages) { "${prefix}Visual${stage}" } }
+    if ($Mode -eq 'Combat') {
+        'ServerTargetingHealUncommitted'
+        'ServerCombatSelfHealReady'
+        'ServerCombatSelfHealSettlement'
+        'ServerCombatSelfHealPartnerRestored'
+        'PrimarySelfHealInputPreview'
+        'PrimarySelfHealInputReleased'
+        'PrimarySelfHealPredicted'
+        'PrimarySelfHealConfirmed'
+        foreach ($prefix in @('Primary', 'Partner')) {
+            "${prefix}SelfHealReady"
+            "${prefix}SelfHealOutcome"
+            "${prefix}SelfHealEffectObserved"
+            foreach ($stage in @('TargetingDefense', 'TargetingArea', 'TargetingDashLocked', 'TargetingHeal')) {
+                "${prefix}${stage}InputObserved"
+                "${prefix}${stage}Cancelled"
+                "${prefix}${stage}InputDone"
+            }
+        }
+    }
+    if ($Mode -eq 'CombatExpansion') {
+        'PartnerVisualFInput'
+        'PartnerExpansionDashLearned'
+        'ServerExpansionDashPartnerLearned'
+        foreach ($prefix in @('Primary', 'Partner')) {
+            "${prefix}TargetingDashReadyInputObserved"
+            "${prefix}TargetingDashReadyCancelled"
+            "${prefix}TargetingDashReadyInputDone"
+        }
+    }
+    if ($Mode -eq 'CombatLifecycle') {
+        'PrimaryAreaReleaseEffectObserved'
+        'PartnerAreaReleaseEffectObserved'
+    }
 }
 
 function Get-CaseVerdict {
@@ -217,7 +327,7 @@ function Get-CaseVerdict {
         # 服务器自身通过不能代替远端确认；两端入场也必须分别有证据。
         $roles = if ($name -eq 'Join') { @('Server', 'Client') }
             elseif ($name -like 'Partner*') { @('Partner') }
-            elseif ($name -like 'Primary*' -or ($Mode -in @('Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle') -and $name -eq 'Complete')) { @('Client') }
+            elseif ($name -like 'Primary*' -or ($Mode -in @('Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle', 'CombatExpansion', 'CoopEscape') -and $name -eq 'Complete')) { @('Client') }
             elseif ($name -like 'Motion*' -and $name -ne 'MotionServerObserved') { @('Client') }
             else { @('Server') }
         foreach ($role in $roles) {
@@ -420,6 +530,27 @@ if ($SelfTest) {
         }
         if ((Get-CaseVerdict $wrongRole $combatRequired 'Combat').status -ne 'failed') { throw "Server incorrectly satisfied combat client assertions: $role" }
     }
+
+    # 自疗不能以旧队友粒子、只有生命结算、单端截图或服务器代替拥有者观察蒙混通过。
+    $visualCombatRequired = @($combatRequired) + @(Get-VisualRequiredAssertions -Mode 'Combat')
+    $visualCombatEvents = @($combatEvents)
+    foreach ($name in @(Get-VisualRequiredAssertions -Mode 'Combat')) {
+        $role = if ($name -like 'Primary*') { 'Client' } elseif ($name -like 'Partner*') { 'Partner' } else { 'Server' }
+        $visualCombatEvents += [pscustomobject]@{ token = 'combat'; mode = 'Combat'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true }
+    }
+    if ((Get-CaseVerdict $visualCombatEvents $visualCombatRequired 'Combat').status -ne 'passed') { throw 'Runner rejected complete visual combat evidence' }
+    foreach ($name in @('ServerCombatSelfHealReady', 'ServerCombatSelfHealSettlement', 'ServerCombatSelfHealPartnerRestored',
+        'PrimarySelfHealInputPreview', 'PrimarySelfHealInputReleased', 'PrimarySelfHealPredicted', 'PrimarySelfHealConfirmed',
+        'PrimarySelfHealReady', 'PartnerSelfHealReady', 'PrimarySelfHealOutcome', 'PartnerSelfHealOutcome',
+        'PrimarySelfHealEffectObserved', 'PartnerSelfHealEffectObserved', 'PrimaryVisualSelfHeal', 'PartnerVisualSelfHeal')) {
+        $missing = @($visualCombatEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $visualCombatRequired 'Combat').status -ne 'failed') { throw "Visual combat accepted missing self-heal evidence: $name" }
+        if ($name -like 'Primary*' -or $name -like 'Partner*') {
+            $wrongRole = $visualCombatEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+            foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.assertion -eq $name) { $event.role = 'Server' } }
+            if ((Get-CaseVerdict $wrongRole $visualCombatRequired 'Combat').status -ne 'failed') { throw "Server replaced independent self-heal observation: $name" }
+        }
+    }
     $reconnectRequired = @(Get-RequiredAssertions -Mode 'CombatReconnect')
     $reconnectEvents = @()
     foreach ($name in $reconnectRequired) {
@@ -456,6 +587,38 @@ if ($SelfTest) {
         $wrongRole = $lifecycleEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
         foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.role -eq $role) { $event.role = 'Server' } }
         if ((Get-CaseVerdict $wrongRole $lifecycleRequired 'CombatLifecycle').status -ne 'failed') { throw "Server incorrectly satisfied lifecycle client assertions: $role" }
+    }
+    $visualLifecycleRequired = @($lifecycleRequired) + @(Get-VisualRequiredAssertions -Mode 'CombatLifecycle')
+    $visualLifecycleEvents = @($lifecycleEvents)
+    foreach ($name in @(Get-VisualRequiredAssertions -Mode 'CombatLifecycle')) {
+        $role = if ($name -like 'Primary*') { 'Client' } elseif ($name -like 'Partner*') { 'Partner' } else { 'Server' }
+        $visualLifecycleEvents += [pscustomobject]@{ token = 'lifecycle'; mode = 'CombatLifecycle'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true }
+    }
+    if ((Get-CaseVerdict $visualLifecycleEvents $visualLifecycleRequired 'CombatLifecycle').status -ne 'passed') { throw 'Runner rejected complete visual lifecycle evidence' }
+    foreach ($name in @('PrimaryAreaReleaseEffectObserved', 'PartnerAreaReleaseEffectObserved')) {
+        $missing = @($visualLifecycleEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $visualLifecycleRequired 'CombatLifecycle').status -ne 'failed') { throw "Visual lifecycle accepted missing actual particle observation: $name" }
+        $wrongRole = $visualLifecycleEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.assertion -eq $name) { $event.role = 'Server' } }
+        if ((Get-CaseVerdict $wrongRole $visualLifecycleRequired 'CombatLifecycle').status -ne 'failed') { throw "Server replaced independent particle observation: $name" }
+    }
+    $expansionRequired = @(Get-RequiredAssertions -Mode 'CombatExpansion')
+    $expansionEvents = @()
+    foreach ($name in $expansionRequired) {
+        $roles = if ($name -eq 'Join') { @('Server', 'Client') } elseif ($name -like 'Partner*') { @('Partner') }
+            elseif ($name -like 'Primary*' -or $name -eq 'Complete') { @('Client') } else { @('Server') }
+        foreach ($role in $roles) { $expansionEvents += [pscustomobject]@{ token = 'expansion'; mode = 'CombatExpansion'; role = $role; status = 'ASSERT'; assertion = $name; passed = $true } }
+    }
+    foreach ($role in @('Server', 'Client', 'Partner')) { $expansionEvents += [pscustomobject]@{ token = 'expansion'; mode = 'CombatExpansion'; role = $role; status = 'DONE'; passed = $true } }
+    if ((Get-CaseVerdict $expansionEvents $expansionRequired 'CombatExpansion').status -ne 'passed') { throw 'Runner rejected complete expansion evidence' }
+    foreach ($name in $expansionRequired) {
+        $missing = @($expansionEvents | Where-Object { $_.status -ne 'ASSERT' -or $_.assertion -ne $name })
+        if ((Get-CaseVerdict $missing $expansionRequired 'CombatExpansion').status -ne 'failed') { throw "CombatExpansion accepted missing assertion: $name" }
+    }
+    foreach ($role in @('Client', 'Partner')) {
+        $wrongRole = $expansionEvents | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        foreach ($event in $wrongRole) { if ($event.status -eq 'ASSERT' -and $event.role -eq $role) { $event.role = 'Server' } }
+        if ((Get-CaseVerdict $wrongRole $expansionRequired 'CombatExpansion').status -ne 'failed') { throw "Server incorrectly satisfied expansion client assertions: $role" }
     }
     $trafficRequired = @(Get-RequiredAssertions -Mode 'CombatTraffic')
     $trafficEvents = @()
@@ -567,6 +730,10 @@ if ($GameExecutablePath) {
     }
 }
 if (-not $PlanOnly -and -not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) { throw "Executable not found: $ExecutablePath" }
+$serverUsesEditor = $ServerExecutablePath -and ([IO.Path]::GetFileNameWithoutExtension($ServerExecutablePath) -in @('UnrealEditor', 'UnrealEditor-Cmd'))
+$serverBinaryPath = if ($ServerExecutablePath) { [IO.Path]::GetFullPath($ServerExecutablePath) } else { $ExecutablePath }
+$serverBuildKind = if ($serverUsesEditor -or (-not $ServerExecutablePath -and $BuildKind -eq 'editor-game')) { 'editor-dedicated' } else { 'explicit-server-binary-requires-runtime-authority-check' }
+$serverBinaryHash = if (Test-Path -LiteralPath $serverBinaryPath -PathType Leaf) { (Get-FileHash -LiteralPath $serverBinaryPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
 if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) { throw "Project not found: $ProjectPath" }
 $RunId = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $ProjectRoot "Saved/NetworkValidation/$RunId" }
@@ -612,7 +779,7 @@ if ($BuildKind -eq 'editor-game') {
 }
 $report = [ordered]@{
     schemaVersion = 1; runId = $RunId; generatedAtUtc = [DateTime]::UtcNow.ToString('o'); status = 'running'; planOnly = [bool]$PlanOnly
-    environment = [ordered]@{ machine = $env:COMPUTERNAME; engineAssociation = $projectDescription.EngineAssociation; executable = $ExecutablePath; executableVersion = $exeVersion; executableSha256 = $exeHash; projectModule = $projectModule; runtimeGameplayConfig = $runtimeConfig; buildKind = $BuildKind; map = $Map; nullRhi = (-not ($Visible -or $Offscreen)); offscreenDx12 = [bool]$Offscreen; topology = 'One local dedicated server and two separate remote client processes'; visualValidation = $false }
+    environment = [ordered]@{ machine = $env:COMPUTERNAME; engineAssociation = $projectDescription.EngineAssociation; executable = $ExecutablePath; executableVersion = $exeVersion; executableSha256 = $exeHash; projectModule = $projectModule; runtimeGameplayConfig = $runtimeConfig; buildKind = $BuildKind; serverExecutable = $serverBinaryPath; serverExecutableSha256 = $serverBinaryHash; serverBuildKind = $serverBuildKind; map = $Map; nullRhi = (-not ($Visible -or $Offscreen)); offscreenDx12 = [bool]$Offscreen; topology = 'One local dedicated server and two separate remote client processes'; visualValidation = $false }
     provenance = [ordered]@{ gitCommit = $gitCommit; dirty = ($gitStatus.Count -gt 0); gitStatus = $gitStatus; sourceFingerprintSha256 = $fingerprint; sourceManifest = $sourceManifest; gameplayConfigPath = $configPath; gameplayConfigSha256 = $configHash; gameplayConfigText = $configText }
     scope = @('Assertions represent the driver checks, not manual visual acceptance.', 'PktLag values are emulator parameters applied to all three peers, not measured RTT.', 'RideMotion retains per-role, per-phase runtime measurements; they do not certify rendered smoothness.', 'CombatTraffic uses server UNetDriver cumulative outbound bytes/packets, including overhead, ACKs, retransmissions and all game/test traffic. Emulated loss/delay can still be counted; these are not NIC packet captures or GAS-only costs.', 'Provenance gameplayConfig fields describe source files; environment.runtimeGameplayConfig describes the located runtime file, not proof that the engine loaded it.')
     cases = @(); summaries = @()
@@ -649,24 +816,37 @@ try {
         $token = "$RunId-$caseIndex"
         $result = [ordered]@{
             id = $caseId; token = $token; mode = $case.mode; profile = $case.profile; iteration = $case.iteration
+            visualAcceptanceFixture = [bool]$VisualAcceptance
+            diagnosticOnly = [bool]$EscapeMovementDiagnostic
+            visualCaptureContract = $(if ($VisualAcceptance) { 'Controlled fixture, not normal escape playthrough. Original damage/state assertions retained. Both owning players retain original camera/FOV and require current-token nonempty PNG before observation receipts. Expansion rescue uses real F press/hold/release. Human image inspection is still required.' } else { $null })
             platformNetHz = $PlatformNetHz; platformSyncMode = $PlatformSyncMode; platformMotion = $PlatformMotion
             samplingDurationSource = $(if ($case.mode -eq 'CombatTraffic') { 'combatTrafficMetrics[0].metrics.elapsedSeconds; server monotonic clock, excludes setup/warmup/verification' } else { 'motionMetrics[].metrics.elapsedSeconds, separately measured per role and phase' })
             combatTrafficContract = $(if ($case.mode -eq 'CombatTraffic') { [ordered]@{ scheduleVersion = 'projectile-energy-v2'; warmupSeconds = 3; sampleSeconds = 15; projectileIntervalSeconds = .5; projectileSpawns = 30; energyIntervalSeconds = .25; energyUpdates = 60; energyValues = @(30, 70); maxFps = 30; minMeasuredServerFps = 28; maxMeasuredServerFps = 34; connections = 2 } } else { $null })
-            combatLifecycleContract = $(if ($case.mode -eq 'CombatLifecycle') { [ordered]@{ areaWindupSeconds = 3; areaCooldownRule = 'max(configured cooldown, test windup + configured recovery + 1 second)'; ruleScope = 'Transient per-character config copies in server and both client processes; actual recovery retained, no asset or global CDO mutation'; cancellationCases = @('BeforeAuthorityHandoff', 'AfterCaughtUpAndReceivedCastingEffect'); movementInput = 'Owned PlayerController InputKey W press/release through EnhancedInput and CMC; no SetWalking or direct movement input'; movementCases = @('Join', 'Release', 'Cancel', 'ConfirmedCancel', 'StunExpiry'); minimumForwardTravelCm = 150; movementRequiredRoles = @('Server', 'Client', 'Partner') } } else { $null })
+            combatLifecycleContract = $(if ($case.mode -eq 'CombatLifecycle') { [ordered]@{ areaWindupSeconds = 3; areaCooldownRule = 'max(configured cooldown, test windup + configured recovery + 1 second)'; ruleScope = 'Transient per-character config copies in server and both client processes; actual recovery retained, no asset or global CDO mutation'; cancellationCases = @('BeforeAuthorityHandoff', 'AfterCaughtUpAndReceivedCastingEffect'); movementInput = 'Owned PlayerController InputKey W press/release through EnhancedInput and CMC; no SetWalking or direct movement input for player pawns'; movementCases = @('Join', 'Release', 'Cancel', 'ConfirmedCancel', 'StunExpiry'); minimumForwardTravelCm = 150; movementRequiredRoles = @('Server', 'Client', 'Partner'); attackAimCases = @('Snapshot', 'Moving'); activationAimYaw = 45; currentServerControlYaw = -90; lateralTargetSpeedCmPerSecond = 200; targetMotionStart = 'Actual authoritative projectile spawn'; targetMotion = 'CMC integrates position; no runtime teleport; not historical rewind'; hitEvidence = 'Server spawn/launch direction and one health settlement; each independent client observes one health transition' } } else { $null })
+            combatExpansionContract = $(if ($case.mode -eq 'CombatExpansion') { [ordered]@{ dashUnlock = 'Owning progression learn RPC, including repeated request'; dashDurationSeconds = 1.2; dashCooldownMinimumSeconds = 6; dashRuleScope = 'Transient copies in all peers; original cost15 and distance retained; replicated ground, no player SetWalking'; dashCases = @('Accepted prediction and key catch-up', 'Authority root after real displacement and natural root expiry', 'Held property state with actual GAS resource rejection and local rollback'); reflection = 'Server projectile and real parry GE fixture lasting2s; revision2/owner observed independently before one returned hit; not client projectile prediction or Q timing acceptance'; progression = 'Server reward id dedup; owning learn/equip RPCs; private state vs public passive attributes; no save/load or account persistence claim'; rescueDurationSeconds = 4; bleedoutMinimumSeconds = 45; rescueRuleScope = 'Transient peer copies allow independent weak-network observations before interrupt; production default2s rescue is not its timing claim'; rescue = @('Downed deadline', 'Owning cancel', 'Authority stun interrupt', 'One30percentHealth completion'); exclusions = @('Dash/Downed/progression reconnect expansion', 'Manual visual acceptance', 'Public cloud', 'Third simultaneous rescuer') } } else { $null })
+            combatReconnectContract = $(if ($case.mode -eq 'CombatReconnect') { [ordered]@{ reconnectLifeStates = @('Live', 'Downed', 'Dead'); personalResources = 'Live73HP/37Energy remain exact after growth initialization'; persistentState = 'Independent continuous burn reference validates offline damage and actual timer phase; shield/Root/Burn replicated to each client'; growth = 'Real owner learns Dash/equips Fortitude before disconnect; stable profile, level2, Dash1 and maxHP125 retained'; cooldowns = @('Attack', 'Defend', 'Heal', 'Area', 'Dash'); downedDurationSeconds = 45; unfinishedRescueDurationSeconds = 8; downedRuleScope = 'Transient character configs; real old rescue is interrupted by disconnect; restored downed naturally bleeds out at original deadline before the final dead reconnect'; exclusions = @('Account authentication', 'Cloud persistence', 'Manual visual quality') } } else { $null })
             port = $port; startedAtUtc = [DateTime]::UtcNow.ToString('o'); durationSeconds = 0; status = 'planned'
             requiredAssertions = @(Get-RequiredAssertions -Mode $case.mode); commands = @(); peers = @(); events = @(); errors = @(); motionMetrics = @(); combatTrafficMetrics = @()
         }
+        if ($VisualAcceptance) { $result.requiredAssertions = @($result.requiredAssertions) + @(Get-VisualRequiredAssertions -Mode $case.mode) }
         $network = $profileSettings[$case.profile]
         $peerSpecs = @{}
         foreach ($role in @('Server', 'Partner', 'Client')) {
             $logPath = Join-Path $OutputDirectory "$caseId-$role.log"
             $url = if ($role -eq 'Server') { $Map } else { '/Game/UI/DSMenu' }
             $arguments = @()
-            if ($BuildKind -eq 'editor-game') { $arguments += $ProjectPath }
+            # 可显式以 Editor DS 验证打包客户端；不能把 Game.exe 加 -server 当成独立 Server 构建。
+            # 仅编辑器进程需要工程参数，报告分别记录两种二进制，DS 零本地玩家断言仍必须通过。
+            if (($role -eq 'Server' -and $serverUsesEditor) -or ($BuildKind -eq 'editor-game' -and -not ($role -eq 'Server' -and $ServerExecutablePath))) { $arguments += $ProjectPath }
             $arguments += @($url, '-game', '-NoSplash', '-NoSound', '-unattended', '-DDC=InstalledNoZenLocalFallback', "-abslog=$logPath", "-port=$port", "-CoopTestToken=$token", "-CoopNetTest=$($case.mode)", "-CoopTestRole=$role", "-PktLag=$($network.lag)", "-PktLagVariance=$($network.variance)", "-PktLoss=$($network.loss)")
+            if (($case.mode -eq 'CoopEscape' -or $VisualAcceptance) -and $role -ne 'Server') {
+                $arguments += "-CoopEscapeCaptureDir=$(Join-Path $OutputDirectory ($caseId + '-Visual/' + $role))"
+            }
+            if ($VisualAcceptance) { $arguments += '-VisualAcceptance' }
+            if ($EscapeMovementDiagnostic) { $arguments += '-EscapeMovementDiagnostic' }
             if ($role -eq 'Server') { $arguments += '-server' }
             $arguments += @("-CoopServerAddress=127.0.0.1:$port")
-            if (($Visible -or $Offscreen) -and $role -ne 'Server') { $arguments += @('-windowed', '-ResX=960', '-ResY=540') } else { $arguments += '-NullRHI' }
+            if (($Visible -or $Offscreen) -and $role -ne 'Server') { $arguments += @('-windowed', "-ResX=$RenderWidth", "-ResY=$RenderHeight") } else { $arguments += '-NullRHI' }
             # 离屏使用项目采用的 DX12 渲染路径，窗口仍隐藏；不能与 NullRHI 的性能数据混算。
             if ($Offscreen -and $role -ne 'Server') { $arguments += @('-RenderOffscreen', '-dx12') }
             # 并发进程各用 GUID 子目录，着色器临时文件留在项目 Saved 中，不写用户目录。
@@ -760,7 +940,7 @@ try {
 }
 finally {
     foreach ($group in @($report.cases | Group-Object {
-        if ($_.mode -in @('Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle')) { "$($_.mode)/$($_.profile)" }
+        if ($_.mode -in @('Combat', 'CombatTraffic', 'CombatReconnect', 'CombatLifecycle', 'CombatExpansion', 'CoopEscape')) { "$($_.mode)/$($_.profile)" }
         else { "RideMotion/$($_.profile)/$($_.platformNetHz)Hz/$($_.platformSyncMode)/$($_.platformMotion)" }
     })) {
         $report.summaries += [ordered]@{
@@ -808,8 +988,9 @@ finally {
         }
     }
     if (@($report.cases | Where-Object mode -eq 'Combat').Count -gt 0) { $markdown.Add('Combat checks authoritative damage/healing/death, instant skills and Area predicting real cost/cooldown effects before the local call returns, PredictionKey catch-up without double cost, and rejection after server-only cooldown/resource/target/death divergence. Area adds cooldown/resource rejection with keyed casting-effect rollback and a legal asynchronous release/recovery retry. Rejection fixtures briefly delay pawn property replication while preserving the real GAS RPC path; the owner must observe real predicted effects, rejection and local rollback before the authoritative fixture is released. Each condition is followed by a legal double-click retry; death retries use an intentional exit and a new session, not personal respawn. Both clients independently verify the replicated state. It does not certify animation, rendered projectile quality or full AI navigation.') }
-    if (@($report.cases | Where-Object mode -eq 'CombatReconnect').Count -gt 0) { $markdown.Add('CombatReconnect closes the real primary connection and uses the engine network-failure entry to exercise GI recovery and the owned-controller admission handshake. A new controller/pawn must restore health, owner energy, all four elapsed cooldowns, remaining stun, death/collision and position while the partner controller/pawn and shared progress remain unchanged. Both connections independently observe restored control; unfinished casting is not resumed. Ticket active/invalid/rotation/lost-receipt boundaries are checked at the server admission entry; ticket values are never logged. This is not a fresh-session or same-pawn respawn test.') }
+    if (@($report.cases | Where-Object mode -eq 'CombatReconnect').Count -gt 0) { $markdown.Add('CombatReconnect closes the real primary connection three times (live, downed, dead), using engine network failure, GI recovery and the owned admission handshake. Before disconnect, the owner learns Dash and equips Fortitude through real progression RPCs; resources then remain exactly73HP/37Energy. Replacement pawns retain the same profile, level2, Dash1 spec, Fortitude1/maxHP125, five elapsed cooldowns and applicable control/status state. An uninterrupted real burn reference checks offline shield consumption and actual next-period phase. Both peers observe live/dead/downed current state; observers rely only on public values, not remote private progression. The downed fixture uses transient45s bleedout/8s old rescue rules: a real unfinished partner rescue is interrupted by disconnect, no half action resumes, and natural bleedout must occur at the original deadline before the final dead reconnect. Partner controller/pawn and shared progress remain unchanged. Ticket active/invalid/rotation/lost-receipt boundaries use the server admission entry; ticket values are never logged. This is not account/cloud persistence, same-pawn respawn or visual acceptance.') }
     if (@($report.cases | Where-Object mode -eq 'CombatLifecycle').Count -gt 0) { $markdown.Add('CombatLifecycle starts the primary connection after a server enemy was already stunned. Only this mode uses transient per-character config copies in all three processes with Area.Windup=3 seconds and Area.Cooldown=max(configured cooldown, test windup+configured recovery+1 second), retaining the actual recovery and leaving assets, the global CDO and all other rules unchanged. It checks local Area prediction keys and keyed cost/cooldown effects, one server settlement, cancellation both before confirmation and after key catch-up plus receipt of the same-key authoritative Casting effect, and server stun interruption. Cancellation must immediately clear owner casting without refunding its one cost or deleting cooldown; the server checks retained cooldown and no damage after the original release deadline. Both clients independently observe final casting/health/resource state. After admission, normal release, both cancellations and actual stun expiry, each owner presses/releases W through its real PlayerController/EnhancedInput mapping: both local replicas and the authoritative pawns must move forward at least 150cm without the test changing movement mode or teleporting during input. The aiming floor is replicated. This is not rendered animation/VFX/UI acceptance, arbitrary target-data prediction, or public-cloud reachability.') }
+    if (@($report.cases | Where-Object mode -eq 'CombatExpansion').Count -gt 0) { $markdown.Add('CombatExpansion uses one real DS and two remote owning clients. It learns Dash through the real progression component RPC before testing keyed local cost/CD prediction, authority CMC movement, root interruption and resource-rejection rollback while property state is held. Only this fixture extends Dash duration to1.2s/CD>=6s and Rescue duration to4s/Bleedout>=45s in transient config copies on all peers, allowing independent weak-network observations before interrupts; these are not the production2s rescue timing. Dash cost15/distance remain configured and movement is grounded on a replicated floor. Reflection uses an authority-spawned projectile and a real server Parry GE with a2s fixture window, not client projectile prediction or Q short-window timing: both peers must receive revision2/owner and the returned damage. Progression checks reward dedup, real owning learn/equip RPCs, points and private State routing; rescue checks downed, owned cancellation, stun interruption and one30%HP completion. It does not verify new-feature reconnect, disk saves, third-rescuer races, rendered quality or public-cloud reachability. Old terminal-death scenarios explicitly disable downed only in their fixtures.') }
     if (@($report.cases | Where-Object mode -eq 'RideMotion').Count -gt 0) { $markdown.Add('RideMotion phase measurements are preserved as complete events in each case''s motionMetrics array in report.json, including role, phase, sample count, base/falling observations and correction distances. Missing or non-finite measurements fail the case; the numerical checks are not a replacement for visual acceptance.') }
     if (@($report.cases | Where-Object mode -eq 'RideMotion').Count -gt 0 -and -not $PlanOnly) { $markdown.Add('RideMotion client Jump timeline: timeline-<case id>.svg, plus -samples.csv, -corrections.csv, -move-pairs.csv and -all-moves.csv. Moves are joined by CMC timestamp; server/client World clocks are not compared. This is not a packet trace or proof of visual smoothness.') }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'summary.md'), ($markdown -join "`r`n"), $Utf8)

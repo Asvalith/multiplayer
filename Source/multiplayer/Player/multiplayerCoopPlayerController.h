@@ -64,6 +64,7 @@ public:
 	void ReceiveCoopGameWon();
 
 protected:
+	virtual void SetupInputComponent() override;
 	// 控制器生命周期与引擎通知。
 	/** 实例进入 World 时订阅退出失败回执，与 EndPlay 对称。 */
 	virtual void BeginPlay() override;

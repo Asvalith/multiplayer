@@ -14,7 +14,25 @@ void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	//属性同步注册
 	DOREPLIFETIME(AmultiplayerCoopGameState, ObjectiveState);
+	DOREPLIFETIME(AmultiplayerCoopGameState, EncounterState);
 }
+
+// 只发布实际变化，不因计时器或角色状态重复通知增加网络和HUD工作。
+void AmultiplayerCoopGameState::ApplyEncounterState(const FmultiplayerCombatEncounterState& NewState)
+{
+	if (!HasAuthority()) return;
+	FmultiplayerCombatEncounterState Next = NewState;
+	Next.TotalWaves = FMath::Clamp(Next.TotalWaves, 0, 10);
+	Next.Wave = FMath::Clamp(Next.Wave, 0, Next.TotalWaves);
+	Next.LivingEnemies = FMath::Max(0, Next.LivingEnemies);
+	if (EncounterState.Wave == Next.Wave && EncounterState.TotalWaves == Next.TotalWaves
+		&& EncounterState.LivingEnemies == Next.LivingEnemies && EncounterState.bActive == Next.bActive) return;
+	EncounterState = Next;
+	OnRep_EncounterState();
+	ForceNetUpdate();
+}
+
+void AmultiplayerCoopGameState::OnRep_EncounterState() { OnEncounterChanged.Broadcast(); }
 
 //服务器更新状态
 void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopObjectiveState& NewObjectiveState)
@@ -32,10 +50,12 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopOb
 	{
 		SanitizedState.bGameWon = false;
 	}
+	if (SanitizedState.bGameWon) SanitizedState.bGameLost = false;
 	//跳过无意义的更新
 	if (ObjectiveState.ActivatedKeys == SanitizedState.ActivatedKeys
 		&& ObjectiveState.RequiredKeys == SanitizedState.RequiredKeys
-		&& ObjectiveState.bGameWon == SanitizedState.bGameWon)
+		&& ObjectiveState.bGameWon == SanitizedState.bGameWon
+		&& ObjectiveState.bGameLost == SanitizedState.bGameLost)
 	{
 		return;
 	}
@@ -55,6 +75,8 @@ void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 	//计算胜利（边沿触发）
 	const bool bBecameGameWon = !bLastNotifiedGameWon && StateSnapshot.bGameWon;
 	bLastNotifiedGameWon = StateSnapshot.bGameWon;
+	const bool bBecameGameLost = !bLastNotifiedGameLost && StateSnapshot.bGameLost;
+	bLastNotifiedGameLost = StateSnapshot.bGameLost;
 	//广播进度变化
 	OnObjectiveProgressChanged.Broadcast(StateSnapshot.ActivatedKeys,StateSnapshot.RequiredKeys);
 	//广播胜利事件
@@ -62,4 +84,5 @@ void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 	{
 		OnGameWon.Broadcast();
 	}
+	if (bBecameGameLost) OnGameLost.Broadcast();
 }

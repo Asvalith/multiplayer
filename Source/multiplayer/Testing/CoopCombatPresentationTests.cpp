@@ -4,9 +4,11 @@
 
 #include "Misc/AutomationTest.h"
 #include "AbilitySystemComponent.h"
+#include "AbilitySystemGlobals.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequence.h"
+#include "Animation/BlendSpace.h"
 #include "Animation/Skeleton.h"
 #include "Blueprint/UserWidget.h"
 #include "Camera/CameraComponent.h"
@@ -16,6 +18,7 @@
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatPresentation.h"
+#include "Combat/multiplayerCombatProgression.h"
 #include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Components/Border.h"
@@ -28,22 +31,27 @@
 #include "Components/ProgressBar.h"
 #include "Components/SizeBox.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "GameplayCueManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "Particles/ParticleSystem.h"
 #include "Particles/ParticleSystemComponent.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 #include "Player/multiplayerCharacter.h"
 #include "Slate/SObjectWidget.h"
 #include "TimerManager.h"
@@ -281,9 +289,12 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	// UE5.5 没有 ObjectHasAnyTimers；公开 ListTimers 同时列出活动/暂停/待执行项，按完整对象路径一次检查。
 	const auto HasWidgetTimer = [&]
 	{
+		// 日志由独立线程分发；隔离上次输出并等本次完成，不能把旧 Timer 行当成当前泄漏。
+		GLog->FlushThreadedLogs();
 		FStringOutputDevice Output;
 		GLog->AddOutputDevice(&Output);
 		Fixture.World->GetTimerManager().ListTimers();
+		GLog->FlushThreadedLogs();
 		GLog->RemoveOutputDevice(&Output);
 		return Output.Contains(Widget->GetPathName(), ESearchCase::CaseSensitive);
 	};
@@ -314,28 +325,33 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	UVerticalBox* Vitals = Cast<UVerticalBox>(Widget->GetWidgetFromName(TEXT("ARPGVitalsStack")));
 	UBorder* Skills = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("ARPGSkillsPanel")));
 	UBorder* Stats = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("ARPGStatsPanel")));
-	if (!TestNotNull(TEXT("Skills and vitals share one vertical stack"), Vitals)
+	if (!TestNotNull(TEXT("Vitals retain their own vertical stack"), Vitals)
 		|| !TestNotNull(TEXT("Actual ARPG skills panel exists"), Skills)
 		|| !TestNotNull(TEXT("Actual ARPG stats panel exists"), Stats)) return false;
 	UCanvasPanelSlot* VitalsSlot = Cast<UCanvasPanelSlot>(Vitals->Slot);
 	if (!TestNotNull(TEXT("The shared vitals stack has one canvas placement"), VitalsSlot)) return false;
-	TestTrue(TEXT("Skills and vitals are anchored together at bottom left"),
+	TestTrue(TEXT("Vitals remain anchored at bottom left"),
 		VitalsSlot->GetAnchors().Minimum.Equals(FVector2D(0, 1))
 		&& VitalsSlot->GetAnchors().Maximum.Equals(FVector2D(0, 1))
 		&& VitalsSlot->GetAlignment().Equals(FVector2D(0, 1)));
-	TestEqual(TEXT("The stack contains only skills and stats"), Vitals->GetChildrenCount(), 2);
-	TestEqual(TEXT("Skills are the upper row of the shared stack"), Vitals->GetChildIndex(Skills->GetParent()), 0);
-	TestEqual(TEXT("Stats are the lower row of the shared stack"), Vitals->GetChildIndex(Stats->GetParent()), 1);
+	TestEqual(TEXT("The vitals stack contains only stats"), Vitals->GetChildrenCount(), 1);
+	TestEqual(TEXT("Stats retain their independent left-side parent"), Vitals->GetChildIndex(Stats->GetParent()), 0);
+	const auto* SkillCanvas = Cast<UCanvasPanelSlot>(Skills->Slot);
+	if (!TestNotNull(TEXT("Skills have an independent canvas placement"), SkillCanvas)) return false;
+	TestTrue(TEXT("Five skills are centered at the bottom instead of squeezed into the health bar"),
+		SkillCanvas->GetAnchors().Minimum.Equals(FVector2D(.5f, 1))
+		&& SkillCanvas->GetAlignment().Equals(FVector2D(.5f, 1))
+		&& SkillCanvas->GetSize().Equals(FVector2D(800, 160)));
 	TestTrue(TEXT("Skills and stats panels never draw a backing block"),
 		Skills->Background.DrawAs == ESlateBrushDrawType::NoDrawType
 		&& Stats->Background.DrawAs == ESlateBrushDrawType::NoDrawType);
-	const TCHAR* IconNames[] = { TEXT("AttackIcon"), TEXT("DefenseIcon"), TEXT("HealIcon"), TEXT("AreaIcon") };
-	const TCHAR* SlotNames[] = { TEXT("AttackSlot"), TEXT("DefenseSlot"), TEXT("HealSlot"), TEXT("AreaSlot") };
-	const TCHAR* CounterNames[] = { TEXT("AttackCooldownText"), TEXT("DefenseCooldownText"), TEXT("HealCooldownText"), TEXT("AreaCooldownText") };
-	UImage* Icons[4] = {};
-	UBorder* SkillSlots[4] = {};
-	UTextBlock* Counters[4] = {};
-	FLinearColor CounterColors[4];
+	const TCHAR* IconNames[] = { TEXT("AttackIcon"), TEXT("DefenseIcon"), TEXT("HealIcon"), TEXT("AreaIcon"), TEXT("DashIcon") };
+	const TCHAR* SlotNames[] = { TEXT("AttackSlot"), TEXT("DefenseSlot"), TEXT("HealSlot"), TEXT("AreaSlot"), TEXT("DashSlot") };
+	const TCHAR* CounterNames[] = { TEXT("AttackCooldownText"), TEXT("DefenseCooldownText"), TEXT("HealCooldownText"), TEXT("AreaCooldownText"), TEXT("DashCooldownText") };
+	UImage* Icons[5] = {};
+	UBorder* SkillSlots[5] = {};
+	UTextBlock* Counters[5] = {};
+	FLinearColor CounterColors[5];
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Icons); ++Index)
 	{
 		Icons[Index] = Cast<UImage>(Widget->GetWidgetFromName(FName(IconNames[Index])));
@@ -346,10 +362,10 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 		UOverlay* IconLayer = Cast<UOverlay>(Icons[Index]->GetParent());
 		USizeBox* IconSize = IconLayer ? Cast<USizeBox>(IconLayer->GetParent()) : nullptr;
 		if (!TestNotNull(TEXT("Each skill icon has its own size box"), IconSize)) return false;
-		TestTrue(TEXT("40-unit skill icons at design scale 2 are 80 by 80"),
+		TestTrue(TEXT("44-unit skill icons at design scale 2 are 88 by 88"),
 			IconSize->IsWidthOverride() && IconSize->IsHeightOverride()
-			&& FMath::IsNearlyEqual(IconSize->GetWidthOverride(), 80.f)
-			&& FMath::IsNearlyEqual(IconSize->GetHeightOverride(), 80.f));
+			&& FMath::IsNearlyEqual(IconSize->GetWidthOverride(), 88.f)
+			&& FMath::IsNearlyEqual(IconSize->GetHeightOverride(), 88.f));
 		CounterColors[Index] = Counters[Index]->GetColorAndOpacity().GetSpecifiedColor();
 		TestTrue(TEXT("Cooldown text starts bright and opaque"),
 			CounterColors[Index].A > .99f && CounterColors[Index].GetLuminance() > .8f);
@@ -375,7 +391,8 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Idle casting panel is collapsed"), CastingPanel->GetVisibility() == ESlateVisibility::Collapsed);
 	TestTrue(TEXT("Idle state text is collapsed"), StateText->GetVisibility() == ESlateVisibility::Collapsed);
 	TestFalse(TEXT("Idle HUD has no bound timer"), HasWidgetTimer());
-	for (const UImage* Icon : Icons) TestTrue(TEXT("Available skills start at full icon brightness"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	for (int32 Index = 0; Index < 4; ++Index) TestTrue(TEXT("Learned skills start at full icon brightness"), Icons[Index]->GetColorAndOpacity().Equals(FLinearColor::White));
+	TestTrue(TEXT("The visible fifth slot clearly dims the unlearned dash"), Icons[4]->GetColorAndOpacity().Equals(Unavailable));
 	CheckSkillPresentation(TEXT("Idle"));
 
 	Damage(Player, 40);
@@ -408,7 +425,9 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Expired area cooldown clears its number"), AreaCooldownText->GetText().IsEmpty());
 	TestTrue(TEXT("Expired defense clears its state text"), StateText->GetText().IsEmpty());
 	TestFalse(TEXT("All cooldowns expired so the display timer stops"), HasWidgetTimer());
-	for (const UImage* Icon : Icons) TestTrue(TEXT("Expired cooldowns restore available icon brightness"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	for (int32 Index = 0; Index < 4; ++Index) TestTrue(TEXT("Expired cooldowns restore learned icon brightness"), Icons[Index]->GetColorAndOpacity().Equals(FLinearColor::White));
+	Player->GetProgressionComponent()->RequestLearnSkill(EMultiplayerCombatSkill::Dash);
+	TestTrue(TEXT("Learning dash refreshes the fifth icon through the progression event"), Icons[4]->GetColorAndOpacity().Equals(FLinearColor::White));
 	CheckSkillPresentation(TEXT("Expired"));
 
 	auto* Fresh = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 1200, 100));
@@ -446,6 +465,16 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Feedback expires without a perpetual polling loop"), FeedbackText->GetText().IsEmpty());
 	TestTrue(TEXT("Expired feedback panel is collapsed"), FeedbackPanel->GetVisibility() == ESlateVisibility::Collapsed);
 	TestFalse(TEXT("Expired one-shot feedback leaves no HUD timer"), HasWidgetTimer());
+	auto* PreviewController = Fixture.World->SpawnActor<APlayerController>();
+	if (!TestNotNull(TEXT("Local targeting controller spawned"), PreviewController)) return false;
+	PreviewController->Possess(Third);
+	if (!TestTrue(TEXT("Target preview uses a genuinely locally controlled pawn"), Third->IsLocallyControlled())) return false;
+	Third->OnCombatMessage.Broadcast(FText::FromString(TEXT("上一技能失败")));
+	Third->BeginSkillTargeting(EMultiplayerCombatSkill::Heal);
+	TestTrue(TEXT("Beginning another preview clears the previous skill failure immediately"), FeedbackText->GetText().IsEmpty());
+	TestTrue(TEXT("New preview collapses stale feedback instead of contradicting current eligibility"), FeedbackPanel->GetVisibility() == ESlateVisibility::Collapsed);
+	TestFalse(TEXT("Clearing stale feedback also releases its expiration timer"), HasWidgetTimer());
+	Third->CancelSkillTargeting();
 	Third->CastArea();
 	TestTrue(TEXT("Destroy fixture entered casting"), Third->IsCasting());
 	Third->Destroy();
@@ -460,6 +489,7 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Native destruction begins with active display work"), HasWidgetTimer());
 	// 公开 Slate 生命周期实际调用 NativeDestruct；不直接绕过它手动清理生产 Timer。
 	Slate->ResetWidget();
+	TestNull(TEXT("Slate reset releases the actual HUD object after NativeDestruct"), Slate->GetWidgetObject());
 	TestFalse(TEXT("NativeDestruct clears both widget timers"), HasWidgetTimer());
 	const FString DetachedHealth = HealthText->GetText().ToString();
 	const FString DetachedState = StateText->GetText().ToString();
@@ -808,23 +838,67 @@ bool FCoopCombatEnemyHealthPresentationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("Actual enemy is spawned without a source-pack AI controller"), Enemy)) return false;
 	USkeleton* SourceSkeleton = LoadObject<USkeleton>(nullptr,
 		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SK_CombatMannequin.SK_CombatMannequin"));
+	USkeletalMesh* SourceMesh = LoadObject<USkeletalMesh>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SKM_CombatMannequin.SKM_CombatMannequin"));
+	UPhysicsAsset* SourcePhysics = LoadObject<UPhysicsAsset>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Rigs/PA_Mannequin.PA_Mannequin"));
+	UClass* SourcePostProcess = LoadClass<UAnimInstance>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Rigs/ABP_Manny_PostProcess.ABP_Manny_PostProcess_C"));
 	if (!TestNotNull(TEXT("Imported enemy skeleton exists"), SourceSkeleton)
+		|| !TestNotNull(TEXT("Imported complete enemy mesh exists"), SourceMesh)
+		|| !TestNotNull(TEXT("Imported enemy physics asset exists"), SourcePhysics)
+		|| !TestNotNull(TEXT("Imported complete enemy post-process exists"), SourcePostProcess)
 		|| !TestNotNull(TEXT("Enemy has its imported skeletal mesh"), Enemy->GetMesh()->GetSkeletalMeshAsset())) return false;
+	TestTrue(TEXT("Enemy uses the complete source mesh rather than its Simple version"), Enemy->GetMesh()->GetSkeletalMeshAsset() == SourceMesh);
 	TestTrue(TEXT("Enemy directly reuses the source skeleton"), Enemy->GetMesh()->GetSkeletalMeshAsset()->GetSkeleton() == SourceSkeleton);
+	TestTrue(TEXT("Enemy directly reuses the source physics asset"), Enemy->GetMesh()->GetPhysicsAsset() == SourcePhysics);
+	TestTrue(TEXT("Complete source mesh keeps its source post-process class"), SourceMesh->GetPostProcessAnimBlueprint().Get() == SourcePostProcess);
+	TestTrue(TEXT("Enemy does not override or disable the source post-process"), !Enemy->GetMesh()->GetDisablePostProcessBlueprint()
+		&& Enemy->GetMesh()->GetPostProcessAnimBPClassToBeUsed().Get() == SourcePostProcess);
 	UAnimInstance* Animation = Enemy->GetMesh()->GetAnimInstance();
 	if (!TestNotNull(TEXT("Enemy instantiates its adapted animation blueprint"), Animation)) return false;
 	TestTrue(TEXT("Enemy animation reads CMC through our native parent"), Animation->IsA<UmultiplayerCombatAnimInstance>());
-	for (const TCHAR* PropertyName : { TEXT("AttackMontage"), TEXT("AreaMontage"), TEXT("HealMontage"), TEXT("HitMontage"), TEXT("DeathMontage") })
+	UStaticMeshComponent* Weapon = nullptr;
+	TArray<UStaticMeshComponent*> StaticMeshes;
+	Enemy->GetComponents(StaticMeshes);
+	for (UStaticMeshComponent* Component : StaticMeshes)
+		if (Component->GetFName() == TEXT("EnemyWeapon")) Weapon = Component;
+	if (!TestNotNull(TEXT("Minion has its separate cosmetic weapon component"), Weapon)) return false;
+	TestTrue(TEXT("Cosmetic weapon follows the imported right hand"),
+		Weapon->GetAttachParent() == Enemy->GetMesh() && Weapon->GetAttachSocketName() == TEXT("FengMaoWeapon_Active")
+		&& Enemy->GetMesh()->GetSocketBoneName(Weapon->GetAttachSocketName()) == TEXT("hand_r"));
+	TestTrue(TEXT("Weapon mesh cannot independently settle hits or block characters"),
+		Weapon->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Weapon->GetGenerateOverlapEvents());
+	for (const TCHAR* PropertyName : { TEXT("AttackMontage"), TEXT("HitMontage"), TEXT("DeathMontage") })
 	{
 		const auto* Property = FindFProperty<FObjectPropertyBase>(Enemy->GetClass(), PropertyName);
 		UAnimMontage* Montage = Property ? Cast<UAnimMontage>(Property->GetObjectPropertyValue_InContainer(Enemy)) : nullptr;
 		if (!TestNotNull(TEXT("Enemy action has a compatible montage"), Montage)) return false;
 		TestTrue(TEXT("Enemy action montage uses its source skeleton"), Montage->GetSkeleton() == SourceSkeleton);
+		TestEqual(TEXT("Minion montage has no source-pack business notifies"), Montage->Notifies.Num(), 0);
+		for (const FSlotAnimationTrack& Slot : Montage->SlotAnimTracks)
+			for (const FAnimSegment& Segment : Slot.AnimTrack.AnimSegments)
+			{
+				auto* Sequence = Cast<UAnimSequence>(Segment.GetAnimReference());
+				if (!TestNotNull(TEXT("Minion montage uses its adapted source sequence"), Sequence)) return false;
+				TestTrue(TEXT("Minion action comes from the melee asset copies"),
+					Sequence->GetName().StartsWith(TEXT("AS_Enemy_Melee_")));
+				TestEqual(TEXT("Minion action sequence has no source-pack gameplay callbacks"), Sequence->Notifies.Num(), 0);
+				TestFalse(TEXT("Minion animation does not override CMC movement with root motion"), Sequence->bEnableRootMotion);
+			}
 	}
+	TestNull(TEXT("Ordinary minion has no player's healing montage"), Enemy->GetActionMontage(EMultiplayerCombatAnimation::Heal));
+	TestNull(TEXT("Ordinary minion has no player's area-cast montage"), Enemy->GetActionMontage(EMultiplayerCombatAnimation::Area));
+	UBlendSpace* MeleeLocomotion = LoadObject<UBlendSpace>(nullptr,
+		TEXT("/Game/Combat/Presentation/ARPG/EnemySource/BS_EnemyMeleeLocomotion.BS_EnemyMeleeLocomotion"));
+	if (!TestNotNull(TEXT("Minion uses its dedicated one-handed locomotion blend space"), MeleeLocomotion)) return false;
+	for (const FBlendSample& Sample : MeleeLocomotion->GetBlendSamples())
+		TestTrue(TEXT("One-handed locomotion only uses adapted melee samples, not the old magic movement"),
+			Sample.Animation && Sample.Animation->GetName().StartsWith(TEXT("AS_Enemy_Melee_")));
 	UWidgetComponent* Component = Enemy->FindComponentByClass<UWidgetComponent>();
 	if (!TestNotNull(TEXT("Enemy owns a real health widget component"), Component)) return false;
-	TestTrue(TEXT("Health widget is screen-space and attached to the capsule"), Component->GetWidgetSpace() == EWidgetSpace::Screen
-		&& Component->GetAttachParent() == Enemy->GetCapsuleComponent());
+	TestTrue(TEXT("Health widget is world-space and follows the network-smoothed body"), Component->GetWidgetSpace() == EWidgetSpace::World
+		&& Component->GetAttachParent() == Enemy->GetMesh() && Component->GetManuallyRedraw());
 	auto* Outer = Cast<UmultiplayerEnemyHealthWidget>(Component->GetUserWidgetObject());
 	if (!TestNotNull(TEXT("Enemy BeginPlay created the actual native-backed health layout"), Outer)) return false;
 	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Outer->TakeWidget());
@@ -862,9 +936,11 @@ bool FCoopCombatEnemyHealthPresentationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Real GAS damage commits replacement death"), Replacement->IsAlive());
 	TestTrue(TEXT("Death immediately hides the actual inner health layout"), Inner->GetVisibility() == ESlateVisibility::Collapsed);
 	TestTrue(TEXT("Death immediately empties the health bar"), FMath::IsNearlyZero(Bar->GetPercent()));
+	GLog->FlushThreadedLogs();
 	FStringOutputDevice Timers;
 	GLog->AddOutputDevice(&Timers);
 	Fixture.World->GetTimerManager().ListTimers();
+	GLog->FlushThreadedLogs();
 	GLog->RemoveOutputDevice(&Timers);
 	TestFalse(TEXT("Neither enemy health layout owns a polling timer"), Timers.Contains(Outer->GetPathName(), ESearchCase::CaseSensitive)
 		|| Timers.Contains(Inner->GetPathName(), ESearchCase::CaseSensitive));
@@ -874,6 +950,169 @@ bool FCoopCombatEnemyHealthPresentationTest::RunTest(const FString& Parameters)
 	Enemy->Destroy();
 	TestFalse(TEXT("Enemy EndPlay removes its health subscription"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
 	TestNull(TEXT("Enemy EndPlay releases the component's user widget"), Component->GetUserWidgetObject());
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatMinionWeaponAttachmentTest, "Multiplayer.Combat.MinionWeaponAttachment",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 在实际小兵的待机和挥击骨骼姿态中检查挂接；只验证随手运动，不把变换测试当作握持与穿插的画面验收。
+bool FCoopCombatMinionWeaponAttachmentTest::RunTest(const FString& Parameters)
+{
+	UClass* EnemyClass = LoadClass<AmultiplayerCombatEnemy>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"));
+	UStaticMesh* SourceWeapon = LoadObject<UStaticMesh>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/DemoAssets/Meshes/Weapons/Paragon/FengMao_Weapon.FengMao_Weapon"));
+	if (!TestNotNull(TEXT("Saved minion blueprint exists for weapon attachment"), EnemyClass)
+		|| !TestNotNull(TEXT("Imported polearm mesh exists"), SourceWeapon)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Enemy = Fixture.Character(EnemyClass, FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("Actual minion spawned without a source-pack controller"), Enemy)) return false;
+	USkeletalMeshComponent* Mesh = Enemy->GetMesh();
+	UStaticMeshComponent* Weapon = nullptr;
+	TInlineComponentArray<UStaticMeshComponent*> StaticMeshes;
+	Enemy->GetComponents(StaticMeshes);
+	for (UStaticMeshComponent* Component : StaticMeshes)
+		if (Component->GetFName() == TEXT("EnemyWeapon")) Weapon = Component;
+	if (!TestNotNull(TEXT("Actual minion owns its cosmetic weapon component"), Weapon)) return false;
+	TestTrue(TEXT("Minion uses the imported polearm rather than an empty weapon slot"), Weapon->GetStaticMesh() == SourceWeapon);
+	const FName GripSocket(TEXT("FengMaoWeapon_Active"));
+	TestTrue(TEXT("Polearm uses the source pack's active right-hand grip socket"),
+		Weapon->GetAttachParent() == Mesh && Weapon->GetAttachSocketName() == GripSocket
+		&& Mesh->DoesSocketExist(GripSocket) && Mesh->GetSocketBoneName(GripSocket) == TEXT("hand_r"));
+	TestTrue(TEXT("Polearm cannot block or independently settle melee hits"),
+		Weapon->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Weapon->GetGenerateOverlapEvents());
+	if (!TestTrue(TEXT("Actual skeletal mesh contains the attachment bone"), Mesh->GetBoneIndex(TEXT("hand_r")) != INDEX_NONE)) return false;
+	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Mesh->bEnableUpdateRateOptimizations = false;
+	auto* Animation = Cast<UmultiplayerCombatAnimInstance>(Mesh->GetAnimInstance());
+	UAnimMontage* Attack = Enemy->GetActionMontage(EMultiplayerCombatAnimation::Attack);
+	if (!TestNotNull(TEXT("Actual minion runs its native-backed animation blueprint"), Animation)
+		|| !TestNotNull(TEXT("Actual minion has its adapted melee attack montage"), Attack)) return false;
+	const FTransform Grip = Weapon->GetRelativeTransform();
+	const auto AdvanceAndCheck = [&](const TCHAR* Phase, int32 Frames)
+	{
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			++GFrameCounter;
+			Fixture.World->Tick(LEVELTICK_All, .02f);
+			const FTransform Expected = Grip * Mesh->GetSocketTransform(GripSocket, RTS_World);
+			if (!TestTrue(*FString::Printf(TEXT("%s frame %d follows the evaluated hand transform"), Phase, Frame),
+				Weapon->GetComponentTransform().Equals(Expected, .05f))
+				|| !TestTrue(*FString::Printf(TEXT("%s frame %d retains its saved grip offset"), Phase, Frame),
+					Weapon->GetRelativeTransform().Equals(Grip, .001f))) return false;
+		}
+		return true;
+	};
+	if (!AdvanceAndCheck(TEXT("Idle"), 30)) return false;
+	TestFalse(TEXT("Stationary attachment probe uses the real idle state"), Animation->CombatShouldMove);
+	const FVector IdleHand = Mesh->GetSocketLocation(TEXT("hand_r"));
+	const FVector IdleWeapon = Weapon->GetComponentLocation();
+	// 这里直接播放已连接的表现蒙太奇；技能资格与伤害时机由 MinionMeleeHit 独立验证。
+	if (!TestTrue(TEXT("Connected melee montage starts on the actual animation instance"), Animation->Montage_Play(Attack) > 0.f)) return false;
+	float HandTravel = 0.f;
+	float WeaponTravel = 0.f;
+	const int32 AttackFrames = FMath::Max(1, FMath::CeilToInt(Attack->GetPlayLength() / .02f));
+	for (int32 Frame = 0; Frame < AttackFrames; ++Frame)
+	{
+		if (!AdvanceAndCheck(TEXT("Attack"), 1)) return false;
+		HandTravel = FMath::Max(HandTravel, FVector::Distance(IdleHand, Mesh->GetSocketLocation(TEXT("hand_r"))));
+		WeaponTravel = FMath::Max(WeaponTravel, FVector::Distance(IdleWeapon, Weapon->GetComponentLocation()));
+	}
+	TestTrue(TEXT("Real attack changes the right hand rather than only playing an empty montage"), HandTravel > 1.f);
+	TestTrue(TEXT("Polearm moves through the swing rather than remaining at its idle world position"), WeaponTravel > 1.f);
+	const FVector BeforeMove = Weapon->GetComponentLocation();
+	Enemy->SetActorLocationAndRotation(FVector(350, 120, 100), FRotator(0, 85, 0));
+	if (!AdvanceAndCheck(TEXT("Relocated"), 2)) return false;
+	TestTrue(TEXT("Polearm also follows actor translation and rotation"),
+		FVector::Distance(BeforeMove, Weapon->GetComponentLocation()) > 100.f);
+	AddInfo(FString::Printf(TEXT("Minion polearm attachment: handTravel=%.2fcm weaponTravel=%.2fcm mesh=%s"),
+		HandTravel, WeaponTravel, *GetPathNameSafe(Weapon->GetStaticMesh())));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatEnemyLocomotionTest, "Multiplayer.Combat.EnemyLocomotion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 实际敌人通过 CMC 行走，保留完整网格的后处理；组件空间足骨摆幅不能由胶囊平移代替。
+bool FCoopCombatEnemyLocomotionTest::RunTest(const FString& Parameters)
+{
+	UClass* EnemyClass = LoadClass<AmultiplayerCombatEnemy>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"));
+	if (!TestNotNull(TEXT("Actual enemy blueprint exists for locomotion"), EnemyClass)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Enemy = Fixture.Character(EnemyClass, FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("Actual enemy is spawned above the real floor"), Enemy)) return false;
+	USkeletalMeshComponent* Mesh = Enemy->GetMesh();
+	UCharacterMovementComponent* Movement = Enemy->GetCharacterMovement();
+	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Mesh->bEnableUpdateRateOptimizations = false;
+	Movement->bRunPhysicsWithNoController = true;
+	Movement->SetComponentTickEnabled(true);
+	Movement->SetMovementMode(MOVE_Walking);
+	const auto Advance = [&](int32 Frames, bool bMove = false)
+	{
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			if (bMove) Enemy->AddMovementInput(FVector::ForwardVector);
+			++GFrameCounter;
+			Fixture.World->Tick(LEVELTICK_All, .02f);
+		}
+	};
+	Advance(15);
+	auto* Animation = Cast<UmultiplayerCombatAnimInstance>(Mesh->GetAnimInstance());
+	UAnimInstance* PostProcess = Mesh->GetPostProcessInstance();
+	if (!TestNotNull(TEXT("Enemy runs its adapted native-backed animation"), Animation)
+		|| !TestNotNull(TEXT("Complete enemy mesh runs its original post-process"), PostProcess)) return false;
+	TestTrue(TEXT("Locomotion preserves the complete mesh post-process class"), !Mesh->GetDisablePostProcessBlueprint()
+		&& PostProcess->GetClass() == Mesh->GetSkeletalMeshAsset()->GetPostProcessAnimBlueprint().Get());
+	TestTrue(TEXT("Enemy settles onto the actual fixture floor"), Movement->IsMovingOnGround());
+	const FName Feet[] = { TEXT("foot_l"), TEXT("foot_r") };
+	for (const FName Foot : Feet)
+		if (!TestTrue(*FString::Printf(TEXT("Enemy complete mesh contains %s"), *Foot.ToString()), Mesh->GetBoneIndex(Foot) != INDEX_NONE)) return false;
+	const FVector Start = Enemy->GetActorLocation();
+	float ForwardMin[2] = { MAX_flt, MAX_flt }, ForwardMax[2] = { -MAX_flt, -MAX_flt };
+	for (int32 Sample = 0; Sample < 45; ++Sample)
+	{
+		Advance(2, true);
+		const FVector ComponentForward = Mesh->GetComponentQuat().UnrotateVector(Enemy->GetActorForwardVector());
+		for (int32 Foot = 0; Foot < UE_ARRAY_COUNT(Feet); ++Foot)
+		{
+			const FVector Position = Mesh->GetSocketTransform(Feet[Foot], RTS_Component).GetLocation();
+			const float Forward = FVector::DotProduct(Position, ComponentForward);
+			ForwardMin[Foot] = FMath::Min(ForwardMin[Foot], Forward);
+			ForwardMax[Foot] = FMath::Max(ForwardMax[Foot], Forward);
+		}
+	}
+	const float Travel = FVector::Dist2D(Start, Enemy->GetActorLocation());
+	TestTrue(TEXT("Real input moves the enemy more than 150cm through CMC"), Travel > 150.f);
+	TestTrue(TEXT("Enemy locomotion reads its real current movement"), Animation->CombatShouldMove && Animation->CombatMoveSpeed > 100.f);
+	for (int32 Foot = 0; Foot < UE_ARRAY_COUNT(Feet); ++Foot)
+		TestTrue(*FString::Printf(TEXT("Enemy %s swings more than 10cm in component space with source post-process active"), *Feet[Foot].ToString()),
+			ForwardMax[Foot] - ForwardMin[Foot] > 10.f);
+	AddInfo(FString::Printf(TEXT("Enemy locomotion travel=%.2fcm footForwardRange left=%.2fcm right=%.2fcm postProcess=%s"),
+		Travel, ForwardMax[0] - ForwardMin[0], ForwardMax[1] - ForwardMin[1], *PostProcess->GetClass()->GetPathName()));
+
+	Movement->StopMovementImmediately();
+	Movement->DisableMovement();
+	Advance(15);
+	// 近战需要真实 AI 黑板目标，实际 GAS 攻击与蒙太奇推进由 MinionMeleeHit 验证。
+	Enemy->PlayImpactReaction();
+	const auto* HitField = FindFProperty<FObjectPropertyBase>(Enemy->GetClass(), TEXT("HitMontage"));
+	UAnimMontage* Hit = HitField ? Cast<UAnimMontage>(HitField->GetObjectPropertyValue_InContainer(Enemy)) : nullptr;
+	TestTrue(TEXT("Enemy impact entry really plays the connected hit montage"), Hit && Animation->Montage_IsPlaying(Hit));
+	Advance(4);
+	TestTrue(TEXT("Enemy hit montage advances through real world ticks"), Hit && Animation->Montage_GetPosition(Hit) > .03f);
+	const auto* DeathField = FindFProperty<FObjectPropertyBase>(Enemy->GetClass(), TEXT("DeathMontage"));
+	UAnimMontage* Death = DeathField ? Cast<UAnimMontage>(DeathField->GetObjectPropertyValue_InContainer(Enemy)) : nullptr;
+	UAbilitySystemComponent* ASC = Enemy->GetAbilitySystemComponent();
+	FGameplayEffectSpecHandle Damage = ASC->MakeOutgoingSpec(UmultiplayerDamageEffect::StaticClass(), 1.f, ASC->MakeEffectContext());
+	Damage.Data->SetSetByCallerMagnitude(CombatTags::Data_Damage, Enemy->GetMaxHealth() + 1.f);
+	ASC->ApplyGameplayEffectSpecToSelf(*Damage.Data.Get());
+	TestFalse(TEXT("Real GAS damage commits enemy death"), Enemy->IsAlive());
+	TestTrue(TEXT("GAS death replaces the hit with the connected death montage"), Death && Animation->Montage_IsPlaying(Death));
+	Advance(4);
+	TestTrue(TEXT("Enemy death montage advances through real world ticks"), Death && Animation->Montage_GetPosition(Death) > .03f);
 	return !HasAnyErrors();
 }
 
@@ -944,6 +1183,137 @@ bool FCoopCombatAttackAnimationTimingTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("The final stun has expired normally"), Player->IsStunned());
 	Fixture.World->RemoveOnActorSpawnedHandler(Spawned);
 	AddInfo(FString::Printf(TEXT("Actual attack timing: windup=%.6f recovery=%.6f spawned=%d"), Rule.Windup, Rule.Recovery, TotalSpawned));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAttackCueSnapshotTest, "Multiplayer.Combat.AttackCueSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+
+// 真正生成两种粒子组件，检查网络事件快照，而不是用角色当前朝向替代本次发射方向。
+bool FCoopCombatAttackCueSnapshotTest::RunTest(const FString& Parameters)
+{
+	UParticleSystem* Cascade = LoadObject<UParticleSystem>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/DemoAssets/IggyVFX/Particles/Primary/P_Fireball_Projectile_Cast.P_Fireball_Projectile_Cast"));
+	UNiagaraSystem* Niagara = LoadObject<UNiagaraSystem>(nullptr,
+		TEXT("/Game/Pack_Effects_2/Water_Magic/VFX_Niagara/NS_Water_Magic_Splash2.NS_Water_Magic_Splash2"));
+	if (!TestNotNull(TEXT("Real attack Cascade loads"), Cascade) || !TestNotNull(TEXT("Real alternate Niagara loads"), Niagara)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(1300, 1400, 100));
+	if (!TestNotNull(TEXT("Attack cue caster spawned"), Player)) return false;
+	auto* Config = NewObject<UmultiplayerCombatConfig>(Player);
+	auto* Property = FindFProperty<FObjectPropertyBase>(Player->GetClass(), TEXT("CombatConfig"));
+	if (!TestNotNull(TEXT("Attack cue config property exists"), Property)) return false;
+	Property->SetObjectPropertyValue_InContainer(Player, Config);
+	const FVector Origin = Player->GetCombatMuzzleLocation();
+	const FVector Direction = FRotator(22.f, 73.f, 0.f).Vector();
+	FGameplayCueParameters Feedback(Player->GetAbilitySystemComponent()->MakeEffectContext());
+	Feedback.Location = Origin; Feedback.Normal = Direction;
+	// 显式让新身体朝向、位置与发射时刻不同，模拟网络到达或异步加载期间角色已经转身。
+	Player->SetActorRotation(FRotator(0, -120, 0));
+	Player->SetActorLocation(Player->GetActorLocation() + FVector(300, 200, 0));
+	Config->AttackFeedback.CascadeEffect = Cascade;
+	auto* CascadeCue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
+	CascadeCue->GameplayCueTag = CombatTags::Cue_Attack;
+	CascadeCue->OnExecute_Implementation(Player, Feedback);
+	UParticleSystemComponent* CastParticle = nullptr;
+	for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+		if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->Template == Cascade) CastParticle = *It;
+	if (!TestNotNull(TEXT("Actual Cascade muzzle component is created"), CastParticle)) return false;
+	TestTrue(TEXT("Cascade stays at the stable server launch snapshot"), CastParticle->GetComponentLocation().Equals(Origin, .1f));
+	TestTrue(TEXT("Cascade points along the launch direction including pitch"), CastParticle->GetForwardVector().Equals(Direction, .001f));
+	Config->AttackFeedback.CascadeEffect.Reset(); Config->AttackFeedback.Effect = Niagara;
+	auto* NiagaraCue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
+	NiagaraCue->GameplayCueTag = CombatTags::Cue_Attack;
+	NiagaraCue->OnExecute_Implementation(Player, Feedback);
+	UNiagaraComponent* NiagaraParticle = nullptr;
+	for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+		if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->GetAsset() == Niagara) NiagaraParticle = *It;
+	if (!TestNotNull(TEXT("Actual Niagara muzzle component is created"), NiagaraParticle)) return false;
+	TestTrue(TEXT("Niagara uses the same launch position as Cascade"), NiagaraParticle->GetComponentLocation().Equals(Origin, .1f));
+	TestTrue(TEXT("Niagara uses the same launch direction as Cascade"), NiagaraParticle->GetForwardVector().Equals(Direction, .001f));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatHealResultCueTest, "Multiplayer.Combat.HealResultCueOwnerAndObserver",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+
+// 真正的治疗能力提供上下文；随后调用引擎 RPC 接收实现重现拥有者预测过滤，不能代替双进程网络验收。
+bool FCoopCombatHealResultCueTest::RunTest(const FString& Parameters)
+{
+	UClass* HealCueClass = LoadClass<AmultiplayerCombatCue>(nullptr,
+		TEXT("/Game/Combat/Presentation/Cues/GCN_Heal.GCN_Heal_C"));
+	if (!TestNotNull(TEXT("Formal healing cue class loads"), HealCueClass)) return false;
+	TestTrue(TEXT("Different healers retain independent asynchronous result cue instances"),
+		HealCueClass->GetDefaultObject<AmultiplayerCombatCue>()->bUniqueInstancePerInstigator);
+	UParticleSystem* Cascade = LoadObject<UParticleSystem>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/DemoAssets/ReplenishmentCast/P_AscendTakeoffFalle.P_AscendTakeoffFalle"));
+	if (!TestNotNull(TEXT("Real healing particle loads"), Cascade)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Caster = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(1000, 1000, 100));
+	auto* Recipient = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(1300, 1000, 100));
+	if (!TestNotNull(TEXT("Healer exists"), Caster) || !TestNotNull(TEXT("Different-config recipient exists"), Recipient)) return false;
+	auto* Config = NewObject<UmultiplayerCombatConfig>(Caster);
+	Config->HealFeedback.CascadeEffect = Cascade;
+	auto* Property = FindFProperty<FObjectPropertyBase>(Caster->GetClass(), TEXT("CombatConfig"));
+	if (!TestNotNull(TEXT("Healer config is selectable"), Property)) return false;
+	Property->SetObjectPropertyValue_InContainer(Caster, Config);
+	UAbilitySystemComponent* ASC = Caster->GetAbilitySystemComponent();
+	UGameplayCueManager* Manager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+#if WITH_EDITOR
+	Manager->LoadNotifyForEditorPreview(CombatTags::Cue_Heal);
+#endif
+	FGameplayEffectSpecHandle DamageSpec = ASC->MakeOutgoingSpec(UmultiplayerDamageEffect::StaticClass(), 1.f, ASC->MakeEffectContext());
+	DamageSpec.Data->SetSetByCallerMagnitude(CombatTags::Data_Damage, 20.f);
+	ASC->ApplyGameplayEffectSpecToSelf(*DamageSpec.Data.Get());
+	FGameplayCueParameters Captured;
+	int32 HealRoutes = 0;
+	const FDelegateHandle Route = Manager->OnGameplayCueRouted().AddLambda(
+		[&](AActor* Target, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters& Feedback, EGameplayCueExecutionOptions)
+		{
+			if (Target == Caster && Tag == CombatTags::Cue_Heal && Event == EGameplayCueEvent::Executed)
+			{ Captured = Feedback; ++HealRoutes; }
+		});
+	Caster->Heal();
+	TestEqual(TEXT("Actual self heal reaches full health once"), Caster->GetHealth(), 100.f);
+	TestEqual(TEXT("Authority self heal publishes exactly one result cue"), HealRoutes, 1);
+	TestTrue(TEXT("Production healing cue retains the caster context"), Captured.GetInstigator() == Caster);
+	const auto Particles = [&]()
+	{
+		TArray<UParticleSystemComponent*> Result;
+		for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+			if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->Template == Cascade) Result.Add(*It);
+		return Result;
+	};
+	const int32 AuthorityCount = Particles().Num();
+	TestEqual(TEXT("Authority dispatch creates one actual healing component"), AuthorityCount, 1);
+	Caster->SetRole(ROLE_AutonomousProxy);
+	// ASC 在注册时缓存网络角色；不能只改已经注册的权威角色来冒充客户端。
+	auto* ReceiverASC = NewObject<UAbilitySystemComponent>(Caster);
+	ReceiverASC->SetIsReplicated(true);
+	ReceiverASC->RegisterComponent();
+	ReceiverASC->InitAbilityActorInfo(Caster, Caster);
+	TestFalse(TEXT("RPC receiver is genuinely non-authoritative in the engine's role cache"), ReceiverASC->IsOwnerActorAuthoritative());
+	const FPredictionKey OldClientKey = FPredictionKey::CreateNewPredictionKey(ReceiverASC);
+	TestTrue(TEXT("Regression case contains a genuine local client key"), OldClientKey.IsLocalClientKey());
+	ReceiverASC->NetMulticast_InvokeGameplayCueExecuted_WithParams_Implementation(CombatTags::Cue_Heal, OldClientKey, Captured);
+	TestEqual(TEXT("Engine reproduces the old owner-side prediction suppression"), Particles().Num(), AuthorityCount);
+	ReceiverASC->NetMulticast_InvokeGameplayCueExecuted_WithParams_Implementation(CombatTags::Cue_Heal, FPredictionKey(), Captured);
+	TestEqual(TEXT("Independent authority result key creates exactly one owner component"), Particles().Num(), AuthorityCount + 1);
+	Caster->SetRole(ROLE_SimulatedProxy);
+	ReceiverASC->NetMulticast_InvokeGameplayCueExecuted_WithParams_Implementation(CombatTags::Cue_Heal, FPredictionKey(), Captured);
+	TestEqual(TEXT("Observer dispatch creates one additional component, not a duplicate pair"), Particles().Num(), AuthorityCount + 2);
+	ReceiverASC->DestroyComponent();
+	Caster->SetRole(ROLE_Authority);
+	Manager->OnGameplayCueRouted().Remove(Route);
+	// 收到治疗的一方没有技能表现配置，也必须使用施法者定义在自己的脚底生成一次特效。
+	auto* RecipientCue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
+	RecipientCue->GameplayCueTag = CombatTags::Cue_Heal;
+	RecipientCue->OnExecute_Implementation(Recipient, Captured);
+	const FVector RecipientFeet = Recipient->GetActorLocation() - FVector::UpVector * Recipient->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	int32 AtRecipient = 0;
+	for (const auto* Particle : Particles()) if (Particle->GetComponentLocation().Equals(RecipientFeet, .1f)) ++AtRecipient;
+	TestEqual(TEXT("A different recipient config cannot suppress caster-defined healing VFX"), AtRecipient, 1);
+	TestEqual(TEXT("Presentation at another recipient does not apply fake healing"), Recipient->GetHealth(), 100.f);
 	return !HasAnyErrors();
 }
 

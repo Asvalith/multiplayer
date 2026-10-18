@@ -10,21 +10,31 @@
 #include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
 #include "InputCoreTypes.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "Particles/ParticleSystem.h"
+#include "Particles/ParticleSystemComponent.h"
 #include "Player/multiplayerCoopPlayerController.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
 namespace
 {
 	const FVector LifecycleOrigin(0, 0, 4000);
 	constexpr float LifecycleWindupSeconds = 3.0f;
+	const FRotator LifecycleAim(0, 45, 0), LifecycleOldAim(0, -90, 0);
+	constexpr float LifecycleAimDistance = 900.0f, LifecycleTargetSpeed = 200.0f;
 
 	// 仅本模式使用角色持有的瞬态配置副本：留出弱网确认窗口，并让冷却覆盖完整前后摇与观察余量。
 	// 不修改正式资产或全局 CDO，Recovery 仍采用角色实际配置。
@@ -77,6 +87,20 @@ namespace
 	}
 }
 
+// 所有观察只存在于测试场景；不向业务 Actor 增加测试 RPC 或发射后门。
+void UCoopNetTestDriver::ClearCombatAimFixture()
+{
+	FWorldDelegates::OnWorldPreActorTick.Remove(CombatAimControlTick);
+	CombatAimControlTick.Reset();
+	if (UWorld* World = CombatAimWorld.Get()) World->RemoveOnActorSpawnedHandler(CombatAimSpawned);
+	CombatAimSpawned.Reset();
+	if (auto* Target = CombatAimTarget.Get())
+		Target->GetAbilitySystemComponent()->GetGameplayAttributeValueChangeDelegate(
+			UmultiplayerCombatAttributes::GetHealthAttribute()).Remove(CombatAimHealthChanged);
+	CombatAimHealthChanged.Reset();
+	CombatAimTarget.Reset(); CombatAimProjectile.Reset(); CombatAimWorld.Reset();
+}
+
 // 在第二个客户端进程获准连接前创建已受控敌人，晚加入必须恢复当前标签而非依赖历史事件。
 void UCoopNetTestDriver::PrepareLifecycleLateJoin(UWorld* World)
 {
@@ -100,7 +124,7 @@ void UCoopNetTestDriver::PrepareLifecycleLateJoin(UWorld* World)
 	Floor->SetActorScale3D(FVector(100, 100, 1));
 	Floor->SetReplicates(true); Floor->SetReplicateMovement(true); Floor->ForceNetUpdate();
 	FActorSpawnParameters Params; Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	CombatEnemy = World->SpawnActor<AmultiplayerCombatEnemy>(LifecycleOrigin + FVector(650, 0, 0), FRotator::ZeroRotator, Params);
+	CombatEnemy = World->SpawnActor<AmultiplayerCombatEnemy>(CombatFixtureEnemyClass(),LifecycleOrigin + FVector(650, 0, 0), FRotator::ZeroRotator, Params);
 	Assert(TEXT("ServerLifecycleLateState"), CombatEnemy.IsValid(), TEXT("Control fixture exists before primary connection"));
 	if (bDone) return;
 	if (auto* AI = Cast<AAIController>(CombatEnemy->GetController())) { AI->UnPossess(); AI->Destroy(); }
@@ -110,7 +134,7 @@ void UCoopNetTestDriver::PrepareLifecycleLateJoin(UWorld* World)
 #endif
 }
 
-// 四个独立阶段通过真实所属玩家 GAS 请求执行；阶段转换等双连接回执，不靠服务器结果替代客户端观察。
+// 施法与瞄准阶段通过真实所属玩家 GAS 请求执行；阶段转换等双连接回执，不靠服务器结果替代客户端观察。
 void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING
@@ -182,7 +206,110 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 		else if (Case == TEXT("Release")) Prepare(TEXT("Cancel"));
 		else if (Case == TEXT("Cancel")) Prepare(TEXT("ConfirmedCancel"));
 		else if (Case == TEXT("ConfirmedCancel")) Prepare(TEXT("Stun"));
-		else SetCommand(TEXT("Complete"));
+		else SetCommand(TEXT("LifecycleAimPrepare:Snapshot"));
+		return;
+	}
+	if (Phase.StartsWith(TEXT("LifecycleAimPrepare:")))
+	{
+		const FString Case = Phase.RightChop(20);
+		ClearCombatAimFixture();
+		for (auto* Character : {CombatPrimary.Get(), static_cast<AmultiplayerCombatCharacter*>(CombatEnemy.Get())})
+			ResetLifecycleCharacter(Character);
+		CombatPrimary->SetActorLocation(LifecycleOrigin);
+		CombatPartner->SetActorLocation(LifecycleOrigin + FVector(-500, 0, 0));
+		const FVector Right = FRotationMatrix(LifecycleAim).GetUnitAxis(EAxis::Y);
+		const float Lead = Case == TEXT("Moving")
+			? LifecycleAimDistance / CombatPrimary->GetCombatConfig().ProjectileSpeed * LifecycleTargetSpeed : 0;
+		CombatAimTargetOrigin = LifecycleOrigin + LifecycleAim.Vector() * LifecycleAimDistance - Right * Lead;
+		CombatEnemy->SetActorLocation(CombatAimTargetOrigin);
+		CombatEnemy->ForceNetUpdate(); CombatPrimary->ForceNetUpdate(); CombatPartner->ForceNetUpdate();
+		const auto AimPreview = CombatPrimary->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &LifecycleAim);
+		CombatAimExpectedDirection = (AimPreview.End - AimPreview.Origin).GetSafeNormal();
+		CombatAimWorld = World; CombatAimTarget = CombatEnemy.Get();
+		CombatAimProjectileCount = CombatAimDamageCount = 0; CombatAimHitTime = 0;
+		CombatAimHealthChanged = CombatEnemy->GetAbilitySystemComponent()->GetGameplayAttributeValueChangeDelegate(
+			UmultiplayerCombatAttributes::GetHealthAttribute()).AddWeakLambda(this, [this, World](const FOnAttributeChangeData& Change)
+			{
+				if (Change.NewValue < Change.OldValue) { ++CombatAimDamageCount; CombatAimHitTime = World->GetTimeSeconds(); }
+			});
+		// 持续保持故意错误的服务器朝向，不让另一路 CMC 朝向包碰巧补正测试结果。
+		PrimaryPlayer(World)->SetControlRotation(LifecycleOldAim);
+		CombatAimControlTick = FWorldDelegates::OnWorldPreActorTick.AddWeakLambda(this,
+			[this, World](UWorld* TickWorld, ELevelTick, float)
+			{
+				if (TickWorld == World)
+					if (APlayerController* PC = PrimaryPlayer(World)) PC->SetControlRotation(LifecycleOldAim);
+			});
+		CombatAimSpawned = World->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateWeakLambda(this,
+			[this, World, Case, Right](AActor* Actor)
+			{
+				auto* Projectile = Cast<AmultiplayerCombatProjectile>(Actor);
+				if (!Projectile || Actor->GetOwner() != CombatPrimary.Get()) return;
+				CombatAimProjectile = Projectile; ++CombatAimProjectileCount;
+				const float ServerYaw = PrimaryPlayer(World)->GetControlRotation().Yaw;
+				Assert(TEXT("ServerAim") + Case + TEXT("Direction"), CombatAimProjectileCount == 1
+					&& FMath::Abs(FMath::FindDeltaAngleDegrees(ServerYaw, LifecycleOldAim.Yaw)) < 1
+					&& Actor->GetActorForwardVector().Equals(CombatAimExpectedDirection, .001f),
+					FString::Printf(TEXT("Actual spawn converged to the per-activation preview while server controller remained %.2f degrees; count=%d"),
+						ServerYaw, CombatAimProjectileCount));
+				if (bDone || Case != TEXT("Moving")) return;
+				// 仅在真实出弹后启动恒速横移，消除测试命令网络延迟对交点的影响。
+				// CMC 真正积分位置；运动期间不瞬移、不直接调用命中或伤害函数。
+				auto* Movement = CombatEnemy->GetCharacterMovement();
+				Movement->bRunPhysicsWithNoController = true;
+				Movement->bForceMaxAccel = true;
+				Movement->MaxWalkSpeed = LifecycleTargetSpeed;
+				Movement->SetMovementMode(MOVE_Walking);
+				Movement->Velocity = Right * LifecycleTargetSpeed;
+			}));
+		Probe->Subject = CombatPrimary.Get(); PartnerProbe->Subject = CombatPrimary.Get();
+		Probe->CombatTarget = CombatEnemy.Get(); PartnerProbe->CombatTarget = CombatEnemy.Get();
+		SetCommand(TEXT("LifecycleAimReady:") + Case);
+		return;
+	}
+	if (Phase.StartsWith(TEXT("LifecycleAimReady:")))
+	{
+		const FString Case = Phase.RightChop(18);
+		if (Both(TEXT("Aim") + Case + TEXT("Ready"))) SetCommand(TEXT("LifecycleAimFire:") + Case);
+		return;
+	}
+	if (Phase.StartsWith(TEXT("LifecycleAimFire:")))
+	{
+		const FString Case = Phase.RightChop(17);
+		if (CombatAimProjectile.IsValid() && CombatAimProjectile->GetLaunchState().bInitialized
+			&& !SentReceipts.Contains(TEXT("Launch:") + Case))
+		{
+			SentReceipts.Add(TEXT("Launch:") + Case);
+			const auto& Launch = CombatAimProjectile->GetLaunchState();
+			Assert(TEXT("ServerAim") + Case + TEXT("Launch"), FVector(Launch.Velocity).GetSafeNormal().Equals(CombatAimExpectedDirection, .001f)
+				&& FMath::IsNearlyEqual(FVector(Launch.Velocity).Size(), CombatPrimary->GetCombatConfig().ProjectileSpeed, 1),
+				TEXT("Initialized authoritative launch state contains the captured preview convergence direction and configured speed"));
+			if (bDone) return;
+		}
+		if (CombatAimDamageCount == 0) return;
+		if (Case == TEXT("Moving") && !SentReceipts.Contains(TEXT("MovementStopped:Moving")))
+		{
+			SentReceipts.Add(TEXT("MovementStopped:Moving"));
+			const float Travel = FVector::DotProduct(CombatEnemy->GetActorLocation() - CombatAimTargetOrigin,
+				FRotationMatrix(LifecycleAim).GetUnitAxis(EAxis::Y));
+			Assert(TEXT("ServerAimMovingCMC"), Travel > CombatEnemy->GetCapsuleComponent()->GetScaledCapsuleRadius() * 2
+				&& CombatEnemy->GetCharacterMovement()->MovementMode == MOVE_Walking,
+				FString::Printf(TEXT("CMC moved the target laterally %.2fcm before the real hit; no runtime teleport or historical rewind"), Travel));
+			CombatEnemy->GetCharacterMovement()->DisableMovement(); CombatEnemy->ForceNetUpdate();
+			if (bDone) return;
+		}
+		if (!Both(TEXT("Aim") + Case + TEXT("Outcome")) || !Receipts.Contains(TEXT("PrimaryAim") + Case + TEXT("Predicted"))
+			|| !SentReceipts.Contains(TEXT("Launch:") + Case) || World->GetTimeSeconds() - CombatAimHitTime < .5f) return;
+		const auto* AttackSpec = CombatPrimary->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerAttackAbility::StaticClass());
+		const auto* Attack = AttackSpec ? AttackSpec->GetPrimaryInstance() : nullptr;
+		Assert(TEXT("ServerAim") + Case + TEXT("SingleDamage"), CombatAimProjectileCount == 1 && CombatAimDamageCount == 1
+			&& Attack && Attack->GetCurrentActivationInfo().GetActivationPredictionKey().WasReceived()
+			&& CombatPrimary->GetEnergy() == 100 - CombatPrimary->GetCombatConfig().Attack.Cost
+			&& CombatEnemy->GetHealth() == 100 - CombatPrimary->GetCombatConfig().Attack.Amount,
+			TEXT("One owned predicted activation created one real projectile and one authoritative damage settlement; both independent clients observed it"));
+		if (bDone) return;
+		ClearCombatAimFixture();
+		SetCommand(Case == TEXT("Snapshot") ? TEXT("LifecycleAimPrepare:Moving") : TEXT("Complete"));
 		return;
 	}
 	if (Phase.StartsWith(TEXT("LifecycleReady:")))
@@ -198,6 +325,7 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 		UAbilitySystemComponent* ASC = CombatPrimary->GetAbilitySystemComponent();
 		if (Phase == TEXT("LifecycleStun") && CombatPrimary->IsCasting())
 		{
+			if (bVisualAcceptance && !Both(TEXT("VisualAreaStunCasting"))) return;
 			CombatPrimary->ApplyStun(5);
 			Assert(TEXT("ServerAreaStunInterrupt"), CombatPrimary->IsStunned() && !CombatPrimary->IsCasting(),
 				TEXT("Server control effect interrupted the actual active ability before release"));
@@ -217,6 +345,8 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 			Emit(TEXT("DIAGNOSTIC"), TEXT("First observed server active ability: ") + DescribeLifecycleState(CombatPrimary.Get(), CombatEnemy.Get()));
 		}
 		if (Case == TEXT("Release") && ReceivedKey && !CombatPrimary->IsCasting()
+			&& (!bVisualAcceptance || Both(TEXT("VisualAreaReleaseCasting")))
+			&& (!bVisualAcceptance || Both(TEXT("AreaReleaseEffectObserved")))
 			&& CombatEnemy->GetHealth() == 100 - CombatPrimary->GetCombatConfig().Area.Amount)
 		{
 			Assert(TEXT("ServerAreaSingleDamage"), CombatPrimary->GetEnergy() == 100 - CombatPrimary->GetCombatConfig().Area.Cost,
@@ -257,11 +387,11 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 		PrepareMovement(Case);
 	}
 	if (Phase == TEXT("Complete") && Receipts.Contains(TEXT("Complete")) && Receipts.Contains(TEXT("PartnerComplete")))
-		Finish(true, TEXT("Real W input moved both clients and authoritative pawns after admission, release, both cancellations and stun expiry; Area prediction, one settlement and late state checked"));
+		Finish(true, TEXT("Real W/CMC movement, Area lifecycle/late state and per-activation Attack aim passed; static and CMC-lateral targets received one damage observed by both clients; not historical rewind or visual acceptance"));
 #endif
 }
 
-// 预测值在 CastArea 返回的同一调用栈读取；最终血量分别由每个客户端读取其真实副本。
+// Release 走正式 R 按键/松开并在输入帧读取预测；其余注入分支保留同调用栈的边界覆盖。
 void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING
@@ -296,19 +426,28 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 	if (Phase.StartsWith(TEXT("LifecycleMove:")))
 	{
 		const FString Case = Phase.RightChop(14), Marker = TEXT("Command:") + Phase;
+		UGameViewportClient* Viewport = World->GetGameViewport();
 		if (!SentReceipts.Contains(Marker))
 		{
+			Assert(Prefix + TEXT("ViewportInput") + Case, Viewport && !Viewport->IgnoreInput() && !PC->bShowMouseCursor,
+				TEXT("Combat HUD restored game viewport input after the connection menu; no test-side input mode reset"));
+			if (bDone) return;
 			SentReceipts.Add(Marker);
 			CombatMovementOrigin = Local->GetActorLocation();
 			CombatMovementAt = FPlatformTime::Seconds();
 			bCombatMovementInputHeld = true;
 			// 经 PC/PlayerInput/EnhancedInput 的真实 W 映射，再由角色 Move 和 CMC 驱动。
-			PC->InputKey(FInputKeyParams(EKeys::W, IE_Pressed, 1.0));
+			// 从视口入口提交，UIOnly 残留必须使测试失败，不能绕过视口直接喂给 PC。
+			Viewport->InputKey(FInputKeyEventArgs(Viewport->Viewport,
+				IPlatformInputDeviceMapper::Get().GetPrimaryInputDeviceForUser(PC->GetLocalPlayer()->GetPlatformUserId()),
+				EKeys::W, IE_Pressed));
 		}
 		if (PC->IsInputKeyDown(EKeys::W)) SentReceipts.Add(TEXT("MovementKeyDown:") + Case);
 		if (bCombatMovementInputHeld && FPlatformTime::Seconds() - CombatMovementAt >= 1.25)
 		{
-			PC->InputKey(FInputKeyParams(EKeys::W, IE_Released, 0.0));
+			Viewport->InputKey(FInputKeyEventArgs(Viewport->Viewport,
+				IPlatformInputDeviceMapper::Get().GetPrimaryInputDeviceForUser(PC->GetLocalPlayer()->GetPlatformUserId()),
+				EKeys::W, IE_Released));
 			bCombatMovementInputHeld = false;
 			CombatMovementAt = FPlatformTime::Seconds();
 		}
@@ -330,6 +469,71 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 	}
 	if (!Target) return;
 	UAbilitySystemComponent* ASC = Local->GetAbilitySystemComponent();
+	if (Phase.StartsWith(TEXT("LifecycleAimReady:")))
+	{
+		const FString Case = Phase.RightChop(18);
+		const FVector Right = FRotationMatrix(LifecycleAim).GetUnitAxis(EAxis::Y);
+		const float Lead = Case == TEXT("Moving")
+			? LifecycleAimDistance / Subject->GetCombatConfig().ProjectileSpeed * LifecycleTargetSpeed : 0;
+		const FVector ExpectedTarget = LifecycleOrigin + LifecycleAim.Vector() * LifecycleAimDistance - Right * Lead;
+		const bool Ready = Subject->IsCombatReady() && Target->IsCombatReady() && Target->GetHealth() == 100
+			&& !Subject->IsCasting() && !Subject->IsStunned() && !Target->IsStunned()
+			&& FVector::Dist(Subject->GetActorLocation(), LifecycleOrigin) < 30
+			&& FVector::Dist2D(Target->GetActorLocation(), ExpectedTarget) < 30
+			&& (bPartner || (Local == Subject && Local->GetAttackCooldownRemaining() == 0
+				&& ASC->FindAbilitySpecFromClass(UmultiplayerAttackAbility::StaticClass())));
+		if (Ready && !SentReceipts.Contains(Prefix + TEXT("Aim") + Case + TEXT("Ready")))
+		{
+			ClearCombatAimFixture();
+			CombatAimWorld = World; CombatAimTarget = Target; CombatAimDamageCount = 0;
+			CombatAimHealthChanged = Target->GetAbilitySystemComponent()->GetGameplayAttributeValueChangeDelegate(
+				UmultiplayerCombatAttributes::GetHealthAttribute()).AddWeakLambda(this, [this](const FOnAttributeChangeData& Change)
+				{ if (Change.NewValue < Change.OldValue) ++CombatAimDamageCount; });
+			SendReceipt(Prefix + TEXT("Aim") + Case + TEXT("Ready"), true,
+				TEXT("This connection received the complete target fixture and subscribed to its actual replicated health before attack"));
+		}
+		return;
+	}
+	if (Phase.StartsWith(TEXT("LifecycleAimFire:")))
+	{
+		const FString Case = Phase.RightChop(17), Marker = TEXT("Command:") + Phase;
+		if (!bPartner && !SentReceipts.Contains(Marker))
+		{
+			SentReceipts.Add(Marker);
+			const float HealthBefore = Target->GetHealth();
+			PC->SetControlRotation(LifecycleAim);
+			Local->Attack();
+			// 同一调用栈立刻转开，正常 CMC 只会在之后发送这个不同的当前方向。
+			PC->SetControlRotation(LifecycleOldAim);
+			const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAttackAbility::StaticClass());
+			UGameplayAbility* Ability = Spec ? Spec->GetPrimaryInstance() : nullptr;
+			FPredictionKey Key = Ability ? Ability->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
+			bool KeyedCooldown = false;
+			for (auto Handle : ASC->GetActiveEffects(FGameplayEffectQuery()))
+			{
+				const auto* Effect = ASC->GetActiveGameplayEffect(Handle);
+				KeyedCooldown |= Effect && Effect->PredictionKey == Key
+					&& Effect->Spec.Def->IsA<UmultiplayerAttackCooldownEffect>();
+			}
+			SendReceipt(TEXT("PrimaryAim") + Case + TEXT("Predicted"), Key.IsLocalClientKey() && Key.WasLocallyGenerated()
+				&& KeyedCooldown && Target->GetHealth() == HealthBefore,
+				TEXT("Owned Attack predicted its keyed cooldown at 45-degree aim; immediate -90-degree turn did not cause client-side damage"));
+			if (bDone) return;
+			Key.NewCaughtUpDelegate().BindWeakLambda(this, [this, Case] { SentReceipts.Add(TEXT("AimCaughtUp:") + Case); });
+		}
+		const float ExpectedHealth = 100 - Subject->GetCombatConfig().Attack.Amount;
+		if (CombatAimDamageCount > 1 || Target->GetHealth() < ExpectedHealth)
+		{
+			SendReceipt(Prefix + TEXT("Aim") + Case + TEXT("Outcome"), false,
+				TEXT("This connection observed repeated damage from one activation"));
+			return;
+		}
+		if (Target->GetHealth() == ExpectedHealth && CombatAimDamageCount == 1
+			&& (bPartner || SentReceipts.Contains(TEXT("AimCaughtUp:") + Case)))
+			SendReceipt(Prefix + TEXT("Aim") + Case + TEXT("Outcome"), true,
+				TEXT("This independent connection observed exactly one replicated damage transition; owner also confirmed the original prediction key"));
+		return;
+	}
 	if (Phase.StartsWith(TEXT("LifecycleReady:")))
 	{
 		const FString Case = Phase.RightChop(15);
@@ -345,8 +549,47 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 			&& !Subject->IsCasting() && !Subject->IsStunned() && !Target->IsStunned()
 			&& (bPartner || (Local == Subject && Local->GetEnergy() == 100 && Local->GetAreaCooldownRemaining() == 0
 				&& ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass())));
-		if (Ready) SendReceipt(Prefix + TEXT("Area") + Case + TEXT("Ready"), true, TEXT("Actual replicas, skill grant, resource/cooldown and replicated aiming floor are ready"));
+		if (Ready)
+		{
+			if (Case == TEXT("Release") && bVisualAcceptance && !SentReceipts.Contains(Prefix + TEXT("AreaReleaseReady")))
+			{
+				// 只预载正式配置，不自己触发 Cue；后续必须观察本次真实执行新生成的粒子组件。
+				const auto& Feedback = Subject->GetCombatConfig().AreaFeedback;
+				if (!Feedback.CascadeEffect.IsNull()) Feedback.CascadeEffect.LoadSynchronous();
+				else if (!Feedback.Effect.IsNull()) Feedback.Effect.LoadSynchronous();
+				CombatAreaEffectsBefore.Reset();
+				for (TObjectIterator<USceneComponent> It; It; ++It)
+					if (It->GetWorld() == World && It->IsRegistered()) CombatAreaEffectsBefore.Add(*It);
+				bCombatAreaReleaseCenter = false;
+			}
+			SendReceipt(Prefix + TEXT("Area") + Case + TEXT("Ready"), true, TEXT("Actual replicas, skill grant, resource/cooldown and replicated aiming floor are ready"));
+		}
 		return;
+	}
+	if (bVisualAcceptance && (Phase == TEXT("LifecycleRelease") || Phase == TEXT("LifecycleVerify:Release")))
+	{
+		if (Subject->IsCasting())
+		{
+			const auto Locked = Subject->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+			if (Locked.bValid) { CombatAreaReleaseCenter = Locked.End; bCombatAreaReleaseCenter = true; }
+		}
+		if (bCombatAreaReleaseCenter && !SentReceipts.Contains(Prefix + TEXT("AreaReleaseEffectObserved")))
+		{
+			const auto& Feedback = Subject->GetCombatConfig().AreaFeedback;
+			const auto Observe = [&](USceneComponent* Component, const TCHAR* Kind)
+			{
+				if (SentReceipts.Contains(Prefix + TEXT("AreaReleaseEffectObserved"))
+					|| Component->GetWorld() != World || !Component->IsRegistered() || !Component->IsActive()
+					|| CombatAreaEffectsBefore.Contains(Component)) return;
+				SendReceipt(Prefix + TEXT("AreaReleaseEffectObserved"), Component->GetComponentLocation().Equals(CombatAreaReleaseCenter, 1.f),
+					FString::Printf(TEXT("Actual %s Cue particle component=%s asset-selected=1 active=%d expected-locked-ground=%s actual=%s; not a screenshot/file-existence check"),
+						Kind, *Component->GetPathName(), Component->IsActive(), *CombatAreaReleaseCenter.ToString(), *Component->GetComponentLocation().ToString()));
+			};
+			for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+				if (!Feedback.CascadeEffect.IsNull() && It->Template == Feedback.CascadeEffect.Get()) Observe(*It, TEXT("Cascade"));
+			for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+				if (Feedback.CascadeEffect.IsNull() && !Feedback.Effect.IsNull() && It->GetAsset() == Feedback.Effect.Get()) Observe(*It, TEXT("Niagara"));
+		}
 	}
 	if (!bPartner && (Phase == TEXT("LifecycleRelease") || Phase == TEXT("LifecycleCancel")
 		|| Phase == TEXT("LifecycleConfirmedCancel") || Phase == TEXT("LifecycleStun")))
@@ -356,32 +599,111 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 		{
 			SentReceipts.Add(Marker); PC->SetControlRotation(FRotator::ZeroRotator);
 			const float Before = Local->GetEnergy(), HealthBefore = Target->GetHealth();
-			Local->CastArea();
-			const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
-			UGameplayAbility* Instance = Spec ? Spec->GetPrimaryInstance() : nullptr;
-			FPredictionKey Key = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
-			bool HasKeyedCooldown = false, HasKeyedCost = false;
-			for (const FActiveGameplayEffectHandle& Handle : ASC->GetActiveEffects(FGameplayEffectQuery()))
+			if (Case == TEXT("Release"))
 			{
-				const FActiveGameplayEffect* Effect = ASC->GetActiveGameplayEffect(Handle);
-				if (!Effect || Effect->PredictionKey != Key) continue;
-				HasKeyedCooldown |= Effect->Spec.Def->IsA(UmultiplayerAreaCooldownEffect::StaticClass());
-				HasKeyedCost |= Effect->Spec.Def->IsA(UmultiplayerAreaCostEffect::StaticClass());
+				// PostActorTick 在本帧输入执行之后；下一帧 NetTickDispatch 之前读取，不能等权威结果冒充本地预测。
+				CombatAreaInputStep = 0;
+				CombatAreaInputTick = FWorldDelegates::OnWorldPostActorTick.AddWeakLambda(this,
+					[this, World, WeakLocal = TWeakObjectPtr<AmultiplayerCombatCharacter>(Local),
+						WeakTarget = TWeakObjectPtr<AmultiplayerCombatCharacter>(Target), Before, HealthBefore](UWorld* TickWorld, ELevelTick, float)
+					{
+						if (TickWorld != World || bDone) return;
+						auto* Caster = WeakLocal.Get();
+						auto* Victim = WeakTarget.Get();
+						auto* Controller = Caster ? Cast<APlayerController>(Caster->GetController()) : nullptr;
+						if (!Caster || !Victim || !Controller) { Assert(TEXT("PrimaryAreaReleaseInputLifetime"), false, TEXT("Real input fixture disappeared during R press/release")); return; }
+						auto* SourceASC = Caster->GetAbilitySystemComponent();
+						const float Cost = Caster->GetCombatConfig().Area.Cost;
+						if (CombatAreaInputStep == 0)
+						{
+							const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+							SendReceipt(TEXT("PrimaryAreaReleaseInputPreview"), Controller->IsInputKeyDown(EKeys::R)
+								&& Caster->IsTargetingSkill() && Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Area
+								&& Preview.bValid
+								&& !Caster->IsCasting() && Caster->GetEnergy() == Before && Caster->GetAreaCooldownRemaining() == 0,
+								FString::Printf(TEXT("Real R preview: key-down=%d targeting=%d skill=%d valid-floor=%d center=%s casting=%d energy=%.2f before=%.2f cooldown=%.3f pawn=%s input=%s"),
+									Controller->IsInputKeyDown(EKeys::R), Caster->IsTargetingSkill(), int32(Caster->GetTargetingSkill()), Preview.bValid,
+									*Preview.End.ToString(), Caster->IsCasting(), Caster->GetEnergy(), Before, Caster->GetAreaCooldownRemaining(),
+									*Caster->GetClass()->GetPathName(), *GetNameSafe(Controller->PlayerInput)));
+							if (bDone) return;
+							Controller->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.));
+							CombatAreaInputStep = 1;
+							return;
+						}
+						if (CombatAreaInputStep == 1)
+						{
+							const auto* Spec = SourceASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+							UGameplayAbility* Instance = Spec ? Spec->GetPrimaryInstance() : nullptr;
+							FPredictionKey Key = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
+							bool KeyedCooldown = false, KeyedCost = false;
+							for (const auto Handle : SourceASC->GetActiveEffects(FGameplayEffectQuery()))
+							{
+								const auto* Effect = SourceASC->GetActiveGameplayEffect(Handle);
+								if (!Effect || Effect->PredictionKey != Key) continue;
+								KeyedCooldown |= Effect->Spec.Def->IsA<UmultiplayerAreaCooldownEffect>();
+								KeyedCost |= Effect->Spec.Def->IsA<UmultiplayerAreaCostEffect>();
+							}
+							SendReceipt(TEXT("PrimaryAreaReleasePredicted"), Caster->IsCasting() && Key.IsLocalClientKey()
+								&& Key.WasLocallyGenerated() && KeyedCooldown && KeyedCost
+								&& Caster->GetEnergy() == Before - Cost && Victim->GetHealth() == HealthBefore,
+								FString::Printf(TEXT("Real R key-up frame before later network receive: casting=%d key=%d local=%d generated=%d keyed-CD=%d keyed-cost=%d energy=%.2f expected=%.2f targetHP=%.2f beforeHP=%.2f; %s"),
+									Caster->IsCasting(), Key.Current, Key.IsLocalClientKey(), Key.WasLocallyGenerated(), KeyedCooldown, KeyedCost,
+									Caster->GetEnergy(), Before - Cost, Victim->GetHealth(), HealthBefore, *DescribeLifecycleState(Caster, Victim)));
+							if (bDone) return;
+							CombatPredictionKeys.Add(TEXT("LifecycleRelease"), Key.Current);
+							Key.NewCaughtUpDelegate().BindWeakLambda(this, [this] { SentReceipts.Add(TEXT("AreaCaughtUp:Release")); });
+							SendReceipt(TEXT("PrimaryAreaReleaseInputReleased"), !Controller->IsInputKeyDown(EKeys::R) && !Caster->IsTargetingSkill(),
+								TEXT("R is physically released and editable preview ended without LMB confirmation or direct CastArea injection"));
+							Controller->InputKey(FInputKeyParams(EKeys::R, IE_Pressed, 1.));
+							CombatAreaInputStep = 2;
+							return;
+						}
+						if (CombatAreaInputStep == 2)
+						{
+							Controller->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.));
+							CombatAreaInputStep = 3;
+							return;
+						}
+						const auto* ActiveSpec = SourceASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+						const auto* ActiveAbility = ActiveSpec ? ActiveSpec->GetPrimaryInstance() : nullptr;
+						SendReceipt(TEXT("PrimaryAreaReleaseRepeatedInput"), !Controller->IsInputKeyDown(EKeys::R)
+							&& !Caster->IsTargetingSkill() && Caster->IsCasting() && Caster->GetEnergy() == Before - Cost
+							&& ActiveAbility && ActiveAbility->GetCurrentActivationInfo().GetActivationPredictionKey().Current == CombatPredictionKeys.FindRef(TEXT("LifecycleRelease")),
+							TEXT("A second genuine R press/release during the same active cast did not create a second commitment"));
+						FWorldDelegates::OnWorldPostActorTick.Remove(CombatAreaInputTick);
+						CombatAreaInputTick.Reset();
+					});
+				PC->InputKey(FInputKeyParams(EKeys::R, IE_Pressed, 1.));
 			}
-			SendReceipt(TEXT("PrimaryArea") + Case + TEXT("Predicted"), Local->IsCasting() && Key.IsLocalClientKey()
-				&& Key.WasLocallyGenerated() && HasKeyedCooldown && HasKeyedCost
-				&& Local->GetEnergy() == Before - Local->GetCombatConfig().Area.Cost && Target->GetHealth() == HealthBefore,
-				TEXT("Before CastArea returned: local casting, real keyed cost/CD, one resource change and no client damage"));
-			Key.NewCaughtUpDelegate().BindWeakLambda(this, [this, Case] { SentReceipts.Add(TEXT("AreaCaughtUp:") + Case); });
-			Local->CastArea();
-			SendReceipt(TEXT("PrimaryArea") + Case + TEXT("RepeatedInput"), Local->GetEnergy() == Before - Local->GetCombatConfig().Area.Cost,
-				TEXT("Immediate repeated input did not consume a second cost"));
-			if (Case == TEXT("Cancel"))
+			else
 			{
-				Local->CancelCast();
-				SendReceipt(TEXT("PrimaryAreaCancelSent"), !Local->IsCasting() && Local->GetAreaCooldownRemaining() > 0
-					&& Local->GetEnergy() == Before - Local->GetCombatConfig().Area.Cost,
-					TEXT("Local cancel ended casting, retained one cost/CD, and sent normal GAS end/cancel notification"));
+				Local->CastArea();
+				const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+				UGameplayAbility* Instance = Spec ? Spec->GetPrimaryInstance() : nullptr;
+				FPredictionKey Key = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
+				bool HasKeyedCooldown = false, HasKeyedCost = false;
+				for (const FActiveGameplayEffectHandle& Handle : ASC->GetActiveEffects(FGameplayEffectQuery()))
+				{
+					const FActiveGameplayEffect* Effect = ASC->GetActiveGameplayEffect(Handle);
+					if (!Effect || Effect->PredictionKey != Key) continue;
+					HasKeyedCooldown |= Effect->Spec.Def->IsA(UmultiplayerAreaCooldownEffect::StaticClass());
+					HasKeyedCost |= Effect->Spec.Def->IsA(UmultiplayerAreaCostEffect::StaticClass());
+				}
+				SendReceipt(TEXT("PrimaryArea") + Case + TEXT("Predicted"), Local->IsCasting() && Key.IsLocalClientKey()
+					&& Key.WasLocallyGenerated() && HasKeyedCooldown && HasKeyedCost
+					&& Local->GetEnergy() == Before - Local->GetCombatConfig().Area.Cost && Target->GetHealth() == HealthBefore,
+					TEXT("Before CastArea returned: local casting, real keyed cost/CD, one resource change and no client damage"));
+				Key.NewCaughtUpDelegate().BindWeakLambda(this, [this, Case] { SentReceipts.Add(TEXT("AreaCaughtUp:") + Case); });
+				Local->CastArea();
+				SendReceipt(TEXT("PrimaryArea") + Case + TEXT("RepeatedInput"), Local->GetEnergy() == Before - Local->GetCombatConfig().Area.Cost,
+					TEXT("Immediate repeated input did not consume a second cost"));
+				if (Case == TEXT("Cancel"))
+				{
+					Local->CancelCast();
+					SendReceipt(TEXT("PrimaryAreaCancelSent"), !Local->IsCasting() && Local->GetAreaCooldownRemaining() > 0
+						&& Local->GetEnergy() == Before - Local->GetCombatConfig().Area.Cost,
+						TEXT("Local cancel ended casting, retained one cost/CD, and sent normal GAS end/cancel notification"));
+				}
 			}
 		}
 	}
@@ -408,9 +730,11 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 				TEXT("Cancelling after authority handoff cleared local casting immediately without refunding cost or deleting cooldown"));
 		}
 	}
+	if ((Phase == TEXT("LifecycleRelease") || Phase == TEXT("LifecycleStun")) && Subject->IsCasting())
+		CaptureSkillView(Phase == TEXT("LifecycleRelease") ? TEXT("AreaReleaseCasting") : TEXT("AreaStunCasting"),Subject,Target);
 	if (Phase == TEXT("LifecycleStunObserve") && Subject->IsStunned() && !Subject->IsCasting())
 	{
-		SendReceipt(Prefix + TEXT("AreaStunObserved"), true, TEXT("This connection received server stun and cast interruption state"));
+		if (CaptureSkillView(TEXT("AreaStunStopped"),Subject,Target)) SendReceipt(Prefix + TEXT("AreaStunObserved"), true, TEXT("This connection received server stun and cast interruption state"));
 	}
 	if (Phase.StartsWith(TEXT("LifecycleVerify:")))
 	{
@@ -419,9 +743,9 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 		const bool Outcome = !Subject->IsCasting() && Target->GetHealth() == ExpectedHealth
 			&& (bPartner || (SentReceipts.Contains(TEXT("AreaCaughtUp:") + Case)
 				&& Local->GetEnergy() == 100 - Local->GetCombatConfig().Area.Cost));
-		if (Outcome) SendReceipt(Prefix + TEXT("Area") + Case + TEXT("Outcome"), true,
+		if (Outcome && (Case != TEXT("Release") || CaptureSkillView(TEXT("AreaReleaseResult"),Subject,Target))) SendReceipt(Prefix + TEXT("Area") + Case + TEXT("Outcome"), true,
 			TEXT("Independent connection observed final health/cast state; owner additionally confirmed key catch-up and one cost"));
 	}
-	if (!bPartner && Phase == TEXT("Complete")) { SendReceipt(TEXT("Complete"), true, TEXT("Area lifecycle scenario complete; not a visual quality test")); Finish(true); }
+	if (!bPartner && Phase == TEXT("Complete")) { SendReceipt(TEXT("Complete"), true, TEXT("Area lifecycle and Attack aiming scenario complete; not a visual quality or historical rewind test")); Finish(true); }
 #endif
 }

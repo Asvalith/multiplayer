@@ -1,11 +1,12 @@
 # 网络实验与战斗回归
 
-网络入口支持 RideMotion、Combat、CombatLifecycle、CombatReconnect 和 CombatTraffic：一个 DS 和两个独立客户端。Partner 先连接并确认角色与共享状态就绪，Client 执行受测动作；服务器和两个客户端分别记录结果。
+网络入口支持 RideMotion、Combat、CombatLifecycle、CombatReconnect、CombatExpansion、CombatTraffic 和 CoopEscape：一个 DS 和两个独立客户端。Partner 先连接并确认角色与共享状态就绪，Client 执行受测动作；服务器和两个客户端分别记录结果。
 
 ## 运行
 
 ~~~powershell
 .\Scripts\RunMultiplayerNetworkTests.ps1 -SelfTest
+.\Scripts\RunMultiplayerNetworkTests.ps1 -Scenario CoopEscape -Profiles Normal -Repeat 1 -Map /Game/Combat/Maps/CoopEscape -Offscreen -TimeoutSeconds 600
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Normal,Moderate,Harsh -Repeat 1
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -Repeat 3
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -PlatformMotion Static -Repeat 1
@@ -19,7 +20,7 @@
 
 运行前编译 multiplayerEditor。默认采用 UE 5.5.4 Editor Server；-EditorPath 可覆盖引擎路径。默认 NullRHI；-Offscreen 使用客户端 DX12 离屏渲染，-Visible 显示客户端窗口，供人工验收 UI 与表现，DS 始终无画面。打包测试须同时提供 GameExecutablePath 与独立 ServerExecutablePath。
 
-RunLocalDedicatedServer 不带 -Play 时执行一次指定网络档位的平台实验；-Play 只启动可操作的 DS 和两个客户端，不生成自动通过结论。两种入口均支持 -PlanOnly；端口为 0 时自动选择。
+RunLocalDedicatedServer 不带 -Play 时执行一次指定网络档位的完整合作撤离验证；-Play 只启动可操作的 DS 和两个客户端，-FromMenu 显示原地址连接菜单，不生成自动通过结论。平台实验使用 RunMultiplayerNetworkTests 的 RideMotion 入口。两种入口均支持 -PlanOnly；端口为 0 时自动选择。
 
 ## 保留的检查
 
@@ -188,6 +189,55 @@ CommonUI 只用于加载源素材类型依赖，当前原生 UMG 界面不使用
 
 最终 `Saved/PlayerWalkFix-20261017/Regression/index.json` 再次为 32 项通过、0 警告、0 失败。该组步行采样测得左右脚摆幅 77.01/66.28cm，无输入加速度阶段的足骨位移 20.44/17.39cm。它验证真实 CMC 与动画图的输出，不代表已完成所有斜坡、步幅匹配或多人视觉观感验收。
 
+## 2026-10-17：定向施法、近身命中与预测拒绝
+
+普通攻击与 R 使用原生 GAS 事件激活，在同一条激活请求、同一个 PredictionKey 内提交按键时的方向。服务器只读取方向，不读取客户端的发射起点、伤害或命中对象；缺少事件数据的旧远程激活入口会拒绝这两种技能。AI 的服务器直接激活仍使用本地朝向快照。校验发生在激活与扣费之前，重复或非法新请求不能覆盖正在执行的快照。
+
+弹体改从真实起点发射，交给已有 ProjectileMovement 扫掠，不再跳过前 75cm。起点已在实体墙内时拒发，近身敌人与友军不作为实体阻挡。非扫掠初始重叠没有真实表面接触点，使用服务器弹体位置构造命中上下文；真实扫掠结果不变。R 的落点、地面投影与伤害视线改为尊重实体 Visibility 响应，非实体触发盒不会截断目标，真正阻挡的动态门仍然生效。
+
+`Saved/CombatHitAccuracy-20261017/FinalRegression/index.json` 的 DX12 离屏全量回归为 **36 项通过、0 警告、0 失败**。新增用例为：
+
+- `AimEventBoundary`：真实事件激活、延迟出手、转头后的方向保持、R 的实际伤害，以及缺失、多份、错误类型、非归一化和非有限数据拒绝；重复请求不重复扣费。
+- `ProjectileSweepBoundaries`：8000cm/s、150ms 单次世界 Tick 下的静止目标扫掠，墙前后顺序、友军穿过、多组件重叠及单次结算。
+- `ProjectileCloseRange`：0／30／70cm 敌人的实际伤害与 GE 命中上下文；在非原点位置检查目标、命中坐标与一次 GE，避免只验证扣血却漏掉特效错位。
+- `TriggerOcclusionBoundary`：真实触发盒不改变 R 落点或挡住伤害、眩晕；动态实体门仍截断目标。
+
+联网 `Combat` 增加缺少瞄准事件的真实客户端预测请求：服务器拒绝后检查原键效果撤销、动作停止、跨过原出手期限后无晚到弹体，再通过正常入口合法重试。`CombatLifecycle` 增加按下攻击后立即转头，以及真实 CMC 横移靶的单次命中；服务器保持故意错误的旧控制朝向，分别核对发射方向、原始预测键和双客户端扣血结果。横移靶只在实际出弹后设置一次初速度，以 CMC 的强制满加速模式持续移动，不在运动中传送或调用伤害入口。
+
+最终编辑器与 Win64 Development 游戏目标编译通过，脚本契约 SelfTest 通过。独立 DS 加两个 DX12 离屏客户端的完整报告如下，四轮均满足全部必需断言，12 个参与进程均正常退出：
+
+| 场景 | 网络档位 | 结果与本机报告 |
+| --- | --- | --- |
+| 四技能确认、拒绝撤销与合法重试 | Normal、Harsh 各一轮 | 均通过；`Saved/CombatHitAccuracy-20261017/Prediction/report.json` |
+| 施法生命周期、转头快照与 CMC 横移靶 | Normal 一轮 | 通过；`Saved/CombatHitAccuracy-20261017/FinalLifecycleNormal/report.json` |
+| 同上 | Harsh 一轮 | 通过；`Saved/CombatHitAccuracy-20261017/FinalLifecycleRetry/report.json` |
+
+Harsh 使用 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，参数施加于三个进程，不等于实测 RTT。最终两轮命中前的靶敌实际横移为 Normal 120.82cm、Harsh 103.78cm，均超过胶囊直径，双方各收到一次扣血。`FinalLifecycle/report.json` 所在尝试被中断，报告未完成，不计为最终通过；本表采用随后分别重跑的完整报告。重跑前确认源文件、资产清单与游戏模块校验值均未变化。
+
+这些检查针对服务器实时碰撞与 GAS 预测状态撤销，不是历史目标位置回溯、客户端弹体预测或完整世界回滚；高速静止靶扫掠不保证任意两物体在帧间交叉均不漏判。方向快照也不等于第三人称相机准星的视差修正。
+
+## 2026-10-17：完整 ARPG 敌人素材
+
+`BP_CombatEnemy` 改用 Advanced ARPG 包的完整 `SKM_CombatMannequin`，保留源 `SK_CombatMannequin`、`PA_Mannequin` 与 `ABP_Manny_PostProcess`。移动和五类 Montage 使用 `ARPG/EnemySource` 下的本项目动作副本，移除源包业务通知，位移仍由 CMC 负责；行为树、GAS、玩家、HUD 和源素材未替换。
+
+编辑器构建、独立进程 `CombatAssetBuild -Validate` 冷读通过。`Saved/EnemyARPGFull-20261017/Regression/index.json` 的 DX12 离屏回归为 **37 项通过、0 警告、0 失败**：`EnemyHealthPresentation` 检查实际完整网格、骨架、物理资产、后处理和实时血条；`EnemyLocomotion` 使用真实角色输入和世界 Tick，移动 **386.29cm**，组件空间左右足前后摆幅分别为 **78.40／80.62cm**，并验证 GAS 攻击、取消、受击和死亡时对应 Montage 实际播放与推进。始终更新骨骼仅用于离屏测试夹具，不修改业务角色的更新策略。
+
+`Saved/EnemyARPGFull-20261017/MapAI/index.json` 的真实关卡回归 **1 项通过**，使用已保存 NavMesh 和实际出生器蓝图：敌人追击 **516.8cm** 后攻击，玩家生命 **100→75**。这些自动检查验证动画和玩法链路，不代表完整的人工画面验收。
+
+接入前备份 20 个目标资产至 `Saved/EnemyARPGFull-20261017/Backup`；`AssetsBefore.json` 和 `AssetChanges.json` 核对全部 2,837 个 Content 文件，实际写入仅限敌人蓝图与 19 个 EnemySource 资产，其他内容校验值不变。
+
+`Saved/EnemyARPGFull-20261017/NetworkLifecycle/report.json` 记录本轮完整模型版本的独立 DS 与两个 DX12 离屏客户端：`CombatLifecycle` 的 Normal、Harsh 各一轮均通过全部必需断言，六个参与进程全部正常退出，未由脚本强制结束。覆盖施法释放与单次伤害、取消／眩晕／死亡打断、后续移动恢复、按键方向快照及 CMC 横移目标命中。Harsh 的进程参数为 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不等于实测 RTT。`FinalSourceVerification.json` 确认网络运行期间业务源码与资产未变，清单差异仅为更新测试说明的 `Tests/README.md`。
+
+## 2026-10-17：错峰生成与 RVO 避让
+
+出生器第一只立即生成，后续默认每 0.35 秒生成一只；Timer 每帧最多执行一次生成回调，卡顿时不会同帧补刷整波。重复请求不启动第二波，达到数量上限后停止，出生器销毁时清理未完成任务。现有敌人蓝图在服务器 BeginPlay 通过 CMC 注册 RVO，死亡后禁用，旧记录按引擎 TTL 回收；客户端继续接收原有 Character 移动同步。
+
+编辑器构建通过，`Saved/StaggerRVO-20261017/Regression/index.json` 的 DX12 离屏回归为 **40 项通过、0 警告、0 失败**。新增 `SpawnStaggering` 验证出生时刻 **0.00／0.40／0.75 秒**（测试步长 0.05 秒）、重复请求、销毁取消和数量上限；`EnemyRVOLifecycle` 检查实际蓝图的注册与 GAS 死亡后的退出；`RVOCrossing` 使用两只真实敌人、地板与相同 CMC 输入，对比开启和关闭 RVO：胶囊尚未接触时横向速度峰值为 **139.47／0.59cm/s**，开启时实际绕行 **82.57cm**，最小中心间距 **122.35cm**，两只敌人均通过对方。
+
+`Saved/StaggerRVO-20261017/MapAI/index.json` 的真实关卡回归 **1 项通过**：正常等待错峰生成完成，敌人沿保存的 NavMesh 追击 **546.7cm** 后通过 GAS 攻击，玩家生命 **100→75**。RVO 对照是受控的相向行走用例，不代表包围站位、复杂拥堵或导航边缘的全面验收；错峰出生也不等于持续控制所有敌人的攻击顺序。
+
+`Saved/StaggerRVO-20261017/NetworkLifecycle/report.json` 的独立 DS 加两个 DX12 离屏客户端，在 Normal、Harsh 各一轮 **全部通过**，六个进程正常退出，未由脚本强制结束。该回归检查技能释放、取消、眩晕／死亡打断、移动恢复、按键方向快照与横移靶命中，没有将它计为复杂群体拥堵测试。`FinalSourceVerification.json` 确认网络测试期间业务源码和资产未变，清单差异仅为测试说明文档。
+
 ## 战斗流量对照
 
 `CombatTraffic` 停止地图敌人与移动，仅在此测试模式将服务器帧率上限设为 30，确认两个客户端就绪后预热 3 秒，采样 15 秒。服务器每 0.5 秒经真实发射路径生成投射物，共 30 枚；每 0.25 秒通过 ASC 切换能量，共 60 次。该固定夹具不经过技能输入和冷却，不能替代 Combat 的真实 GAS 请求验证。
@@ -227,6 +277,203 @@ UE 5.5 Editor Server、同机两个独立客户端、NullRHI、Normal 网络，�
 该微基准中字节率降低约 **53.3%**，包率基本不变。基线另一次尝试实际服务器帧率为 21.74，未通过检查，排除不计。固定窗口未覆盖最后一批弹体的完整寿命，不能换算“每发总成本”；直接发弹与能量更新也不代表完整技能请求或 AI 战斗负载。初始轨迹仍有生成、相关性、销毁及服务器碰撞成本，客户端使用估算时钟，存在延迟及视觉过冲边界。
 
 [原始计数、样本、模块指纹及排除记录](Evidence/GASProjectileTrajectory.json)；本机原始报告位于 `Saved/CombatNetworkCompletion/TrafficBefore`、`TrafficBeforeExtra` 和 `TrafficAfter`。
+
+## 独立镜头与死亡输入（2026-10-17）
+
+`Saved/PlayerInputFix-20261017-174449/RegressionFinal/index.json` 为 **42 项通过、0 警告、0 失败**。新增 `CameraFacing` 使用真实本地玩家、保存的 Enhanced Input 映射及 PC 输入入口，验证静止观察不转身体、不改角色位置，W 按镜头方向移动并转身，已接纳攻击转向本次瞄准方向，冷却拒绝不额外转身。
+
+`DeathInput` 先以真实伤害触发死亡，再提交鼠标、移动、跳跃和四技能输入：镜头、角色朝向与位置不再受输入影响，Pawn 输入哨兵和 GAS 激活均不再被触发，而 Controller 输入哨兵仍工作。覆盖死亡先于控制器接管及客户端 Restart，并验证同一 Controller 接管新存活 Pawn 后输入可恢复；不手动 EnableInput 或强制 Walking，也不代表新增个人复活玩法。
+
+`NetworkCombat/report.json` 中 Normal 与 Harsh 各一轮通过，耗时分别为 **116.870／158.529 秒**，6 个参与进程均正常退出。两端观察到死亡状态后，Pawn 输入关闭而 Controller 输入保持开启；既有预测确认、拒绝撤销、死亡清理及新会话用例同时通过。这些是状态和输入链路检查，不等同于全部动画观感或网络纠正下的转向画面验收。
+
+## 菜单进入战斗后的视口输入（2026-10-17）
+
+菜单的 `UIOnly` 会在共享游戏视口上保留输入阻断；原合作 HUD 会恢复 `GameOnly`，实际战斗 HUD 原先没有，因此可能握手成功但 WASD 和鼠标都失效。只向 `PlayerController::InputKey` 提交按键会绕过这个阻断，旧输入测试不能证明视口交接正确。
+
+新增 `MenuViewportInput` 使用真实离屏 `GameViewportClient / SViewport / FSceneViewport`：先设置与菜单相同的 `UIOnlyEx`，确认 W 被视口阻断；再由真实 Controller 创建实际 `/Game/Combat/UI/BP_CombatHUD`，执行原 BeginPlay，并从视口入口提交 W。`Saved/MenuInputFix-20261017/Before/index.json` 在未修资产时复现三项失败（视口仍阻断、光标未隐藏、不能移动）；窄修 HUD 后，`Regression/index.json` 为 **43 项通过、0 警告、0 失败**，该用例实际移动 **121.60cm**。
+
+HUD 只追加三个蓝图节点并接回原执行链，不重建控件或原事件图。`CombatAssetBuild -FixCombatInput` 的重复运行返回 `alreadyApplied=1 saved=0`；原 WBP、菜单 Controller 与 ARPG 子控件哈希不变。网络 `CombatLifecycle` 的移动输入也改为视口入口，并检查视口输入已开放，不再绕过视口直接向 PC 提交移动按键。
+
+同一构建的 `NetworkLifecycle/report.json` 中 Normal／Harsh 各一轮通过，耗时 **86.863／127.321 秒**，6 个参与进程均正常退出；两名客户端在加入、施法结束、取消与眩晕恢复后均经视口输入产生真实 CMC 位移，服务器也确认了两人的位移。既有方向快照和命中检查同时通过。这里不把离屏自动化称为真人按键或完整画面验收。
+
+## 普通近战小兵（2026-10-17）
+
+实际 `BP_CombatEnemy` 改用 `UmultiplayerEnemyMeleeAbility` 与独立 `DA_EnemyCombatConfig`，保留本项目的行为树、GAS 和 CMC。素材接线复用单手近战四向移动、挥击、受击和死亡，原包的业务通知不运行。出手点取原剑兵 `AttackTraceNS_C` 的 0.342609 秒，收招补足完整 1.666667 秒动画；规则为 15 伤害、160cm 距离、1.8 秒冷却。近战只使用服务器的目标、距离、前向和遮挡，不生成玩家投射物，治疗与范围动作已解绑。
+
+`Saved/MinionMelee-20261017/RegressionFinal/index.json` 为 **47 项通过、0 警告、0 失败**。新增四项实际小兵蓝图用例覆盖技能授予、起手后单次伤害、移远／墙挡／背后／目标销毁／未就绪／变阵营、眩晕与死亡取消，以及自己的 Casting 句柄清理与行为树恢复。首次全量检查保留在 `Regression`：HUD 测试临时日志捕获设备混入旧输出而失败；同步日志队列后重跑，未删除计时器清理断言或修改生产 HUD。原生无骨骼角色的武器空挂点警告改在实际有骨骼的蓝图上配置插槽后消除。
+
+`MapAI/index.json` 单独通过真实 `CombatTest` 地图检查：出生器实际生成近战小兵，行为树沿 NavMesh 追击 **781.4cm**，在距离 **119.0cm** 时通过自己的 GAS 近战将玩家血量从 **100 降到 85**；之后实际致死并验证寻路、行为树和移动停止。测试没有在追击过程中调用 MoveTo、Attack 或移动敌人。
+
+原 HUD、玩家表现蓝图与规则、两张地图和全部 1009 个源素材文件校验未变。该阶段尚未绑定武器网格，`EnemyWeapon` 只准备好右手挂点；后续长柄接线见下节。不把上述自动化或冷加载检查称为完整双客户端画面验收。
+
+同一模块的 `NetworkLifecycle/report.json` 中，DS＋两个客户端的 Normal／Harsh 各一轮通过，耗时分别为 **110.900／133.953 秒**。这组用例继续验证玩家预测、取消、眩晕恢复、视口输入与方向快照；受控敌人夹具不等于真实小兵追击或双端挥击画面已验收。真实小兵追击由前述 MapAI 单独证明，武器与完整联机画面仍待人工验收。
+
+## 长柄武器接线（2026-10-17）
+
+按用户选择给实际小兵绑定已有 `FengMao_Weapon`，使用原骨架 `FengMaoWeapon_Active` 插槽（父骨骼 `hand_r`），保留源握持偏移；组件本地变换为单位变换，无碰撞、无 Overlap，不另开武器伤害入口。原包资源未修改，玩家、HUD、玩家规则与两张地图六项文件校验未变。
+
+`Saved/PolearmAttachment-20261017/Regression/index.json` 为 **48 项通过、0 警告、0 失败**。新增 `MinionWeaponAttachment` 加载实际保存蓝图与武器，在真实 Idle／Attack 动画及角色平移旋转时验证组件跟随手部插槽，防止武器留在世界坐标。源插槽的只读导出位于 `Saved/PolearmAudit-20261017/SourceSockets.json`。编辑器实际视口已查看右手持械外观；这不代表已逐帧排除挥击穿插，也不代表双客户端完整画面验收通过。实际 DS 双客户端人工会话另行启动，测试报告不冒充人工结果。
+
+## 视觉感知、搜索与巡逻（2026-10-17）
+
+敌人控制器接入 UE Sight，默认发现距离 1500cm、丢失距离 1800cm、单侧视野 75°。行为树服务只从当前感知对象中选择有效敌对玩家，并复核视线；丢失目标后清空 Actor 追踪，只保留最后可见位置，最后看见后最多 5 秒未重新发现便清除搜索记忆。没有目标时，围绕自己的出生点在 700cm 内选择导航可达位置，由原生 MoveTo 移动并短暂停留。导航失败进入等待，不额外添加逐帧寻路。暂未增加听觉、仇恨或包围系统。
+
+`Saved/AIPerception-20261017/Regression/index.json` 为 **49 项通过、0 警告、0 失败**。新增 `SightBoundary` 通过真实 Sight 验证背面、首次遮挡、拆除遮挡后的发现及玩家就绪筛选；原有决策测试验证墙后位置不再更新、搜索期限到达、重新发现与失效目标清理。独立测试世界显式推进真实感知系统，不直接注入成功感知事件。控制恢复、近战结算、武器跟随与随机出生间隔等既有检查继续通过。
+
+同目录 `MapAI/index.json` 的实际 `CombatTest` 地图检查 **1 项通过、0 警告**：先隔离玩家，观察行为树自主生成的巡逻位置、真实非 partial 路径及 **100.7cm** 位移；随后将玩家放在视野内、无遮挡且可达的 900cm 位置，敌人实际追击 **806.5cm**，在距离 **98.1cm** 时由自己的 GAS 近战造成 **100→85** 伤害，死亡后停止行为树、路径和移动。该测试观察到巡逻移动，不冒充完整巡逻路线或双端画面验收。
+
+`CombatAssetBuild -UpdateCombatAI` 只更新保存的黑板和行为树；`-ValidateCombatAI` 在新进程冷加载验证 6 个业务键、5 个分支、16 个主图节点及中断、等待参数。旧两个 AI 资产已备份至 `Saved/AIPerception-20261017/Backup`。原 HUD、玩家蓝图与配置、两张地图的六项校验保持不变。
+
+同一构建的 `NetworkLifecycle/report.json` 中 Normal／Harsh 各一轮通过，耗时 **87.917／102.918 秒**，6 个参与进程均正常退出。该用例继续覆盖原有玩家施法、取消、控制恢复、视口输入和方向快照；它会移除关卡出生器并使用受控敌人，不能据此宣称真实小兵的弱网巡逻或双端动画观感已经验收。真实巡逻、感知后追击与近战由前述 MapAI 单独验证，双客户端画面另行实看。
+
+## 护盾、持续效果与重连恢复（2026-10-17）
+
+本批深化现有战斗和状态恢复，不增加另一套技能框架。新增可消耗的 Shield／MaxShield、周期 Burning 与独立 Root；攻击仍经现有统一伤害入口，减伤后先盾后血。Root 与 Stun 共同贡献移动限制，分别结束自己的 GE；Root 不停整棵行为树，仍允许射程内攻击，追击、搜索和巡逻分支由保存的黑板 CanMove 条件中止。只更新 BB／BT 两个 AI 资产，备份位于 `Saved/CombatDepth-20261017/BeforeAI-221048-6a03a9`。
+
+`DefenseShieldAmount`、`BurningDamagePerTick`、`AreaRootDuration` 默认 0，原玩家和小兵配置资产未重新保存；非零配置分别接入 Q／R。`ConfiguredStatusSkillIntegration` 使用内存配置副本实际激活技能，不用 CDO 或持久资产替测试改平衡。原 HUD 布局保留，原状态文本通过既有事件显示护盾和多种状态，没有增加逐帧属性轮询。
+
+`Saved/CombatDepth-20261017/RegressionFinal/index.json` 的 NullRHI 回归为 **61 项通过、0 警告、0 失败**。新增检查包括先盾后血与溢出、减伤顺序、扣盾回调中的嵌套伤害和取消资格、基础值与上限约束、同源灼烧刷新但不推迟首跳、异源分别计时、不同 Root 与 Stun 的到期次序、死亡停止周期伤害、配置技能接线，以及真实小兵被 Root 后仍能攻击。`CameraFacingMovingAttack` 使用实际保存蓝图和 Enhanced Input，横移期间真实攻击保留出手朝向，完成、取消和眩晕后恢复原转向策略；正常攻击阶段实测横移 260cm，最大朝向误差 0°。这是自动检查，不等同于完整转向动画的人工画面验收。
+
+恢复白名单只包含已支持的 Burning／Root。保存每份实际 GE、来源攻击快照、剩余寿命和下一跳相位；离线期间先按当时防御是否有效计算应到期的伤害，再消耗保存的护盾与生命，致死则恢复死态。原来源失效后仍保留伤害捕获，不改成角色自己施加；原生 GAS 已不合并空来源，无需额外恢复效果类。没有恢复旧 AbilityTask、半次施法或重放伤害事件。
+
+首次回归保留在 `Regression`，当时存在灼烧整数到期漏算与近战测试提前移走目标的两项失败。后者改为等待真实出手，不删除距离复核。随后 `Regression2` 的连续对照进一步暴露真实截止值 `1.75999999` 与下一跳 `0.76000005` 的浮点边界；生产代码统一使用实际 Timer 截止和周期，仅最终到期沿用 GAS 的末跳容差，不提前普通周期。`Regression3` 的 60 项通过后，追加 `PendingFinalTickMatchesContinuous`，在 Duration／Period 剩余均为零、最后一跳仍待执行的真实截止帧保存，与持续在线目标比较；最终 61 项均通过。保留到期前 50 微秒不扣血、整数 2／3 秒到期前后恢复、原来源销毁后攻击加成及离线致死检查，未只改期望凑通过。
+
+`MapAIFinal/index.json` 单独通过真实 `CombatTest` 地图检查：自主巡逻 100.1cm，感知后追击 763.6cm，在距离 136.7cm 时经自己的 GAS 近战造成 100→85 伤害。`ValidateAISameBuild.log` 冷加载确认 7 个业务键（含引擎 SelfActor 共 8 个）、5 个分支、16 个主图节点、9 个装饰器；没有重新保存地图。
+
+同一构建的 `NetworkReconnect/report.json` 使用一个 DS 和两个独立客户端，Normal／Harsh 各一轮均通过全部 **38 个必需断言**，耗时 57.456／60.840 秒，6 个进程全部正常退出。测试将同一来源的真实 Burning 分别施加给将断线的玩家和持续在线的对照目标，确认旧 Pawn 已消失、替代会话未接纳期间确有周期执行；重连后服务器比较实际护盾、剩余寿命及下一跳，客户端分别验证自己的复制结果，不用整数秒推测首跳，也不要求观察者读取远端完整 GE。普通／弱网护盾分别为 57／54，均与连续对照相同；下一跳误差均约 16.4ms，原有 73 生命、37 能量、票据、冷却、死亡与共享进度检查继续保留。
+
+同一模块的 `NetworkLifecycle/report.json` 中 Normal／Harsh 各一轮通过全部 **91 个必需断言**，耗时 74.071／91.840 秒，另外 6 个进程全部正常退出。继续覆盖原有释放、取消、眩晕／死亡打断、视口输入恢复、按键方向快照、真实 CMC 横移靶和双方观察到一次权威伤害；没有把这些夹具称为新预测冲刺或历史命中回溯。两份报告的模块哈希一致；最终检查各自清单中的 241 项文件，差异仅为随后更新的 `Tests/README.md`，没有边改业务源码或资产边宣称同版本回归。
+
+Harsh 参数为 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不等于实测 RTT。网络检查为 NullRHI 状态回归，不是双客户端画面验收。以上为护盾阶段的历史范围记录，不是任意效果的通用存档或预测位移回滚；快照在现有 Logout／服务器 Tick 链路采集，不承诺在伤害属性广播中同步退出和保存时的通用事务原子性。新增冲刺、弹反、成长配装、倒地救援与长期存档的当前结果见下一节。
+
+## 联机战斗扩展闭环（2026-10-17）
+
+本批在前述护盾／灼烧／限制叠加基础上补入预测冲刺、弹反、技能学习与装配、被动成长、倒地救援、版本化存档和终局失败。运行时代码只增加 Mobility、Progression、Coop 三组职责文件，继续使用现有 Projectile、BT／GAS／CMC 和 Presentation；没有另建伤害框架或复制第三方业务。原 HUD 和保存的蓝图布局不变，B 菜单是附加层，界面订阅状态变化，换 Pawn、重建和关闭时解绑。
+
+操作为：B 打开菜单，花 1 点学习初始未解锁的冲刺，再用 Shift；Q 起手约 0.3 秒弹反；F 按住引导救援、松开取消；F5／F9 或菜单保存／读取成长配装。五槽可交换，原四技能仍一级可用。主动技能最高三级，人物等级须达到目标技能级；技能伤害和冷却实际读取 Spec.Level。成长及两个被动通过各自的无限 GE 句柄增减属性，装配只保留一份，不直接堆属性 Base。奖励只接受服务器正数与稳定标识，最近 64 条去重；不将这个有界窗口称为永久历史账本。当前按有效击杀来源发奖，没有助攻分摊或独立离线奖励队列。
+
+冲刺使用原生 `UAbilityTask_ApplyRootMotionConstantForce`，不是客户端瞬移或自写位置 RPC。拒绝时 GAS 撤销本次预测消耗／冷却并结束任务；禁锢、眩晕、死亡和未接纳也终止自己的根运动来源，位置仍由 CMC 碰撞、移动包和纠正链路处理。不承诺任意副作用的通用回滚，也没有新增历史命中回溯。
+
+弹反只在权威碰撞中判定敌对、就绪、时间窗口、正面角度和最初配置的次数上限。成功后改变来源／Owner／Instigator与碰撞忽略列表，以递增 Revision 复制新的直线轨迹段，仍不逐帧复制位置，不延长最初总寿命。原 Sweep 可能缓存墙命中，故在回调栈外再恢复新段，避免旧方向的残余通知错误销毁反射后的弹体。表现恢复基于当前段和服务器估算时钟，不等于客户端弹体预测或零误差同步。
+
+玩家有可行动队友时才进入倒地，HP1但非战斗就绪，停止碰撞与机关占用；普通治疗不复活倒地者。F 是服务器 GAS 引导：独占目标、持续复核距离／遮挡，释放、受伤、眩晕、死亡或退出统一收尾，完成只恢复 30%生命而不补能量／冷却。最后一名可行动玩家死亡才写入共享 bGameLost，失败后拒绝钥匙提交和胜利，结果可补读且重复通知不重复发布。Controller 的 Enter 重开入口仍由 GameMode 校验和去重。
+
+长期 SaveGame 只保存成长、技能和被动，不包含本局 HP、位置、资源、冷却或旧任务；版本、等级、点数收支、槽位唯一性、档案身份不合法时保持当前状态。单机固定本地槽，联机仅访问服务器签发 ProfileId 对应的档案，没有客户端文件路径。匿名直连尚无账号认证，不声称服务器重启或换服后自动识别原玩家；保存／读取和本局票据恢复是不同流程。
+
+`Saved/CombatComplete-20261017/RegressionIsolated/index.json` 为 **87 项通过、0 警告、0 失败**；新增冲刺4项、弹反5项、合作生命6项、成长5项、菜单2项及小兵类型4项。覆盖真实墙碰撞／Falling重力、取消不残留根运动、来源切换／旧来源受伤／次数上限／旧Sweep墙通知、倒地和救援的排他／动态距离遮挡／六种中断／失血期限／团灭、GAS Spec授予和被动撤销、拥有者复制条件、真实菜单按钮与换绑清理。磁盘存档验收只使用先验不存在的随机服务器档案槽，覆盖多次加载不重复、HP／能量／冷却不返还、版本及身份等坏数据拒绝，结束清理测试自己的槽；没有读写正式 `CombatProgress_Local`。第一次 `Regression` 在测试直接读取复制注册时缺少 UClass RepIndex 初始化而触发引擎断言；只修夹具前置步骤，未放宽 OwnerOnly／Always 复制断言。`Regression2` 的82项、追加终局后的83项和隔离修复前的87项保留为中间记录。
+
+为使正常关卡能使用弹反并体验成长，出生器默认前两只近战、第三只远程，继续复用同一保存 BP、骨架、武器、动作、行为树和 CMC。远程在出生前复制实例配置，射程1100cm／伤害15／成本0／冷却1.8s，保留原起收招时间；只授予实际攻击，不改共享资产。每只经验默认50，两次实际击杀达到二级。四项新增检查覆盖实际BP配置、真实Sight→BT→GAS发弹及眩晕恢复、错峰／重复／数量上限／关闭远程／销毁取消，以及两种真实小兵击杀奖励和重复归零不再发奖。
+
+`MapAIPlayable/index.json` 单独通过真实地图检查：自主巡逻100.0cm，感知后追击749.9cm，在距离150.5cm时由小兵自己的 GAS 近战造成100→85伤害，之后死亡退出决策和路径。此处没有在追击时替行为树发 MoveTo／Attack，不是完整群体战斗画面验收。编辑器和 Win64 Development 游戏目标均编译通过；本轮未保存额外蓝图或第三方资产。
+
+本轮三进程 NullRHI 网络结果（每轮一个本机 DS、两个独立客户端）：
+
+| 场景 | 必需断言／每轮 | Normal | Harsh |
+| --- | ---: | ---: | ---: |
+| CombatExpansion | 78 | 通过，61.551s | 通过，81.441s |
+| CombatReconnect | 66 | 通过，111.281s | 通过，119.864s |
+| CombatLifecycle | 91 | 通过，88.155s | 通过，92.634s |
+| Combat（隔离修复后） | 222 | 通过，64.539s | 通过，106.397s |
+
+Expansion 验证真实客户端学习 RPC、同键冲刺预测接受／禁锢中断／资源拒绝撤销、双端收到反射轨迹与单次伤害、拥有者成长与远端隐私，以及救援取消／眩晕中断／成功。测试三端配置只在内存延长观察窗口：冲刺1.2s／冷却至少6s、救援4s／失血45s；服务器弹反 GE 窗口2s，用于隔离命令时延，**不冒充客户端按Q的竞技时序验收**。生产默认值由本地功能回归检查，资产与全局 CDO未改。
+
+Reconnect 先由客户端真实学习 Dash／Fortitude、服务器发奖升级，再在存活、倒地、死亡三种状态分别真实断开连接，通过原 GI／票据／握手生成新 Pawn。核对同一服务器档案、技能与被动、公开max125／HP73／能量37、剩余冲刺冷却、离线灼烧和原有共享进度；半次冲刺与救援不恢复。倒地断线前，伙伴真实8s救援已被双方观察；旧目标失效后业务清理旧救援，新 Pawn 的失血期限仍为原始45s，Normal／Harsh实测分别在45.09／45.04s自然死亡，而非重连后再给45s。上述三份 `Network*Final/report.json` 的18个参与进程均正常退出，没有脚本强杀。
+
+这三组报告及 `MapAIPlayable` 对应模块 SHA256 `b6ff790fcd08f26d679101a9ba9dec4f451c571ae472a1f7e7c76de992bd5211`。随后旧 `Combat` 的 Harsh 轮在治疗阶段超时，失败保留于 `NetworkCombatFinal/report.json`，不计为通过。排查发现该场景未隔离原关卡小兵：第一名玩家接纳后在真实地图等待18.4秒，之后测试却直接假定其生命仍为100；原日志未采集治前HP，不能断言具体是哪一次小兵攻击造成了何种血量。修复仅限测试：在Combat模式宣布服务器就绪前清理地图出生器／敌人／遗留弹体，新增双方满血满能量与治前40HP的必需断言；服务器治疗结果不再等待客户端满足预期后才检查。没有重置资源来遮盖污染，没有修改治疗业务或放宽70HP结果。其他真实地图和正常游玩不清场。
+
+隔离修复后模块为 `c79af74b4f2defcbaa769d6995e4904be9a2439e9b860fd9b653c6b5142f2c52`，全87项回归再次通过，编辑器与游戏目标均编译通过。与已通过报告的254项源清单比较，差异仅为测试Driver、Combat场景、运行脚本及本说明，业务源码、配置和所列资产未变；不把两种测试模块说成同一二进制。
+
+`NetworkCombatIsolated/report.json` 的Normal／Harsh各一轮通过全部222个必需断言，6个进程均正常退出。两轮实际记录双方初始HP100，队友真实受伤后HP40，治疗后HP70、施法者能量55；后续预测接受／拒绝／撤销、合法重试和资源隐私检查全部保留。运行脚本契约自测通过，缺失新增基线或准备断言仍判失败。本轮上表共8个通过轮次、24个正常退出进程；失败报告仍独立保留，没有算入成功数量。收尾时没有遗留本轮UE测试进程。验证开始于10月17日，最终隔离复测于10月18日完成，目录沿用开始日期。
+
+Harsh统一为 `PktLag=200`／`PktLagVariance=50`／`PktLoss=5`，它们是模拟器参数，不是实测RTT。网络场景、磁盘状态和UMG构造检查都不等同于真人操作或渲染画面验收；新冲刺／救援动画观感、双端美术衔接仍需实看。旧带宽微基准仍属于对应历史版本，不能直接当成本轮增加弹反和成长后的性能收益。
+
+## 撤离关卡、世界血条与最终画面复核（2026-10-18）
+
+新增独立 `/Game/Combat/Maps/CoopEscape`，不覆盖原 Egypt 地图或原 HUD。玩法为两人接纳后开始 3／4／5 只小兵三波战斗，按间隔错峰生成，活动敌人加待生成预约总数限制为 8；玩家在战斗中领取真实重叠补给、收集四把钥匙，两名不同的有效玩家同时踩板开门，再共同进入出口撤离，Enter 经原权威入口重开。机关仍使用本项目 Actor／组件与服务器规则，未为了使用 GAS 重写整套机关。敌人保留自有 BT＋GAS＋CMC，复用已有长柄外观和动作。
+
+敌人血条改为世界空间组件，本地朝向各自镜头，跟随已平滑的骨骼身体，并按胶囊高度放置；不复制血条旋转。使用有遮挡材质、固定物理尺寸、无碰撞／阴影／射线追踪，手动重绘；生命或上限不变不刷新，超距隐藏后再次可见时补读当前值，死亡和退出解绑并停用。Dedicated Server 不创建 UI。原 HUD 继续通过事件订阅更新，底部布局不重建。倒地仅复用已有 DeathMontage 进行本地表现，救起只停止这一条蒙太奇，不增加 ragdoll 或改动物理／移动；失血死亡承接原倒地姿态，退出时在组件 EndPlay 清理后撤销唯一 next-tick 表现任务。
+
+`Saved/CoopEscape-20261018/RegressionPoseFloorFinal98/index.json` 为 **98 项通过、0 警告、0 失败**，包含世界血条、波次预约／上限、补给唯一领取／满资源／倒地资格、终局停止、晚读取快照，以及重复倒地通知、救援恢复、失血死亡承接、RepNotify 顺序和 DS 不播表现。退出检查保留对象但真实调用 RouteEndPlay，再推进世界，确认旧姿态未被遗留回调停止或重播。首轮 `RegressionDowned98` 的随机错峰时间失败未删除：夹具在世界首次 Tick 前创建 Timer，Pending 激活额外增加一帧；测试现在先正常推进一帧，仍保留随机间隔与原 `.08–.17s` 断言，未修改生产出生间隔或放宽门禁。该测试文件只在 `WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR` 编译，其全部用例均为 EditorContext，不把 PIE 专用 API 编进非编辑器游戏目标。
+
+最终正式技能画面使用保存的 `BP_CombatPlayer`、`BP_CombatEnemy`、实际动画／蒙太奇和原布局的 Escape HUD；只在开发验收 World 的 GameMode 实例装配，不改生产 GameMode、CDO 或资产。Basic Combat 的高空隔离夹具仅补无碰撞可见灰色表面；另两组沿用已有实际地板。倒地／救起先验证原生命与状态，再分别等待 0.8／0.35 秒观察动画混合，不修改伤害、回血、救援时间或请求。两端每个阶段必须等本轮唯一 token 的非空 PNG 保存后才回执，Expansion 的救援经真实 F 按住／释放入口。
+
+| 最终场景 | 网络／画面 | 必需断言 | 结果与本机报告目录 |
+| --- | --- | ---: | --- |
+| Combat | Normal，正式角色／HUD，6 PNG | 231 | 通过；`FinalSkills/PoseFloorCombatNormal` |
+| CombatLifecycle | Normal，正式角色／HUD，8 PNG | 102 | 通过；`FinalSkills/PoseFloorLifecycleNormal` |
+| CombatExpansion | Normal，正式角色／HUD，10 PNG | 92 | 通过；`FinalSkills/PoseFloorExpansionNormal` |
+| Combat | Harsh，NullRHI | 222 | 通过；`FinalNetwork/PoseFloorCombatHarsh` |
+| CombatLifecycle | Harsh，NullRHI | 91 | 通过；`FinalNetwork/PoseFloorLifecycleHarsh` |
+| CombatExpansion | Harsh，NullRHI | 78 | 通过；`FinalNetwork/PoseFloorExpansionHarsh` |
+| CombatReconnect | Normal／Harsh，NullRHI | 66／66 | 两轮通过；`FinalNetwork/PoseFloorReconnect` |
+
+上表目录均位于 `Saved/CoopEscape-20261018`，各 case 错误数为 0，进程自然退出。实际 Editor 项目模块 SHA256 均为 `5ae0ed3f3b2ba593ce70b35206dd7987455fbd170613c99cc29426f8f490846e`；报告源指纹在仅限 Editor 的测试 guard 修正前后不同，不声称所有源清单完全相同。实图确认正式 HUD、治疗蓝色粒子、R 地面标记与施法条、倒下／躺地救援／38/125 站起；旧空原生外观夹具与首帧过早截图仍保留，不计为正式视觉通过。受控 BasicDefense 图对 Q 表现仍只作部分证明，不能拿它代替下述真实撤离场景的蓝盾画面。
+
+### Windows 打包客户端完整撤离
+
+Win64 Development／Shipping 游戏目标与 Cook／Stage 已完成，但当前实际联机验收拓扑是 **一个 Editor Dedicated Server＋两个真实 Windows Development 打包客户端**，不是独立 Server Target 成品，也不是云端部署验证。显式 `ServerExecutablePath=UnrealEditor.exe` 的运行记录包含服务器构建种类与哈希；曾把普通 Game exe 加 `-server` 的尝试被 `DedicatedAuthority` 门禁正确拒绝，旧红报告 `PackagedFinalNormal` 保留。
+
+首次混合包体用例 `PackagedClientsEditorDSNormal` 虽通过状态门禁，初始截图曾只有地形和 UI、人物与静态场景延迟出现，因此不计为完整视觉通过。UE5.5 的 PSO 默认策略会在预缓存未就绪时不创建 Static／Skinned Mesh 代理，且该策略不用于 Editor。当前只设置 `r.PSOPrecache.ProxyCreationWhenPSOReady=0`，保留预缓存、取消延迟代理：优先保证首次进入时人物与场景可见，代价是首次绘制可能同步创建 PSO 并卡顿，**不是性能优化数据**，也不代表已完成通用 PSO 预热或消除首帧停顿。
+
+同一 `PackageVisible` 内容、同一客户端 exe SHA256 `8c103910c34d0851fc3b5f13cbe3e50a8dbec066e3cdc7c8ddc07af42ec6c9ab`，随后三轮完整撤离均通过全部 **38 个必需断言**，每轮保存两端合计 20 张 1280×720 PNG：
+
+| 轮次 | 档位 | token | 报告目录 |
+| --- | --- | --- | --- |
+| 1 | Normal | `20261017-215931-e69b4a48-1` | `PackagedVisibleNormal` |
+| 2 | Moderate | `20261017-221035-482cbb29-1` | `PackagedVisibleRound2Moderate` |
+| 3 | Normal | `20261017-221328-d5cfebca-1` | `PackagedVisibleRound3Normal` |
+
+实看双方 Ready／Combat／Gate／Victory／Restart，首次人物、长柄小兵和场景完整可见；Q 蓝色护盾在真实战斗场景中包住身体，三波与钥匙 0→4、双人开门／撤离、Enter 重开后 0/4 均有真实状态与画面依据。它们是玩法和画面验收，不是 CSV／Insights 性能测试、固定 60FPS 结论或录像逐帧质量保证。Moderate 为配置 `PktLag=100`／`PktLagVariance=20`／`PktLoss=2`；Harsh 为 200／50／5，均不等于实测 RTT。
+
+后两轮日志检索未见 PSO 创建等待、PSO hitch 报告或 VSM overflow，但 **两端在重开 PendingNetGame 握手期间各有 3 条 `CreateSavedMove: Hit limit of 96 saved moves` 警告**，之后成功切图并恢复新局；该问题仍保留待定位，不宣称网络零警告。Development 图中的旧蓝图 `true/false` PrintString 也未用全局屏蔽消息隐藏。
+
+Shipping 编译／打包通过，但本轮菜单烟测被首次启动的 Windows 安全中心防火墙权限弹窗阻挡，**未确认菜单、未连接服务器，不计为菜单或完整联机通过**。没有代点安全权限或修改系统设置，仅核对实际路径后关闭本次自有 bootstrap 与 Shipping 进程。该受阻记录不能被上述三轮 Development 联机闭环替代，反之也不能拿 Shipping 的构建成功证明其菜单或联网已经验收。
+
+收尾重新校验原 `Content/Stylized_Egypt/Maps/Stylized_Egypt_Demo.umap` SHA256 为 `e2d04e4905867717252f9552af9cc43a3ea5bcfecd3dabb0a681901af321cd6d`，原 `Content/Combat/UI/WBP_CombatHUD.uasset` 为 `6c264e7dd2646cfd1599e57ad3ce2157f937efd64a0ea86cfa7c070b1619ef79`，与修改前一致。新关卡、HUD 副本与素材迁移失败记录单独保留，没有覆盖原件。
+
+## 技能瞄准、范围与失败反馈（2026-10-18）
+
+本轮将技能的几何查询集中到 `multiplayerCombatTargeting`，资格查询与失败文案集中到 `multiplayerCombatSkillStatus`。本地预览、能力确认和服务器结算共用规则，不另外维护一套 HUD 伤害范围；客户端只提交瞄准方向，不能指定权威伤害、目标或任意落点。没有把机关重写成 GAS，也没有引入通用世界快照回滚框架。
+
+- 左键普攻：镜头准星选点，真实发射点收敛到选点，预览与服务器使用同半径扫掠；发射点贴墙有明确拒绝原因。
+- Q／E／Shift：按住预览、松开释放，右键取消。Q 区分全向减伤与短时正面弹反；E 显示 6 米三维治疗范围及实际选择的受伤友方（含自己）；Shift 显示胶囊宽度的可达走廊，未学习时提示按 B，静态障碍截断距离。
+- R：按键选地面、左键确认、右键取消。确认后本次落点锁定；水平半径 220cm、有限高度及遮挡过滤由预览和实际目标收集共用，实际结算仍复核移动目标。精确结果圈保留 2 秒，素材参考半径独立配置为 400cm，当前爆发粒子缩放 0.55，不再把视觉大爆炸冒充伤害边界。
+- 预览和取消不扣能量、不开始冷却、不产生能力预测键。已确认施法的取消仍沿用原有不退款规则；新预览清除上一技能的短时失败消息。未就绪、死亡、倒地、救援、眩晕、冷却、能量不足、未学习、无治疗对象、无有效地面或冲刺受阻均有具体反馈；服务器拒绝使用服务器原因和权威资源／剩余冷却值。
+- 原 UMG 布局和事件驱动生命／能量更新保留；只有本地瞄准几何跟随镜头更新，范围投影按场景遮挡裁剪，不复制预览。小兵仍走自己的 BT＋GAS，起手红色扇区不冒充本轮单体锁定目标。
+
+最终专项报告根目录为 `Saved/SkillTargetingFix_20261018`。`FinalRegression/index.json` 的 111 项全部成功、0 警告、0 失败；其中新增 11 项目标几何／真实命中测试和 2 项失败反馈测试，原 HUD 生命周期用例补充“新预览清除旧反馈”检查。`FinalCombat/report.json` 的 Normal／Harsh 各 270 项必需门禁通过，`FinalLifecycle/report.json` 的 Normal 102 项通过；三组参与进程均自然退出、未由脚本强制停止。Editor 与 Win64 Development 游戏目标均构建通过。
+
+FinalCombat／FinalLifecycle 记录的磁盘 Editor 模块 SHA256 均为 `7926541e8e67268f7a223e6af927562c7c71a387de7ddc538e4ebde08f52c122`。报告的 `loadedByRuntimeVerified=false` 保持原义，不把磁盘指纹扩写成运行时模块加载身份测量。后续 Expansion 测试隔离修正会改变测试模块，不与上述二进制混称同源。
+
+真实按键验收经所属 PlayerController 的正式输入绑定完成：双端分别按住 Q／E／R／Shift，保存本轮 token 的 PNG，再右键取消、松开原按键，检查未误扣资源或启动能力。逐张核对了双方的 Q 扇区、E 球形范围与所选目标、R 锁定圈和缩小后的结果粒子，以及解锁 Shift 的 4.5 米走廊；不是只检查文件存在。测试使用隔离靶场，不把灰色夹具表面误称正式关卡丢失，也不据此宣称动画连续观感、实际公网或性能帧率全部验收。
+
+失败记录没有删除：`VisualInput` 的首帧复合预览失败缺少子项诊断，不能事后断言其根因；`VisualInputFinal` 则被新增严格门控发现声明高度 4000 与敌人实际 3992.15 不符。修正夹具摆位、等待独立复制依赖与两次真实 World Tick 后，`VisualInputRetry` 的 Normal／Harsh 均通过。等待条件不轮询预览结果，不能靠“等到成功”掩盖错误。
+
+`FinalExpansion` 的追加复测在学习阶段超时，截图已有“本局失败”，证明专项开始前存在正式场景污染；旧日志没有治前生命记录，不能指认具体受伤过程。后续只把 Expansion 的敌人／刷怪器清场提前到首位玩家连接前，并新增双端 HP100／能量100／可行动且未终局的强制基线，不重置血量或终局来抹掉污染。该测试模式隔离不影响正常游戏中的敌人。
+
+修正后 `FinalExpansionIsolated/report.json` 的 Normal **103 项必需门禁全部通过、0 错误**，包含两端真实学习 Shift、各自按住预览／取消不误放、实际冲刺接受／中断／拒绝撤销，以及原有弹反、成长和救援流程。`FinalRegressionIsolated/index.json` 再次确认 **111 项成功、0 警告、0 失败**。此时 Editor 模块为 `e4dc53ddb9021cb24ebc2278007a455cfba185343adbf0fe28000cc728648e7c`；与 FinalCombat 的源清单逐项比较，差异仅为网络测试脚本、`CoopCombatExpansionScenario.cpp` 和 `CoopNetTestDriver.cpp` 三个测试文件，业务／表现／配置与所列资产均未变化，不把不同测试模块说成同一二进制。
+
+收尾的可操作会话为 `Saved/DedicatedServer/20261018-201654-2e1c5a1e`：`127.0.0.1:7777`、一个 Editor DS 和两个普通客户端，服务器日志读回 `EnemyCount = 1`，两名玩家均正常加入并完成战斗接纳。没有使用自动测试技能或无敌开关，也未抢占正在使用的 Insights 窗口；此会话供用户操作，不自动生成通过结论。`-EnemyCount 1` 只改当次地图实例，Enter 重载会恢复地图默认数量；如需继续单敌人验收，关闭双方客户端后用同一启动参数重开。
+
+Harsh 为模拟器参数 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不是实测 RTT。共享规则保证相同输入与场景状态下的查询一致，不承诺预览时移动目标必在稍后命中；服务器仍按结算时状态复核。冲刺提示的是预计水平距离，落差和动态障碍仍由 CMC 碰撞、重力和权威校正处理。
+
+### 普攻方向、治疗结果与 R 输入修复（2026-10-18，后续专项）
+
+本轮报告独立保存在 `Saved/SkillFeedbackFix_20261018`，不引用上一轮 111 项或网络门禁作为本轮通过证据。普攻起手 Cue 使用本次权威发射的位置／方向快照，Cascade 与 Niagara 使用相同旋转；治疗结果保留施法者上下文，资源和冷却仍用原预测键，未预测播放的权威结果 Cue 不再继承该键后被拥有者误去重。瞬时 Cue 缓存本次表现配置，异步补载时不重新从已退出的施法者推导配置。
+
+当前操作统一为 Q／E／R／Shift 按住预览、松开释放；预览期间仍可左键确认或右键取消。五槽技能栏独立置于底部中央，生命／能量留左下，透明背景及事件更新逻辑不变。普通波次默认全近战，小兵的远程变体保留为显式选项。专项资产刷新脚本先逐个备份并验证哈希，仅更新专用表现副本、小兵受击反馈和治疗 Cue；原 HUD、地图和其他本项目资产必须不变。
+
+新增测试覆盖真实 R 释放、左键确认后松键不重复释放、取消后松键、槽位交换，以及实际范围粒子位置。联机视觉模式额外测试真实 E 自疗：保留原伤害和消耗状态，等待治疗冷却自然结束，暂移受伤队友，再经跨帧 E 输入验证预测消耗及权威结算；拥有者与旁观者都必须观察本轮新活跃的正式治疗粒子。截图在观察到短粒子时立即发起，生命、预测确认和落盘回执分别检查，不重放粒子凑截图。
+
+首轮 `RegressionRendered/index.json` 记录 120 项中 119 成功、1 失败；失败属于新增 `HealResultCueOwnerAndObserver` 的网络角色夹具：仅更改 Actor Role 没有刷新 ASC 缓存的权威身份，不能当作客户端接收分支。该报告及失败细节保留；后续通过结果另录，不覆盖此失败。正常撤离关卡的移动施法与冷加载观感仍需单独验收，隔离夹具不能代替完整玩法验证。
+
+修正后的 `RegressionFinal/index.json` 为 **120 成功、0 警告、0 失败**（实际渲染，不用 NullRHI 跳过粒子项）。专用 RPC 接收 ASC 在 Proxy 角色下注册并明确验证引擎缓存非权威；旧本地预测键确实被过滤，独立权威结果键各产生一次拥有者／旁观者组件。保存的 `GCN_Heal` 只对不同施法者隔离实例，避免两位施法者冷加载时互相覆盖，不引入通用事件队列。
+
+`Combat/report.json` 的 Normal／Harsh 各 **285 项必需门禁通过、0 错误**，包含真实 E 输入、预测消耗、服务器结算、两端新治疗组件及截图；`Lifecycle/report.json` 的 Normal／Harsh 各 **106 项通过、0 错误**，包含真实 R 按下／释放、原生预测、两端正式范围粒子、一次伤害及取消／眩晕／死亡收尾。四组的 Server／Client／Partner 均 exitCode 0、未由 runner 强停。
+
+实际逐图检查确认五槽与生命能量分离，R 双端结果粒子出现在落点、施法者黄圈清楚。首轮发现默认操作说明盖住技能栏，最终将两种说明由视口高度 84% 上移至 62%；后续 Lifecycle 双端图确认不再重叠。Client SelfHeal 图可见脚底到身体的治疗粒子；Partner SelfHeal PNG 未清楚显示短粒子，虽然该端正式组件位置／活跃断言已通过，不把这张图宣称为清晰的治疗画面。BasicAttack PNG 是命中后画面，起手方向的证据来自真实 Cascade／Niagara 组件快照测试，不能替代多角度连续操作录像。
+
+版本边界：Combat 的磁盘模块为 `e37a08001f4d966aaeb0c2c85e3fc020feb917623d150d2697ceec6a2682d9cd`，Lifecycle 为 `9ac52d88889c4155404424ea0ecd6ba88baba94af569f88c2a4c9d76c4e36d53`；两报告源清单比较仅 `multiplayerCombatPresentation.cpp` 不同，对应两处提示 Y 坐标调整，技能规则、网络代码、测试及资产不变。报告仍标明 `loadedByRuntimeVerified=false`，不将磁盘哈希说成运行时模块证明。原 HUD 与埃及原地图哈希保持原值，专项四资产均有校验过的原稿备份；所有首次失败记录保留。
 
 ## 历史实验
 

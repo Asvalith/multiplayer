@@ -7,12 +7,15 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
 #include "Core/multiplayerLog.h"
+#include "Combat/multiplayerCombatCoop.h"
+#include "Combat/multiplayerCombatPresentation.h"
 
 /*
  * 构造阶段只搭建角色的固定组件和默认移动参数，不读取 World，也不执行任何联网规则。
@@ -43,6 +46,7 @@ AmultiplayerCharacter::AmultiplayerCharacter(const FObjectInitializer& ObjectIni
 	// (**) 平台起跳会继承基座水平速度；空中无输入时强制刹车会很快抵消这份惯性，
 	// 即使网络完全正常也会落在平台后方。保留惯性，方向调整仍由 AirControl 处理。
 	Movement->BrakingDecelerationFalling = 0.0f;
+	GetCoopComponent()->bEnableDowned = true;
 
 	//弹簧臂会在遮挡时自动收缩，比直接把摄像机挂到角色上更适合第三人称视角。
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
@@ -105,10 +109,20 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 
 	// 原有移动 Action 保持不变；基础战斗按键无需新增输入资源，也可由蓝图调用相同接口。
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AmultiplayerCharacter::Attack);
-	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AmultiplayerCharacter::Defend);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AmultiplayerCharacter::Heal);
-	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AmultiplayerCharacter::CastArea);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AmultiplayerCharacter::PreviewDefense);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &AmultiplayerCharacter::ReleaseDefense);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AmultiplayerCharacter::PreviewHeal);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &AmultiplayerCharacter::ReleaseHeal);
+	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AmultiplayerCharacter::PreviewArea);
+	PlayerInputComponent->BindKey(EKeys::R, IE_Released, this, &AmultiplayerCharacter::ReleaseArea);
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AmultiplayerCharacter::CancelCast);
+	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this, &AmultiplayerCharacter::PreviewDash);
+	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this, &AmultiplayerCharacter::ReleaseDash);
+	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AmultiplayerCharacter::Rescue);
+	PlayerInputComponent->BindKey(EKeys::F, IE_Released, this, &AmultiplayerCharacter::CancelRescue);
+	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this, &AmultiplayerCharacter::ToggleProgressionMenu);
+	PlayerInputComponent->BindKey(EKeys::F5, IE_Pressed, this, &AmultiplayerCharacter::SaveProgress);
+	PlayerInputComponent->BindKey(EKeys::F9, IE_Pressed, this, &AmultiplayerCharacter::LoadProgress);
 
 	// Enhanced Input 把“动作”与具体按键解耦，同一套角色代码可复用不同输入方案。
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
@@ -139,7 +153,7 @@ void AmultiplayerCharacter::Move(const FInputActionValue& Value)
 	// 二维输入分别表示左右和前后移动。
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
-	if (Controller != nullptr && IsCombatReady() && !IsStunned() && !IsCasting())
+	if (Controller != nullptr && IsCombatReady() && !IsMovementBlocked() && !IsCasting())
 	{
 		// 只取控制器的 Yaw，避免镜头俯仰导致角色产生向上或向下的移动分量。
 		const FRotator Rotation = Controller->GetControlRotation();
@@ -166,4 +180,50 @@ void AmultiplayerCharacter::Look(const FInputActionValue& Value)
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
 	}
+}
+
+// 成长面板是独立附加层；原 HUD、准星与蓝图事件图不重建。
+void AmultiplayerCharacter::ToggleProgressionMenu()
+{
+	CancelSkillTargeting();
+	if (ProgressionMenu && ProgressionMenu->IsInViewport()) { ProgressionMenu->RemoveFromParent(); return; }
+	if (auto* PC = Cast<APlayerController>(GetController()); PC && PC->IsLocalController())
+	{
+		ProgressionMenu = CreateWidget<UmultiplayerCombatProgressionWidget>(PC, UmultiplayerCombatProgressionWidget::StaticClass());
+		if (ProgressionMenu) ProgressionMenu->AddToViewport(20);
+	}
+}
+
+// 松键只确认自己开始的预览，切换到另一技能或右键取消后不补发旧输入。
+void AmultiplayerCharacter::ReleaseDefense()
+{
+	ReleaseTargetSlot(1);
+}
+void AmultiplayerCharacter::ReleaseHeal()
+{
+	ReleaseTargetSlot(2);
+}
+void AmultiplayerCharacter::ReleaseArea()
+{
+	ReleaseTargetSlot(3);
+}
+void AmultiplayerCharacter::ReleaseDash()
+{
+	ReleaseTargetSlot(4);
+}
+void AmultiplayerCharacter::ReleaseTargetSlot(int32 Slot)
+{
+	if (IsTargetingSkill() && GetTargetingSkill() == GetProgressionComponent()->GetSlotSkill(Slot)) ConfirmSkillTargeting();
+}
+
+// 两端都从同一春臂配置重建本次镜头原点，不接受客户端上传任意射线起点。
+FVector AmultiplayerCharacter::GetCombatViewOrigin(const FRotator& Aim) const
+{
+	const FVector Pivot = CameraBoom->GetComponentLocation() + CameraBoom->TargetOffset;
+	const FVector Desired = Pivot - Aim.Vector() * CameraBoom->TargetArmLength + Aim.RotateVector(CameraBoom->SocketOffset);
+	FHitResult Hit;
+	if (CameraBoom->bDoCollisionTest && GetWorld()->SweepSingleByChannel(Hit, Pivot, Desired, FQuat::Identity,
+		CameraBoom->ProbeChannel, FCollisionShape::MakeSphere(CameraBoom->ProbeSize),
+		FCollisionQueryParams(SCENE_QUERY_STAT(CombatCameraOrigin), false, this))) return Hit.Location;
+	return Desired;
 }

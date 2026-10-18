@@ -6,6 +6,15 @@
 #include "Engine/World.h"
 #include "Network/multiplayerGameInstance.h"
 #include "TimerManager.h"
+#include "InputCoreTypes.h"
+#include "Components/InputComponent.h"
+
+// Pawn 死亡后只关闭自身输入；Controller 保留终局重开入口，服务器仍复核是否真的结束。
+void AmultiplayerCoopPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+	InputComponent->BindKey(EKeys::Enter, IE_Pressed, this, &ThisClass::RequestRestartCurrentRound);
+}
 
 
 // 当前 World 中只有本地控制器订阅退出失败通知，服务器上的远端控制器不处理本地界面。

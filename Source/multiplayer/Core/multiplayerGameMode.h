@@ -36,6 +36,10 @@ public:
 		FGuid& OutTicket, FText& OutError, bool& bRetryable);
 	// Controller 在销毁 Pawn 前调用；重复的销毁/Logout 通知不会覆盖第一次快照。
 	void SaveCombatSession(AmultiplayerCoopPlayerController* Controller);
+	// 终局死亡后复核整队；仍有活跃玩家时保留救援机会，不把单人死亡当整局结束。
+	void NotifyCombatPlayerDeath();
+	// 服务器接纳完成后的通知；场景出生器据此启动，GameMode 不接管刷怪数量、落点或计时。
+	FSimpleMulticastDelegate OnCombatSessionAccepted;
 
 	// 合作目标的权威提交入口。
 	/**

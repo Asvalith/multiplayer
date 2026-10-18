@@ -12,6 +12,8 @@
 #include "BehaviorTree/BlackboardData.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Bool.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Object.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Float.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Vector.h"
 #include "BehaviorTree/Tasks/BTTask_MoveTo.h"
 #include "BehaviorTree/Tasks/BTTask_Wait.h"
 #include "Combat/multiplayerCombatAbility.h"
@@ -35,6 +37,9 @@
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 #include "Navigation/PathFollowingComponent.h"
+#include "Perception/AIPerceptionComponent.h"
+#include "Perception/AIPerceptionSystem.h"
+#include "Perception/AISense_Sight.h"
 #include "NavigationSystem.h"
 #include "NavMesh/RecastNavMesh.h"
 #include "NavMesh/NavMeshBoundsVolume.h"
@@ -83,11 +88,25 @@ namespace
 		// 只推进真实世界、BT、GAS 与投射物，不直接调用 Service 或攻击任务。
 		void Advance(float Seconds)
 		{
-			for (float Elapsed = 0; Elapsed < Seconds; Elapsed += 0.05f)
+			for (float Elapsed = 0; Elapsed < Seconds;)
 			{
+				const float Step = FMath::Min(.02f, Seconds - Elapsed);
 				++GFrameCounter;
-				World->Tick(LEVELTICK_All, 0.05f);
+				World->Tick(LEVELTICK_All, Step);
+				// 独立世界不由引擎主循环推进 Tickable；直接推进真实 Sight 系统，不注入感知结果。
+				if (UAIPerceptionSystem* Perception = UAIPerceptionSystem::GetCurrent(World)) Perception->Tick(Step);
+				Elapsed += Step;
 			}
+		}
+
+		bool WaitFor(TFunctionRef<bool()> Condition, float Timeout = 1.5f)
+		{
+			for (float Elapsed = 0; Elapsed < Timeout; Elapsed += .02f)
+			{
+				if (Condition()) return true;
+				Advance(.02f);
+			}
+			return Condition();
 		}
 
 		APlayerController* Control(AmultiplayerCombatCharacter* Character)
@@ -170,7 +189,7 @@ bool FCoopCombatRulesTest::RunTest(const FString& Parameters)
 		Character->GetCharacterMovement()->DisableMovement();
 	UAbilitySystemComponent* ASC = Player->GetAbilitySystemComponent();
 	TestEqual(TEXT("Initial health"), Player->GetHealth(), 100.0f);
-	TestEqual(TEXT("Player receives four skills"), ASC->GetActivatableAbilities().Num(), 4);
+	TestEqual(TEXT("Player receives four starter skills plus the cooperative rescue ability"), ASC->GetActivatableAbilities().Num(), 5);
 	TestEqual(TEXT("Enemy receives only attack"), Enemy->GetAbilitySystemComponent()->GetActivatableAbilities().Num(), 1);
 	TestTrue(TEXT("Defense uses local prediction"), GetDefault<UmultiplayerDefendAbility>()->GetNetExecutionPolicy()
 		== EGameplayAbilityNetExecutionPolicy::LocalPredicted);
@@ -486,8 +505,13 @@ bool FCoopCombatProjectileWallTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Near wall prevents damage to enemy behind it"), Enemy->GetHealth(), 100.0f);
 
 	// 墙位于来源到 75 cm 枪口之间时，出生前检测直接拒绝发射。
+	// 现在不再前移出生点：前方的墙由真实飞行扫掠阻挡，只有起点自身在墙内才拒绝。
 	WallActor->SetActorLocation(FVector(40, 0, 140));
-	TestFalse(TEXT("Wall between source and muzzle rejects firing"), Source->FireProjectile(25, 1600));
+	TestTrue(TEXT("Close wall is handled by the real projectile sweep"), Source->FireProjectile(25, 1600));
+	Fixture.Advance(0.1f);
+	TestEqual(TEXT("Close wall prevents damage without skipping the first 75cm"), Enemy->GetHealth(), 100.0f);
+	WallActor->SetActorLocation(FVector(0, 0, 140));
+	TestFalse(TEXT("Wall containing the actual muzzle rejects firing"), Source->FireProjectile(25, 1600));
 	int32 ProjectileCount = 0;
 	for (TActorIterator<AmultiplayerCombatProjectile> It(World); It; ++It) ++ProjectileCount;
 	TestEqual(TEXT("Rejected muzzle shot creates no projectile"), ProjectileCount, 0);
@@ -520,12 +544,23 @@ bool FCoopCombatBehaviorAssetsTest::RunTest(const FString& Parameters)
 		TargetType != nullptr && TargetType->BaseClass != nullptr && TargetType->BaseClass->IsChildOf(AActor::StaticClass()));
 	TestTrue(TEXT("CanAttack is a bool blackboard key"),
 		Blackboard->GetKeyType(Blackboard->GetKeyID(CombatAIKeys::CanAttack)) == UBlackboardKeyType_Bool::StaticClass());
+	for (const FName Key : { CombatAIKeys::LastKnownLocation, CombatAIKeys::HomeLocation, CombatAIKeys::PatrolLocation })
+	{
+		const FBlackboardEntry* Entry = Blackboard->GetKey(Blackboard->GetKeyID(Key));
+		TestTrue(*FString::Printf(TEXT("%s is a per-AI location rather than a shared target"), *Key.ToString()),
+			Entry && !Entry->bInstanceSynced && Entry->KeyType && Entry->KeyType->IsA<UBlackboardKeyType_Vector>());
+	}
+	const FBlackboardEntry* SearchEntry = Blackboard->GetKey(Blackboard->GetKeyID(CombatAIKeys::SearchUntil));
+	TestTrue(TEXT("Search expiration belongs to each AI and uses a numeric deadline"),
+		SearchEntry && !SearchEntry->bInstanceSynced && SearchEntry->KeyType && SearchEntry->KeyType->IsA<UBlackboardKeyType_Float>());
 	TestTrue(TEXT("Tree contains the combat target service"),
 		ContainsCombatAINode(Tree->RootNode, UmultiplayerBTService_UpdateCombatTarget::StaticClass()));
 	TestTrue(TEXT("Tree contains the GAS attack request task"),
 		ContainsCombatAINode(Tree->RootNode, UmultiplayerBTTask_RequestCombatAttack::StaticClass()));
 	TestTrue(TEXT("Tree uses the native MoveTo task"), ContainsCombatAINode(Tree->RootNode, UBTTask_MoveTo::StaticClass()));
 	TestTrue(TEXT("Tree has waits for bounded retry"), ContainsCombatAINode(Tree->RootNode, UBTTask_Wait::StaticClass()));
+	TestTrue(TEXT("Tree selects real navigable patrol points through the project's task"),
+		ContainsCombatAINode(Tree->RootNode, UmultiplayerBTTask_SelectPatrolLocation::StaticClass()));
 #if WITH_EDITORONLY_DATA
 	if (TestNotNull(TEXT("Behavior tree preserves its editable graph"), Tree->BTGraph.Get()))
 		TestTrue(TEXT("Editable behavior graph contains actual nodes"), Tree->BTGraph->Nodes.Num() > 1);
@@ -558,7 +593,10 @@ bool FCoopCombatBehaviorDecisionTest::RunTest(const FString& Parameters)
 	UBlackboardComponent* Blackboard = AI->GetBlackboardComponent();
 	if (!TestNotNull(TEXT("Running tree owns a blackboard"), Blackboard)) return false;
 
-	Fixture.Advance(0.45f);
+	if (!TestTrue(TEXT("Real Sight eventually discovers and attacks the visible eligible player"), Fixture.WaitFor([&]
+	{
+		return Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Player && Player->GetHealth() < 100.f;
+	}))) return false;
 	TestTrue(TEXT("Service ignores uncontrolled, dead, friendly and out-of-range candidates"),
 		Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Player);
 	TestTrue(TEXT("Visible target in range enables the attack branch"), Blackboard->GetValueAsBool(CombatAIKeys::CanAttack));
@@ -581,30 +619,59 @@ bool FCoopCombatBehaviorDecisionTest::RunTest(const FString& Parameters)
 	Box->RegisterComponent();
 	Wall->SetActorLocation(FVector(150, 0, 100));
 	const int32 ShotsBeforeWall = Fixture.ShotTimes.Num();
-	Fixture.Advance(0.60f);
-	TestTrue(TEXT("Occluded player remains a pursuit target"), Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Player);
+	const FVector LastSeen = Blackboard->GetValueAsVector(CombatAIKeys::LastKnownLocation);
+	if (!TestTrue(TEXT("Real wall removes the occluded actor from the visible target"), Fixture.WaitFor([&]
+	{
+		return Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == nullptr
+			&& Blackboard->GetValueAsFloat(CombatAIKeys::SearchUntil) > Fixture.World->GetTimeSeconds();
+	}))) return false;
 	TestFalse(TEXT("Wall disables the attack branch"), Blackboard->GetValueAsBool(CombatAIKeys::CanAttack));
 	TestEqual(TEXT("Occluded tree does not create additional projectiles"), Fixture.ShotTimes.Num(), ShotsBeforeWall);
+	TestTrue(TEXT("Losing sight preserves the last observed location"),
+		Blackboard->GetValueAsVector(CombatAIKeys::LastKnownLocation).Equals(LastSeen, .1f));
+	Player->SetActorLocation(FVector(600, 0, 100));
+	Fixture.Advance(.6f);
+	TestTrue(TEXT("An unseen player cannot update the AI's remembered location through a world scan"),
+		Blackboard->GetValueAsVector(CombatAIKeys::LastKnownLocation).Equals(LastSeen, .1f));
+	TestNull(TEXT("Moving behind the wall does not reacquire a visible target"), Blackboard->GetValueAsObject(CombatAIKeys::TargetActor));
+	Fixture.Advance(Enemy->GetSearchDuration() + .4f);
+	TestFalse(TEXT("Search memory expires rather than chasing hidden players forever"),
+		Blackboard->IsVectorValueSet(CombatAIKeys::LastKnownLocation));
+	TestTrue(TEXT("Expired search has no future deadline"),
+		Blackboard->GetValueAsFloat(CombatAIKeys::SearchUntil) <= Fixture.World->GetTimeSeconds());
 
 	PC->UnPossess();
 	Fixture.Advance(0.35f);
 	TestNull(TEXT("Disconnect-style unpossession clears the still-existing pawn target"),
 		Blackboard->GetValueAsObject(CombatAIKeys::TargetActor));
 	TestFalse(TEXT("No valid player disables attacking"), Blackboard->GetValueAsBool(CombatAIKeys::CanAttack));
+	Wall->Destroy();
+	Player->SetActorLocation(FVector(300, 0, 100));
 	PC->Possess(Player);
 	Player->GetCharacterMovement()->DisableMovement();
-	Fixture.Advance(0.35f);
-	TestTrue(TEXT("Player control restoration is picked up by the tree"), Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Player);
+	TestTrue(TEXT("Player control restoration and restored visibility are picked up by the tree"), Fixture.WaitFor([&]
+	{
+		return Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Player;
+	}));
 	ApplyTestDamage(Enemy, Player, 1000.0f);
-	Fixture.Advance(0.35f);
+	Fixture.WaitFor([&] { return Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == nullptr; });
 	TestNull(TEXT("Target death clears the blackboard target"), Blackboard->GetValueAsObject(CombatAIKeys::TargetActor));
+	TestFalse(TEXT("A dead target is not searched as though it were only hidden"), Blackboard->IsVectorValueSet(CombatAIKeys::LastKnownLocation));
 	AmultiplayerCombatCharacter* Replacement = Fixture.SpawnPlayer(FVector(300, 0, 100));
-	Fixture.Advance(0.35f);
-	TestTrue(TEXT("Tree can select a new living player"), Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Replacement);
+	TestTrue(TEXT("Tree can visually select a new living player"), Fixture.WaitFor([&]
+	{
+		return Blackboard->GetValueAsObject(CombatAIKeys::TargetActor) == Replacement;
+	}));
+	const int32 ShotsBeforeDestroy = Fixture.ShotTimes.Num();
+	const float SearchBeforeDestroy = Blackboard->GetValueAsFloat(CombatAIKeys::SearchUntil);
 	Replacement->Destroy();
 	Fixture.Advance(0.35f);
 	TestNull(TEXT("Destroyed player does not remain a target"), Blackboard->GetValueAsObject(CombatAIKeys::TargetActor));
-	TestEqual(TEXT("Invalid and blocked targets never bypass GAS attack eligibility"), Fixture.ShotTimes.Num(), ShotsBeforeWall);
+	TestEqual(TEXT("Invalid targets never bypass GAS attack eligibility"), Fixture.ShotTimes.Num(), ShotsBeforeDestroy);
+	TestTrue(TEXT("Destroying a perceived actor cannot extend its last-seen deadline"),
+		Blackboard->GetValueAsFloat(CombatAIKeys::SearchUntil) <= SearchBeforeDestroy);
+	Fixture.Advance(Enemy->GetSearchDuration() + .4f);
+	TestFalse(TEXT("Destroyed player leaves no permanent search ghost"), Blackboard->IsVectorValueSet(CombatAIKeys::LastKnownLocation));
 	return true;
 }
 
@@ -655,6 +722,70 @@ bool FCoopCombatBehaviorLifecycleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRVOCrossingTest, "Multiplayer.Combat.RVOCrossing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 两只实际敌人在真实地板上相向行走；对照关闭 RVO 的相同输入，区分提前避让与碰撞后滑开。
+bool FCoopCombatRVOCrossingTest::RunTest(const FString& Parameters)
+{
+	UClass* EnemyClass = LoadClass<AmultiplayerCombatEnemy>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"));
+	if (!TestNotNull(TEXT("Actual enemy blueprint exists for RVO crossing"), EnemyClass)) return false;
+	struct FCrossingResult { float MinDistance = MAX_flt, EarlyLateralSpeed = 0, MaxLateralTravel = 0; bool bPassed = false; };
+	const auto RunCrossing = [&](bool bAvoidance)
+	{
+		FCombatTestWorld Fixture;
+		AActor* Floor = Fixture.World->SpawnActor<AActor>();
+		UBoxComponent* FloorBox = NewObject<UBoxComponent>(Floor);
+		Floor->SetRootComponent(FloorBox);
+		FloorBox->SetBoxExtent(FVector(2000, 2000, 10));
+		FloorBox->SetCollisionProfileName(TEXT("BlockAll"));
+		FloorBox->RegisterComponent();
+		Floor->SetActorLocation(FVector(0, 0, -10));
+		AmultiplayerCombatEnemy* Enemies[2] = {};
+		const FVector Starts[] = { FVector(-400, -20, 82), FVector(400, 20, 82) };
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			const FTransform Transform(FRotator::ZeroRotator, Starts[Index]);
+			Enemies[Index] = Fixture.World->SpawnActorDeferred<AmultiplayerCombatEnemy>(EnemyClass, Transform,
+				nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			Enemies[Index]->AutoPossessAI = EAutoPossessAI::Disabled;
+			Enemies[Index]->FinishSpawning(Transform);
+			UCharacterMovementComponent* Movement = Enemies[Index]->GetCharacterMovement();
+			Movement->bRunPhysicsWithNoController = true;
+			Movement->SetMovementMode(MOVE_Walking);
+			Movement->SetAvoidanceEnabled(bAvoidance);
+		}
+		FCrossingResult Result;
+		for (int32 Frame = 0; Frame < 300; ++Frame)
+		{
+			Enemies[0]->AddMovementInput(FVector::ForwardVector);
+			Enemies[1]->AddMovementInput(-FVector::ForwardVector);
+			++GFrameCounter;
+			Fixture.World->Tick(LEVELTICK_All, .02f);
+			const float Distance = FVector::Dist2D(Enemies[0]->GetActorLocation(), Enemies[1]->GetActorLocation());
+			Result.MinDistance = FMath::Min(Result.MinDistance, Distance);
+			for (int32 Index = 0; Index < 2; ++Index)
+			{
+				Result.MaxLateralTravel = FMath::Max(Result.MaxLateralTravel, FMath::Abs(static_cast<float>(Enemies[Index]->GetActorLocation().Y - Starts[Index].Y)));
+				if (Distance > 130.f)
+					Result.EarlyLateralSpeed = FMath::Max(Result.EarlyLateralSpeed, FMath::Abs(static_cast<float>(Enemies[Index]->GetVelocity().Y)));
+			}
+		}
+		Result.bPassed = Enemies[0]->GetActorLocation().X > 100 && Enemies[1]->GetActorLocation().X < -100;
+		return Result;
+	};
+	const FCrossingResult Baseline = RunCrossing(false), Avoided = RunCrossing(true);
+	TestTrue(TEXT("RVO changes lateral velocity before capsules can collide, unlike the disabled baseline"),
+		Avoided.EarlyLateralSpeed > FMath::Max(10.f, Baseline.EarlyLateralSpeed + 5.f));
+	TestTrue(TEXT("RVO produces a real lateral detour rather than only enabling a flag"), Avoided.MaxLateralTravel > 20.f);
+	TestTrue(TEXT("Both enemies pass each other instead of remaining blocked"), Avoided.bPassed);
+	TestTrue(TEXT("Crossing never overlaps the two 40cm capsules"), Avoided.MinDistance >= 79.f);
+	AddInfo(FString::Printf(TEXT("RVOCrossing: earlyLateralSpeed off=%.2f on=%.2f cm/s; detour=%.2f cm; minDistance=%.2f cm; passed=%d"),
+		Baseline.EarlyLateralSpeed, Avoided.EarlyLateralSpeed, Avoided.MaxLateralTravel, Avoided.MinDistance, Avoided.bPassed));
+	return !HasAnyErrors();
+}
+
 namespace
 {
 	// 使用真实 CombatTest 地图的导航与出生器，采样期间不调用 MoveTo、Attack 或修改敌人位置。
@@ -693,11 +824,14 @@ namespace
 
 				TArray<AmultiplayerCombatEnemy*> Enemies;
 				for (TActorIterator<AmultiplayerCombatEnemy> It(World); It; ++It) Enemies.Add(*It);
+				if (Enemies.Num() < 3) return false;
 				if (!Test->TestEqual(TEXT("Real map spawner generated three enemies"), Enemies.Num(), 3)) return true;
 				for (AmultiplayerCombatEnemy* SpawnedEnemy : Enemies)
 					if (!Test->TestNotNull(TEXT("Spawned enemy has AI controller"), Cast<AAIController>(SpawnedEnemy->GetController()))) return true;
 				Enemy = Enemies[0];
 				AI = Cast<AAIController>(Enemy->GetController());
+				if (!Test->TestTrue(TEXT("Real map spawner uses the configured minion melee skill"),
+					Enemy->GetAttackAbilityClass() == UmultiplayerEnemyMeleeAbility::StaticClass())) return true;
 				const ANavigationData* NavData = Navigation->GetNavDataForProps(Enemy->GetNavAgentPropertiesRef());
 				if (NavData == nullptr) return false;
 				if (const ARecastNavMesh* Recast = Cast<ARecastNavMesh>(NavData))
@@ -716,38 +850,16 @@ namespace
 					*Enemy->GetActorLocation().ToString(), bEnemyProjected, *EnemyPoint.Location.ToString(),
 					Enemy->GetNavAgentPropertiesRef().AgentRadius, Enemy->GetNavAgentPropertiesRef().AgentHeight, *NavData->GetName()));
 
-				// 固定方向候选点并验证完整可达路径，不凭“存在 NavMesh Actor”认定导航有效。
-				FNavLocation PlayerPoint;
-				bool bFoundPoint = false;
-				for (int32 Direction = 0; Direction < 8; ++Direction)
-				{
-					const float Angle = UE_TWO_PI * Direction / 8.0f;
-					const FVector Candidate = Enemy->GetActorLocation() + FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0) * 900.0f;
-					if (!Navigation->ProjectPointToNavigation(Candidate, PlayerPoint, FVector(150, 150, 300), NavData))
-					{
-						Test->AddInfo(FString::Printf(TEXT("MapAI candidate %d: projection failed at %s"), Direction, *Candidate.ToString()));
-						continue;
-					}
-					const float Distance = FVector::Dist2D(Enemy->GetActorLocation(), PlayerPoint.Location);
-					if (Distance < 700.0f || Distance > 1100.0f) continue;
-					FPathFindingQuery Query(AI.Get(), *NavData, Enemy->GetNavAgentLocation(), PlayerPoint.Location);
-					const FPathFindingResult Path = Navigation->FindPathSync(Query);
-					Test->AddInfo(FString::Printf(TEXT("MapAI candidate %d: point=%s distance=%.1f path=%d partial=%d"),
-						Direction, *PlayerPoint.Location.ToString(), Distance, Path.IsSuccessful(), Path.IsPartial()));
-					if (Path.IsSuccessful() && !Path.IsPartial()) { bFoundPoint = true; break; }
-				}
-				if (!Test->TestTrue(TEXT("Map provides an actual reachable chase point 700-1100 cm away"), bFoundPoint)) return true;
-
 				// 只隔离其他两个敌人，待测敌人仍使用自己的行为树、导航请求和 GAS 攻击。
 				for (int32 Index = 1; Index < Enemies.Num(); ++Index) Enemies[Index]->Destroy();
 				UBehaviorTreeComponent* Brain = Cast<UBehaviorTreeComponent>(AI->GetBrainComponent());
 				if (!Test->TestTrue(TEXT("Real map enemy is running its saved behavior tree"),
 					Brain != nullptr && Brain->IsRunning() && Brain->GetRootTree() == Enemy->GetCombatBehaviorTree())) return true;
 				Player->GetCharacterMovement()->DisableMovement();
-				Player->SetActorLocation(PlayerPoint.Location + FVector(0, 0, Player->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()));
-				EnemyStart = Enemy->GetActorLocation();
-				InitialHealth = Player->GetHealth();
-				Phase = TEXT("Chase");
+				// 先排除玩家干扰，观察树自己选巡逻点并移动；不注入黑板位置或调用 MoveTo。
+				Player->SetCombatSessionReady(false);
+				Player->SetActorLocation(Enemy->GetActorLocation() + FVector(5000, 0, 0));
+				Phase = TEXT("Patrol");
 				return false;
 			}
 
@@ -756,6 +868,39 @@ namespace
 				Test->AddError(TEXT("Player, real spawned enemy or AI controller disappeared during MapAI"));
 				return true;
 			}
+			if (Phase == TEXT("Patrol"))
+			{
+				UBlackboardComponent* Blackboard = AI->GetBlackboardComponent();
+				if (!Blackboard || Blackboard->GetValueAsObject(CombatAIKeys::TargetActor)
+					|| Blackboard->IsVectorValueSet(CombatAIKeys::LastKnownLocation)
+					|| !Blackboard->IsVectorValueSet(CombatAIKeys::PatrolLocation)) return false;
+				if (!bPatrolStarted)
+				{
+					PatrolStart = Enemy->GetActorLocation();
+					bPatrolStarted = true;
+				}
+				const FVector PatrolGoal = Blackboard->GetValueAsVector(CombatAIKeys::PatrolLocation);
+				const UPathFollowingComponent* Following = AI->GetPathFollowingComponent();
+				const FNavPathSharedPtr Path = Following ? Following->GetPath() : nullptr;
+				bObservedPatrolPath |= Path.IsValid() && Path->IsValid() && !Path->IsPartial()
+					&& FVector::Dist2D(Path->GetEndLocation(), PatrolGoal) < 100.f;
+				MaxPatrolTravel = FMath::Max(MaxPatrolTravel, static_cast<float>(FVector::Dist2D(PatrolStart, Enemy->GetActorLocation())));
+				if (!bObservedPatrolPath || MaxPatrolTravel < 100.f) return false;
+				Test->TestTrue(TEXT("Patrol task follows a real non-partial path to its own blackboard goal"), bObservedPatrolPath);
+				Test->TestTrue(TEXT("Patrol moves the enemy more than 100 cm without test movement input"), MaxPatrolTravel >= 100.f);
+				Test->TestTrue(TEXT("Patrol goal remains within the configured home radius"),
+					FVector::Dist2D(Blackboard->GetValueAsVector(CombatAIKeys::HomeLocation), PatrolGoal) <= Enemy->GetPatrolRadius() + 1.f);
+				Test->AddInfo(FString::Printf(TEXT("MapAI patrol: travel=%.1f cm goal=%s home=%s"), MaxPatrolTravel,
+					*PatrolGoal.ToString(), *Blackboard->GetValueAsVector(CombatAIKeys::HomeLocation).ToString()));
+				FVector ChasePoint;
+				if (!Test->TestTrue(TEXT("Map provides a visible, reachable chase point 700-1100 cm away"), FindChasePoint(World, ChasePoint))) return true;
+				Player->SetActorLocation(ChasePoint);
+				Player->SetCombatSessionReady(true);
+				EnemyStart = Enemy->GetActorLocation();
+				InitialHealth = Player->GetHealth();
+				Phase = TEXT("Chase");
+				return false;
+			}
 			if (Phase == TEXT("Chase"))
 			{
 				const UPathFollowingComponent* Following = AI->GetPathFollowingComponent();
@@ -763,10 +908,10 @@ namespace
 				bObservedPath |= Path.IsValid() && Path->IsValid() && !Path->IsPartial();
 				MaxTravel = FMath::Max(MaxTravel, static_cast<float>(FVector::Dist2D(EnemyStart, Enemy->GetActorLocation())));
 				const float Distance = FVector::Dist(Enemy->GetActorLocation(), Player->GetActorLocation());
-				if (!bObservedPath || MaxTravel < 200.0f || Distance > 440.0f || Player->GetHealth() >= InitialHealth) return false;
+				if (!bObservedPath || MaxTravel < 200.0f || Distance > Enemy->GetAttackDistance() + 5.f || Player->GetHealth() >= InitialHealth) return false;
 				Test->TestTrue(TEXT("AI followed a real non-partial navigation path"), bObservedPath);
 				Test->TestTrue(TEXT("AI moved more than 200 cm without test driving it"), MaxTravel >= 200.0f);
-				Test->TestTrue(TEXT("AI reached attack range and its real projectile damaged the player"), Player->GetHealth() < InitialHealth);
+				Test->TestTrue(TEXT("AI reached melee range and its own GAS skill damaged the player"), Player->GetHealth() < InitialHealth);
 				Test->AddInfo(FString::Printf(TEXT("MapAI chase: travel=%.1f cm, distance=%.1f cm, player health=%.1f -> %.1f"),
 					MaxTravel, Distance, InitialHealth, Player->GetHealth()));
 				ApplyTestDamage(Player.Get(), Enemy.Get(), 1000.0f);
@@ -788,15 +933,48 @@ namespace
 		}
 
 	private:
+		// 固定方向候选点并验证完整可达路径，不凭“存在 NavMesh Actor”认定导航有效。
+		// 同时限定真实 Sight 前方与无遮挡，不能把在背后或墙后的玩家当作已被发现。
+		bool FindChasePoint(UWorld* World, FVector& OutLocation)
+		{
+			UNavigationSystemV1* Navigation = UNavigationSystemV1::GetCurrent(World);
+			const ANavigationData* NavData = Navigation ? Navigation->GetNavDataForProps(Enemy->GetNavAgentPropertiesRef()) : nullptr;
+			if (!NavData) return false;
+			FVector Eyes;
+			FRotator View;
+			AI->GetActorEyesViewPoint(Eyes, View);
+			const float HalfAngle = FMath::Max(1.f, Enemy->GetPeripheralVisionAngle() - 10.f);
+			const float Offsets[] = { 0.f, .33f, -.33f, .66f, -.66f, 1.f, -1.f };
+			for (int32 Direction = 0; Direction < UE_ARRAY_COUNT(Offsets); ++Direction)
+			{
+				const FVector Candidate = Enemy->GetActorLocation() + FRotator(0, View.Yaw + Offsets[Direction] * HalfAngle, 0).Vector() * 900.f;
+				FNavLocation Point;
+				if (!Navigation->ProjectPointToNavigation(Candidate, Point, FVector(150, 150, 300), NavData)) continue;
+				const FVector PawnLocation = Point.Location + FVector(0, 0, Player->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+				const float Distance = FVector::Dist2D(Enemy->GetActorLocation(), Point.Location);
+				if (Distance < 700.f || Distance > 1100.f) continue;
+				FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CombatMapAISight), false, Enemy.Get());
+				QueryParams.AddIgnoredActor(Player.Get());
+				FHitResult Hit;
+				if (World->LineTraceSingleByChannel(Hit, Eyes, PawnLocation, ECC_Visibility, QueryParams)) continue;
+				FPathFindingQuery Query(AI.Get(), *NavData, Enemy->GetNavAgentLocation(), Point.Location);
+				const FPathFindingResult Path = Navigation->FindPathSync(Query);
+				Test->AddInfo(FString::Printf(TEXT("MapAI candidate %d: point=%s distance=%.1f path=%d partial=%d"),
+					Direction, *Point.Location.ToString(), Distance, Path.IsSuccessful(), Path.IsPartial()));
+				if (Path.IsSuccessful() && !Path.IsPartial()) { OutLocation = PawnLocation; return true; }
+			}
+			return false;
+		}
+
 		FAutomationTestBase* Test;
 		TWeakObjectPtr<AmultiplayerCombatCharacter> Player;
 		TWeakObjectPtr<AmultiplayerCombatEnemy> Enemy;
 		TWeakObjectPtr<AAIController> AI;
 		FString Phase = TEXT("Prepare");
-		FVector EnemyStart, EnemyDeathLocation;
+		FVector EnemyStart, EnemyDeathLocation, PatrolStart;
 		double StartedAt = FPlatformTime::Seconds(), DeathAt = 0.0;
-		float InitialHealth = 0.0f, MaxTravel = 0.0f;
-		bool bObservedPath = false;
+		float InitialHealth = 0.0f, MaxTravel = 0.0f, MaxPatrolTravel = 0.0f;
+		bool bObservedPath = false, bObservedPatrolPath = false, bPatrolStarted = false;
 	};
 }
 

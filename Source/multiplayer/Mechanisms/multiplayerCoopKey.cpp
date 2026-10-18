@@ -103,6 +103,8 @@ void AmultiplayerCoopKey::HandlePickupOverlap(
 	}
 
 	ACharacter* Character = Cast<ACharacter>(OtherActor);
+	// 排队中的重叠通知不能让已倒地、死亡或尚未接纳的战斗角色继续收集钥匙。
+	if (const auto* CombatPlayer = Cast<AmultiplayerCombatCharacter>(Character); CombatPlayer && !CombatPlayer->IsCombatReady()) return;
 	if (IsValid(Character) && !Character->IsActorBeingDestroyed() && Character->IsPlayerControlled()
 		&& IsValid(DestinationSocket))
 	{

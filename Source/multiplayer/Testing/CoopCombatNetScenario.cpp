@@ -11,14 +11,27 @@
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 #include "Engine/NetDriver.h"
 #include "Engine/NetworkObjectList.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
+#include "Animation/AnimInstance.h"
 #include "Player/multiplayerCoopPlayerController.h"
 #include "HAL/PlatformTime.h"
+#include "InputCoreTypes.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "Particles/ParticleSystem.h"
+#include "Particles/ParticleSystemComponent.h"
+#include "UObject/UObjectIterator.h"
 
 namespace
 {
@@ -47,6 +60,7 @@ namespace
 	struct FCombatPredictionCase { const TCHAR* Name; const TCHAR* Skill; const TCHAR* Rejection; };
 	const FCombatPredictionCase PredictionCases[] = {
 		{ TEXT("AttackCooldown"), TEXT("Attack"), TEXT("Cooldown") },
+		{ TEXT("AttackMissingAim"), TEXT("Attack"), TEXT("MissingAim") },
 		{ TEXT("DefenseCooldown"), TEXT("Defense"), TEXT("Cooldown") },
 		{ TEXT("HealCooldown"), TEXT("Heal"), TEXT("Cooldown") },
 		{ TEXT("HealEnergy"), TEXT("Heal"), TEXT("Energy") },
@@ -109,6 +123,300 @@ namespace
 		ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetEnergyAttribute(), 100.0f);
 		Character->ForceNetUpdate();
 	}
+
+	// 高空数值夹具也要有真实地面；两端必须查询同一复制碰撞，不再把悬空落点当可释放目标。
+	bool AddCombatTargetingGround(UWorld* World, const AmultiplayerCombatCharacter* Character)
+	{
+		const float Feet = Character->GetActorLocation().Z - Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		auto* Ground = World->SpawnActor<AStaticMeshActor>(FVector(0, 0, Feet - 10.f), FRotator::ZeroRotator);
+		auto* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+		if (!Ground || !Cube) return false;
+		auto* Mesh = Ground->GetStaticMeshComponent();
+		Mesh->SetMobility(EComponentMobility::Movable);
+		Mesh->SetStaticMesh(Cube);
+		Mesh->SetCollisionProfileName(TEXT("BlockAll"));
+		Mesh->SetCanEverAffectNavigation(false);
+		Ground->SetActorScale3D(FVector(100, 100, .2f));
+		Ground->SetActorHiddenInGame(true);
+		Ground->SetReplicates(true);
+		Ground->SetReplicateMovement(true);
+		Mesh->SetIsReplicated(true);
+		Ground->ForceNetUpdate();
+		return true;
+	}
+
+	bool CombatPreviewsMatchGeometry(AmultiplayerCombatCharacter* Character, AmultiplayerCombatCharacter* Enemy, FString* Details = nullptr)
+	{
+		const FRotator Aim = FRotator(0, (Enemy->GetActorLocation() - Character->GetActorLocation()).Rotation().Yaw, 0);
+		const auto Attack = Character->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
+		const auto Area = Character->GetSkillTargetPreview(EMultiplayerCombatSkill::Area, &Aim);
+		const auto Defend = Character->GetSkillTargetPreview(EMultiplayerCombatSkill::Defend, &Aim);
+		const bool bAttackTarget = Attack.Target.Get() == Enemy;
+		const bool bMuzzle = Attack.Origin.Equals(Character->GetCombatMuzzleLocation(), .1f);
+		const bool bProjectileRadius = FMath::IsNearlyEqual(Attack.Radius, CombatTargeting::ProjectileRadius);
+		const bool bAreaRadius = FMath::IsNearlyEqual(Area.Radius, Character->GetCombatConfig().AreaRadius);
+		const bool bAreaTarget = Area.AffectedTargets.Contains(TWeakObjectPtr<AmultiplayerCombatCharacter>(Enemy));
+		const bool bDefenseDirection = (Defend.End - Defend.Origin).GetSafeNormal2D().Equals(FRotator(0, Aim.Yaw, 0).Vector(), .01f);
+		if (Details)
+		{
+			FString Targets;
+			for (auto Weak : Area.AffectedTargets)
+				if (const auto* Target = Weak.Get()) Targets += FString::Printf(TEXT(" %s@%s(team%d ready%d)"),
+					*Target->GetName(), *Target->GetActorLocation().ToCompactString(), int32(Target->GetCombatTeam()), Target->IsCombatReady());
+			*Details = FString::Printf(TEXT("source=%s@%s enemy=%s@%s aim=%s Attack[valid%d targetMatch%d target=%s muzzle%d radius%d(%.2f) origin=%s end=%s] Area[valid%d radius%d(%.2f) targetMatch%d center=%s normal=%s targets=%s] Defense[valid%d direction%d origin=%s end=%s]"),
+				*Character->GetName(), *Character->GetActorLocation().ToCompactString(), *Enemy->GetName(), *Enemy->GetActorLocation().ToCompactString(), *Aim.ToCompactString(),
+				Attack.bValid, bAttackTarget, *GetNameSafe(Attack.Target.Get()), bMuzzle, bProjectileRadius, Attack.Radius, *Attack.Origin.ToCompactString(), *Attack.End.ToCompactString(),
+				Area.bValid, bAreaRadius, Area.Radius, bAreaTarget, *Area.End.ToCompactString(), *Area.Normal.ToCompactString(), *Targets,
+				Defend.bValid, bDefenseDirection, *Defend.Origin.ToCompactString(), *Defend.End.ToCompactString());
+		}
+		return Attack.bValid && bAttackTarget && bMuzzle && bProjectileRadius
+			&& Area.bValid && bAreaRadius && bAreaTarget && Defend.bValid && bDefenseDirection;
+	}
+
+	bool CombatPreviewFixtureReady(AmultiplayerCombatCharacter* Local, AmultiplayerCombatCharacter* Enemy,
+		bool bPartner, FString& Details)
+	{
+		const auto CapsuleReady = [](const AmultiplayerCombatCharacter* Character)
+		{
+			const auto* Capsule = Character ? Character->GetCapsuleComponent() : nullptr;
+			return Character && Character->HasActorBegunPlay() && Character->IsCombatReady() && Character->GetActorEnableCollision()
+				&& Capsule && Capsule->IsRegistered() && Capsule->IsPhysicsStateCreated() && Capsule->IsQueryCollisionEnabled()
+				&& Capsule->GetCollisionObjectType() == ECC_Pawn
+				&& Capsule->GetComponentLocation().Equals(Character->GetActorLocation(), .1f);
+		};
+		auto* World = Local->GetWorld();
+		AmultiplayerCombatCharacter* Other = nullptr;
+		for (TActorIterator<AmultiplayerCombatCharacter> It(World); It; ++It)
+			if (*It != Local && It->GetCombatTeam() == EMultiplayerCombatTeam::Players && It->GetPlayerState()) { Other = *It; break; }
+		const FVector ExpectedLocal = bPartner ? FVector(100, 300, 4000) : FVector(0, 0, 4000);
+		const FVector ExpectedOther = bPartner ? FVector(0, 0, 4000) : FVector(100, 300, 4000);
+		const bool bLocalTransform = Local->GetActorLocation().Equals(ExpectedLocal, .1f);
+		const bool bOtherTransform = Other && Other->GetActorLocation().Equals(ExpectedOther, .1f);
+		const bool bEnemyTransform = Enemy && Enemy->GetActorLocation().Equals(FVector(500, 0, 4000), .1f);
+		const bool bTeams = Local->GetCombatTeam() == EMultiplayerCombatTeam::Players && Other
+			&& Other->GetCombatTeam() == EMultiplayerCombatTeam::Players && Enemy && Enemy->GetCombatTeam() == EMultiplayerCombatTeam::Enemies;
+		const bool bLocalCapsule = CapsuleReady(Local), bOtherCapsule = CapsuleReady(Other), bEnemyCapsule = CapsuleReady(Enemy);
+		const float Feet = 4000.f - Local->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		bool bGround = false;
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+		{
+			const auto* Mesh = It->GetStaticMeshComponent();
+			if (It->GetActorLocation().Equals(FVector(0, 0, Feet - 10.f), .1f)
+				&& It->GetActorScale3D().Equals(FVector(100, 100, .2f), .001f)
+				&& It->HasActorBegunPlay() && Mesh && Mesh->GetStaticMesh() && Mesh->IsRegistered()
+				&& Mesh->IsPhysicsStateCreated() && Mesh->IsQueryCollisionEnabled()) { bGround = true; break; }
+		}
+		Details = FString::Printf(TEXT("FixtureInputs[localBegun%d otherBegun%d enemyBegun%d transforms=%d/%d/%d teams%d capsules=%d/%d/%d ground%d] local=%s@%s(team%d collision%d object%d) other=%s@%s enemy=%s@%s(team%d collision%d object%d)"),
+			Local->HasActorBegunPlay(), Other && Other->HasActorBegunPlay(), Enemy && Enemy->HasActorBegunPlay(),
+			bLocalTransform, bOtherTransform, bEnemyTransform, bTeams, bLocalCapsule, bOtherCapsule, bEnemyCapsule, bGround,
+			*Local->GetName(), *Local->GetActorLocation().ToCompactString(), int32(Local->GetCombatTeam()), int32(Local->GetCapsuleComponent()->GetCollisionEnabled()), int32(Local->GetCapsuleComponent()->GetCollisionObjectType()),
+			*GetNameSafe(Other), Other ? *Other->GetActorLocation().ToCompactString() : TEXT("missing"), *GetNameSafe(Enemy), Enemy ? *Enemy->GetActorLocation().ToCompactString() : TEXT("missing"),
+			Enemy ? int32(Enemy->GetCombatTeam()) : -1, Enemy ? int32(Enemy->GetCapsuleComponent()->GetCollisionEnabled()) : -1, Enemy ? int32(Enemy->GetCapsuleComponent()->GetCollisionObjectType()) : -1);
+		for (const auto* Character : { Local, Other, Enemy })
+			if (Character)
+			{
+				const auto* Capsule = Character->GetCapsuleComponent();
+				Details += FString::Printf(TEXT("; %s[begun%d ready%d actorCollision%d registered%d physics%d query%d object%d capsuleAt=%s]"),
+					*Character->GetName(), Character->HasActorBegunPlay(), Character->IsCombatReady(), Character->GetActorEnableCollision(),
+					Capsule->IsRegistered(), Capsule->IsPhysicsStateCreated(), Capsule->IsQueryCollisionEnabled(), int32(Capsule->GetCollisionObjectType()), *Capsule->GetComponentLocation().ToCompactString());
+			}
+		return bLocalTransform && bOtherTransform && bEnemyTransform && bTeams && bLocalCapsule && bOtherCapsule && bEnemyCapsule && bGround;
+	}
+
+	float TargetingCooldown(const AmultiplayerCombatCharacter* Character, EMultiplayerCombatSkill Skill)
+	{
+		switch (Skill)
+		{
+		case EMultiplayerCombatSkill::Defend: return Character->GetDefenseCooldownRemaining();
+		case EMultiplayerCombatSkill::Heal: return Character->GetHealCooldownRemaining();
+		case EMultiplayerCombatSkill::Area: return Character->GetAreaCooldownRemaining();
+		case EMultiplayerCombatSkill::Dash: return Character->GetDashCooldownRemaining();
+		default: return Character->GetAttackCooldownRemaining();
+		}
+	}
+}
+
+// 观察真实属性通知与正式资源；准备阶段不写生命/资源，也不自行播放任何治疗 Cue。
+void UCoopNetTestDriver::PrepareCombatSelfHealObservation(UWorld* World, AmultiplayerCombatCharacter* Character)
+{
+	CombatSelfHealWorld = World;
+	CombatSelfHealObserved = Character;
+	CombatSelfHealHealthChanges = 0;
+	bCombatSelfHealExactHealthChange = false;
+	CombatSelfHealHealthChanged = Character->GetAbilitySystemComponent()->GetGameplayAttributeValueChangeDelegate(
+		UmultiplayerCombatAttributes::GetHealthAttribute()).AddWeakLambda(this, [this](const FOnAttributeChangeData& Change)
+		{
+			if (Change.NewValue == Change.OldValue) return;
+			++CombatSelfHealHealthChanges;
+			bCombatSelfHealExactHealthChange = FMath::IsNearlyEqual(Change.OldValue, 90.f)
+				&& FMath::IsNearlyEqual(Change.NewValue, 100.f);
+		});
+	if (bServer) return;
+	const auto& Feedback = Character->GetCombatConfig().HealFeedback;
+	if (!Feedback.CascadeEffect.IsNull()) Feedback.CascadeEffect.LoadSynchronous();
+	else if (!Feedback.Effect.IsNull()) Feedback.Effect.LoadSynchronous();
+	CombatSelfHealEffectsBefore.Reset();
+	for (TObjectIterator<USceneComponent> It; It; ++It)
+		if (It->GetWorld() == World) CombatSelfHealEffectsBefore.Add(*It);
+}
+
+// 成功、失败和退出共用收尾；只撤销夹具自己的输入/监听，并恢复临时挪开的队友。
+void UCoopNetTestDriver::ClearCombatSelfHealFixture()
+{
+	if (CombatSelfHealInputTick.IsValid())
+	{
+		FWorldDelegates::OnWorldPostActorTick.Remove(CombatSelfHealInputTick);
+		CombatSelfHealInputTick.Reset();
+		if (auto* World = CombatSelfHealWorld.Get())
+			if (auto* PC = World->GetFirstPlayerController())
+			{
+				if (auto* Character = Cast<AmultiplayerCombatCharacter>(PC->GetPawn())) Character->CancelSkillTargeting();
+				PC->InputKey(FInputKeyParams(EKeys::E, IE_Released, 0.));
+			}
+	}
+	if (auto* Character = CombatSelfHealObserved.Get())
+		Character->GetAbilitySystemComponent()->GetGameplayAttributeValueChangeDelegate(
+			UmultiplayerCombatAttributes::GetHealthAttribute()).Remove(CombatSelfHealHealthChanged);
+	CombatSelfHealHealthChanged.Reset();
+	CombatSelfHealEffectsBefore.Reset();
+	CombatSelfHealEffect.Reset();
+	CombatSelfHealObserved.Reset();
+	CombatSelfHealWorld.Reset();
+	if (bServer && bCombatSelfHealPartnerMoved && CombatPartner.IsValid())
+	{
+		CombatPartner->SetActorLocation(CombatSelfHealPartnerOrigin, false, nullptr, ETeleportType::TeleportPhysics);
+		CombatPartner->ForceNetUpdate();
+	}
+	bCombatSelfHealPartnerMoved = false;
+}
+
+// 真实输入按帧推进：截图落盘后先右键取消，再松原按键，避免把预览验收变成额外一次施法。
+bool UCoopNetTestDriver::CaptureTargetingInput(UWorld* World, const FString& Name, const FKey& Key,
+	EMultiplayerCombatSkill Skill, AmultiplayerCombatCharacter* ExpectedTarget)
+{
+#if !UE_BUILD_SHIPPING
+	if (!bVisualAcceptance) return true;
+	const FString Prefix = bPartner ? TEXT("Partner") : TEXT("Primary");
+	const FString Completed = Prefix + Name + TEXT("InputDone");
+	if (SentReceipts.Contains(Completed)) return true;
+	auto* PC = World->GetFirstPlayerController();
+	auto* Character = PC ? Cast<AmultiplayerCombatCharacter>(PC->GetPawn()) : nullptr;
+	if (!Character || !Character->IsCombatReady() || !ValidateVisualFixturePawn(Character)) return false;
+	auto* ASC = Character->GetAbilitySystemComponent();
+	const FString Pressed = TEXT("PreviewPressed:") + Name;
+	const FString Observed = TEXT("PreviewObserved:") + Name;
+	const FString Captured = TEXT("PreviewCaptured:") + Name;
+	const FString Cancelled = TEXT("PreviewCancelPressed:") + Name;
+	const FString CancelObserved = TEXT("PreviewCancelObserved:") + Name;
+	const FString Released = TEXT("PreviewReleased:") + Name;
+	const auto ResourcesUnchanged = [this, Character, ASC, Skill]()
+	{
+		if (!FMath::IsNearlyEqual(Character->GetEnergy(), CombatPreviewInputEnergy)
+			|| !FMath::IsNearlyEqual(Character->GetHealth(), CombatPreviewInputHealth)
+			|| TargetingCooldown(Character, Skill) > 0.f || Character->IsCasting()) return false;
+		for (const auto& Before : CombatPreviewInputKeys)
+		{
+			bool bFound = false;
+			for (const FGameplayAbilitySpec& Spec : ASC->GetActivatableAbilities())
+			{
+				if (!Spec.Ability || Spec.Ability->GetClass()->GetPathName() != Before.Key) continue;
+				const auto* Instance = Spec.GetPrimaryInstance();
+				if (Spec.IsActive() || !Instance
+					|| Instance->GetCurrentActivationInfo().GetActivationPredictionKey().Current != Before.Value) return false;
+				bFound = true;
+				break;
+			}
+			if (!bFound) return false;
+		}
+		return true;
+	};
+	if (!SentReceipts.Contains(Pressed))
+	{
+		for (const auto Required : { EMultiplayerCombatSkill::Attack, EMultiplayerCombatSkill::Defend,
+			EMultiplayerCombatSkill::Heal, EMultiplayerCombatSkill::Area })
+		{
+			const auto* Spec = ASC->FindAbilitySpecFromClass(Character->GetSkillAbilityClass(Required));
+			if (!Spec || !Spec->GetPrimaryInstance()) return false;
+		}
+		CombatPreviewInputName = Name;
+		CombatPreviewInputRotation = PC->GetControlRotation();
+		CombatPreviewInputEnergy = Character->GetEnergy();
+		CombatPreviewInputHealth = Character->GetHealth();
+		CombatPreviewInputKeys.Reset();
+		for (const FGameplayAbilitySpec& Spec : ASC->GetActivatableAbilities())
+			if (Spec.Ability && Spec.GetPrimaryInstance())
+				CombatPreviewInputKeys.Add(Spec.Ability->GetClass()->GetPathName(),
+					Spec.GetPrimaryInstance()->GetCurrentActivationInfo().GetActivationPredictionKey().Current);
+		const float PreviewYaw = CombatEnemy.IsValid()
+			? (CombatEnemy->GetActorLocation() - Character->GetActorLocation()).Rotation().Yaw : PC->GetControlRotation().Yaw;
+		PC->SetControlRotation(FRotator(-15.f, PreviewYaw, 0));
+		PC->InputKey(FInputKeyParams(Key, IE_Pressed, 1.0));
+		SentReceipts.Add(Pressed);
+		CombatPreviewInputFrame = GFrameCounter;
+		return false;
+	}
+	if (GFrameCounter <= CombatPreviewInputFrame || CombatPreviewInputName != Name) return false;
+	if (!SentReceipts.Contains(Observed))
+	{
+		if (!Character->IsTargetingSkill()) return false;
+		const auto Preview = Character->GetSkillTargetPreview(Skill);
+		const bool bCorrectTarget = !ExpectedTarget || (Preview.bValid && Preview.Target.Get() == ExpectedTarget);
+		const bool bCorrectSkill = Character->GetTargetingSkill() == Skill;
+		const bool bDashLearned = Character->GetProgressionComponent()->GetSkillLevel(EMultiplayerCombatSkill::Dash) > 0;
+		const bool bCorrectGeometry = Skill != EMultiplayerCombatSkill::Dash ? Preview.bValid
+			: bDashLearned ? Preview.bValid && FVector::Dist2D(Preview.Origin, Preview.End) > 5.f : Preview.Radius > 0.f;
+		FGameplayTagContainer Reasons;
+		const bool bDashAvailable = Skill == EMultiplayerCombatSkill::Dash && Character->CheckSkillAvailable(Skill, &Reasons);
+		const bool bDashQualification = Skill != EMultiplayerCombatSkill::Dash || (bDashLearned ? bDashAvailable && Reasons.IsEmpty()
+			: !bDashAvailable && Reasons.HasTagExact(CombatTags::Failure_NotLearned) && !Character->GetSkillFailureReason(Skill).IsEmpty());
+		SendReceipt(Prefix + Name + TEXT("InputObserved"), bCorrectSkill && bCorrectTarget && bCorrectGeometry && bDashQualification && ResourcesUnchanged(),
+			TEXT("Actual owning-controller key press entered the matching HUD preview without cost, cooldown or any ability activation"));
+		if (bDone) return false;
+		SentReceipts.Add(Observed);
+		CombatPreviewInputFrame = GFrameCounter;
+		return false;
+	}
+	if (!SentReceipts.Contains(Captured))
+	{
+		if (!Character->IsTargetingSkill() || Character->GetTargetingSkill() != Skill) return false;
+		if (!CaptureSkillView(Name, Character, ExpectedTarget)) return false;
+		SentReceipts.Add(Captured);
+		CombatPreviewInputFrame = GFrameCounter;
+		return false;
+	}
+	if (!SentReceipts.Contains(Cancelled))
+	{
+		PC->InputKey(FInputKeyParams(EKeys::RightMouseButton, IE_Pressed, 1.0));
+		SentReceipts.Add(Cancelled);
+		CombatPreviewInputFrame = GFrameCounter;
+		return false;
+	}
+	if (!SentReceipts.Contains(CancelObserved))
+	{
+		if (Character->IsTargetingSkill()) return false;
+		SendReceipt(Prefix + Name + TEXT("Cancelled"), ResourcesUnchanged(),
+			TEXT("Actual right-mouse input cancelled the held preview on a later frame without starting a GAS action"));
+		if (bDone) return false;
+		PC->InputKey(FInputKeyParams(EKeys::RightMouseButton, IE_Released, 0.0));
+		SentReceipts.Add(CancelObserved);
+		CombatPreviewInputFrame = GFrameCounter;
+		return false;
+	}
+	if (!SentReceipts.Contains(Released))
+	{
+		PC->InputKey(FInputKeyParams(Key, IE_Released, 0.0));
+		SentReceipts.Add(Released);
+		CombatPreviewInputFrame = GFrameCounter;
+		return false;
+	}
+	const bool bConserved = !Character->IsTargetingSkill() && ResourcesUnchanged();
+	PC->SetControlRotation(CombatPreviewInputRotation);
+	SendReceipt(Completed, bConserved,
+		TEXT("Current-token preview PNG saved; right-click cancelled before original key release; health/energy, cooldown and real ability prediction keys remained unchanged"));
+	return !bDone;
+#else
+	return false;
+#endif
 }
 
 // 夹具只隐藏属性，保持已打开的 Actor/ASC RPC 通道；不靠固定秒数自动解除。
@@ -162,16 +470,26 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		Assert(TEXT("ServerCombatFixture"), CombatPrimary.IsValid() && CombatPartner.IsValid(),
 			TEXT("Both actual player pawns support combat; no replacement player fixture"));
 		if (bDone) return;
+		Emit(TEXT("FIXTURE"), FString::Printf(TEXT("Accepted player baseline: primaryHP=%.2f partnerHP=%.2f"),
+			CombatPrimary->GetHealth(), CombatPartner->GetHealth()));
+		Assert(TEXT("ServerCombatPlayerBaseline"), CombatPrimary->GetHealth() == 100.f && CombatPartner->GetHealth() == 100.f
+			&& CombatPrimary->GetEnergy() == 100.f && CombatPartner->GetEnergy() == 100.f,
+			TEXT("Both actual accepted players enter the isolated fixture at health100/energy100; no resource reset hides background damage"));
+		if (bDone) return;
 		CombatPrimary->GetCharacterMovement()->DisableMovement();
 		CombatPartner->GetCharacterMovement()->DisableMovement();
 		CombatPrimary->SetActorLocation(FVector(0, 0, 4000));
 		CombatPartner->SetActorLocation(FVector(100, 300, 4000));
+		Assert(TEXT("ServerCombatTargetingFloor"), AddCombatTargetingGround(World, CombatPrimary.Get()),
+			TEXT("Real replicated collision ground supports identical client previews and authority ground targeting"));
+		if (bDone) return;
+		if (!PrepareVisualFixtureSurface(World,CombatPrimary.Get())) return;
 		PrimaryPC->SetControlRotation(FRotator::ZeroRotator);
 		PartnerPC->SetControlRotation(FRotator::ZeroRotator);
 
 		FActorSpawnParameters Params;
 		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		CombatEnemy = World->SpawnActor<AmultiplayerCombatEnemy>(FVector(500, 0, 4000), FRotator::ZeroRotator, Params);
+		CombatEnemy = World->SpawnActor<AmultiplayerCombatEnemy>(CombatFixtureEnemyClass(),FVector(500, 0, 4000), FRotator::ZeroRotator, Params);
 		Assert(TEXT("ServerCombatSpawn"), CombatEnemy.IsValid(), TEXT("Server spawned one replicated target"));
 		if (bDone) return;
 		// 保留原生敌人的 ASC 与碰撞，只停止 AI，避免其额外攻击改变受测数值。
@@ -181,6 +499,9 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 			AI->Destroy();
 		}
 		CombatEnemy->GetCharacterMovement()->DisableMovement();
+		// Character 出生时可能先贴地调整高度；冻结后明确恢复本夹具声明的位置。
+		CombatEnemy->SetActorLocation(FVector(500, 0, 4000), false, nullptr, ETeleportType::TeleportPhysics);
+		CombatEnemy->ForceNetUpdate();
 		CombatEnemy->bAlwaysRelevant = true;
 		if (!ApplyCombatTestDamage(CombatPrimary.Get(), CombatEnemy.Get(), 20.0f))
 		{
@@ -191,6 +512,10 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		PartnerProbe->Subject = CombatEnemy.Get();
 		Probe->CombatTarget = CombatEnemy.Get();
 		PartnerProbe->CombatTarget = CombatEnemy.Get();
+		FString AuthorityPreviewDetails;
+		const bool bAuthorityPreview = CombatPreviewsMatchGeometry(CombatPrimary.Get(), CombatEnemy.Get(), &AuthorityPreviewDetails);
+		Assert(TEXT("ServerCombatTargetPreview"), bAuthorityPreview, AuthorityPreviewDetails);
+		if (bDone) return;
 		SetCommand(TEXT("CombatInitial"));
 	}
 
@@ -199,7 +524,22 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		return Receipts.Contains(FString(TEXT("Primary")) + Suffix)
 			&& Receipts.Contains(FString(TEXT("Partner")) + Suffix);
 	};
-	if (Phase == TEXT("CombatInitial") && BothObserved(TEXT("CurrentState")))
+	if (Phase == TEXT("CombatHeal") && Receipts.Contains(TEXT("PrimaryHealConfirmed"))
+		&& !SentReceipts.Contains(TEXT("ServerHealSnapshot")))
+	{
+		SentReceipts.Add(TEXT("ServerHealSnapshot"));
+		Emit(TEXT("FIXTURE"), FString::Printf(TEXT("After real Heal confirmation: primaryHP=%.2f partnerHP=%.2f energy=%.2f distance=%.2f"),
+			CombatPrimary->GetHealth(), CombatPartner->GetHealth(), CombatPrimary->GetEnergy(),
+			FVector::Distance(CombatPrimary->GetActorLocation(), CombatPartner->GetActorLocation())));
+		// 权威结果独立检查，不等待客户端恰好读到期望值才判断业务是否成功。
+		Assert(TEXT("ServerCombatHeal"), FMath::IsNearlyEqual(CombatPartner->GetHealth(), 70.f)
+			&& FMath::IsNearlyEqual(CombatPrimary->GetEnergy(), 55.f) && HasReceivedPredictionKey(CombatPrimary.Get(), TEXT("Heal")),
+			TEXT("Two immediate heal requests restored teammate 30 health and consumed energy once"));
+		if (bDone) return;
+	}
+	const bool bInitialVisualReady = !bVisualAcceptance || (BothObserved(TEXT("TargetingDefenseInputDone"))
+		&& BothObserved(TEXT("TargetingAreaInputDone")) && BothObserved(TEXT("TargetingDashLockedInputDone")));
+	if (Phase == TEXT("CombatInitial") && BothObserved(TEXT("CurrentState")) && BothObserved(TEXT("TargetPreview")) && bInitialVisualReady)
 	{
 		Assert(TEXT("ServerCombatCurrentState"), CombatEnemy.IsValid()
 			&& FMath::IsNearlyEqual(CombatEnemy->GetHealth(), 80.0f), TEXT("Pre-existing damage is present on both replicas"));
@@ -246,17 +586,89 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 			Finish(false, TEXT("Could not prepare wounded teammate"));
 			return;
 		}
+		Emit(TEXT("FIXTURE"), FString::Printf(TEXT("Before real Heal: primaryHP=%.2f partnerHP=%.2f distance=%.2f"),
+			CombatPrimary->GetHealth(), CombatPartner->GetHealth(), FVector::Distance(CombatPrimary->GetActorLocation(), CombatPartner->GetActorLocation())));
+		Assert(TEXT("ServerCombatHealTargetReady"), FMath::IsNearlyEqual(CombatPartner->GetHealth(), 40.f),
+			TEXT("Real damage prepared the intended wounded teammate at health40 before requesting Heal"));
+		if (bDone) return;
 		Probe->Subject = CombatPartner.Get();
 		PartnerProbe->Subject = CombatPartner.Get();
-		SetCommand(TEXT("CombatHeal"));
+		SetCommand(bVisualAcceptance ? TEXT("CombatHealPreview") : TEXT("CombatHeal"));
+	}
+	else if (Phase == TEXT("CombatHealPreview") && BothObserved(TEXT("TargetingHealInputDone")))
+	{
+		Assert(TEXT("ServerTargetingHealUncommitted"), CombatPrimary->GetHealth() == 90.f && CombatPartner->GetHealth() == 40.f
+			&& CombatPrimary->GetEnergy() == 80.f && CombatPartner->GetEnergy() == 100.f
+			&& CombatPrimary->GetHealCooldownRemaining() == 0.f && CombatPartner->GetHealCooldownRemaining() == 0.f,
+			TEXT("Both real E-key previews were captured and cancelled; server health, energy and healing cooldown remain at the pre-heal baseline"));
+		if (!bDone) SetCommand(TEXT("CombatHeal"));
 	}
 	else if (Phase == TEXT("CombatHeal") && BothObserved(TEXT("Heal"))
-		&& Receipts.Contains(TEXT("PrimaryHealConfirmed")))
+		&& SentReceipts.Contains(TEXT("ServerHealSnapshot")))
 	{
-		Assert(TEXT("ServerCombatHeal"), CombatPartner.IsValid() && CombatPrimary.IsValid()
-			&& FMath::IsNearlyEqual(CombatPartner->GetHealth(), 70.0f)
-			&& FMath::IsNearlyEqual(CombatPrimary->GetEnergy(), 55.0f) && HasReceivedPredictionKey(CombatPrimary.Get(), TEXT("Heal")),
-			TEXT("Two immediate heal requests restored teammate 30 health and consumed energy once"));
+		if (bVisualAcceptance)
+		{
+			// 保留真实的 HP90/E55；只挪开仍受伤的队友，等原治疗冷却自然结束后测试自疗。
+			CombatSelfHealPartnerOrigin = CombatPartner->GetActorLocation();
+			const float Separation = CombatPrimary->GetSkillRule(EMultiplayerCombatSkill::Heal).Range + 150.f;
+			const FVector Away = (CombatSelfHealPartnerOrigin - CombatPrimary->GetActorLocation()).GetSafeNormal2D();
+			CombatPartner->SetActorLocation(CombatPrimary->GetActorLocation() + Away * Separation, false, nullptr, ETeleportType::TeleportPhysics);
+			CombatPartner->ForceNetUpdate();
+			bCombatSelfHealPartnerMoved = true;
+			const auto* Spec = CombatPrimary->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerHealAbility::StaticClass());
+			const auto* Instance = Spec ? Spec->GetPrimaryInstance() : nullptr;
+			CombatSelfHealPreviousKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey().Current : 0;
+			PrepareCombatSelfHealObservation(World, CombatPrimary.Get());
+			Probe->Subject = CombatPrimary.Get();
+			PartnerProbe->Subject = CombatPrimary.Get();
+			SetCommand(TEXT("CombatSelfHealPrepare"));
+			return;
+		}
+		ResetCombatDefense(CombatPrimary.Get());
+		Probe->Subject = CombatPrimary.Get();
+		PartnerProbe->Subject = CombatPrimary.Get();
+		SetCommand(TEXT("PredictPrepare:AttackCooldown"));
+	}
+	else if (Phase == TEXT("CombatSelfHealPrepare") && BothObserved(TEXT("SelfHealReady")))
+	{
+		Assert(TEXT("ServerCombatSelfHealReady"), CombatPrimary->GetHealth() == 90.f && CombatPrimary->GetEnergy() == 55.f
+			&& CombatPartner->GetHealth() == 70.f && CombatPrimary->GetHealCooldownRemaining() == 0.f
+			&& CombatPrimary->GetHealTarget() == CombatPrimary.Get()
+			&& FVector::DistSquared(CombatPrimary->GetActorLocation(), CombatPartner->GetActorLocation())
+				> FMath::Square(CombatPrimary->GetSkillRule(EMultiplayerCombatSkill::Heal).Range),
+			TEXT("Original teammate-heal health90/energy55 preserved; cooldown expired naturally; injured teammate moved outside actual range so only self is eligible"));
+		if (!bDone) SetCommand(TEXT("CombatSelfHeal"));
+	}
+	else if (Phase == TEXT("CombatSelfHeal"))
+	{
+		const auto* Spec = CombatPrimary->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerHealAbility::StaticClass());
+		const auto* Instance = Spec ? Spec->GetPrimaryInstance() : nullptr;
+		const auto Key = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
+		if (!SentReceipts.Contains(TEXT("ServerCombatSelfHealSettlement")) && Key.WasReceived()
+			&& Key.Current != CombatSelfHealPreviousKey)
+		{
+			// 依据服务器自己的新激活与属性通知立即判断，绝不先等客户端报告期望数值。
+			int32 CooldownEffects = 0;
+			for (auto Handle : CombatPrimary->GetAbilitySystemComponent()->GetActiveEffects(FGameplayEffectQuery()))
+				if (const auto* Effect = CombatPrimary->GetAbilitySystemComponent()->GetActiveGameplayEffect(Handle);
+					Effect && Effect->Spec.Def->IsA<UmultiplayerHealCooldownEffect>()) ++CooldownEffects;
+			SentReceipts.Add(TEXT("ServerCombatSelfHealSettlement"));
+			Assert(TEXT("ServerCombatSelfHealSettlement"), CombatPrimary->GetHealth() == 100.f && CombatPrimary->GetEnergy() == 30.f
+				&& CombatPartner->GetHealth() == 70.f && CooldownEffects == 1 && CombatPrimary->GetHealCooldownRemaining() > 0.f
+				&& CombatSelfHealHealthChanges == 1 && bCombatSelfHealExactHealthChange,
+				FString::Printf(TEXT("Actual owned E activation key%d: HP90->%.0f once(count%d exact%d), energy55->%.0f, one Heal CD=%d remaining%.3f; teammate remains70"),
+					Key.Current, CombatPrimary->GetHealth(), CombatSelfHealHealthChanges, bCombatSelfHealExactHealthChange,
+					CombatPrimary->GetEnergy(), CooldownEffects, CombatPrimary->GetHealCooldownRemaining()));
+			if (bDone) return;
+		}
+		if (!SentReceipts.Contains(TEXT("ServerCombatSelfHealSettlement")) || !BothObserved(TEXT("SelfHealOutcome"))
+			|| !BothObserved(TEXT("SelfHealEffectObserved")) || !Receipts.Contains(TEXT("PrimarySelfHealInputReleased"))
+			|| !Receipts.Contains(TEXT("PrimarySelfHealPredicted")) || !Receipts.Contains(TEXT("PrimarySelfHealConfirmed"))
+			|| !BothObserved(TEXT("VisualSelfHeal"))) return;
+		const FVector Restored = CombatSelfHealPartnerOrigin;
+		ClearCombatSelfHealFixture();
+		Assert(TEXT("ServerCombatSelfHealPartnerRestored"), CombatPartner->GetActorLocation().Equals(Restored, .1f)
+			&& CombatPartner->GetHealth() == 70.f, TEXT("Temporary teammate displacement restored before original prediction/rejection phases; no healing eligibility or health was patched"));
 		if (bDone) return;
 		ResetCombatDefense(CombatPrimary.Get());
 		Probe->Subject = CombatPrimary.Get();
@@ -329,12 +741,13 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		UAbilitySystemComponent* ASC = CombatPrimary->GetAbilitySystemComponent();
 		Assert(TEXT("ServerCombatPlayerDeath"), CombatPrimary.IsValid() && !CombatPrimary->IsAlive()
 			&& CombatPrimary->GetHealth() == 0.0f && !CombatPrimary->GetActorEnableCollision()
+			&& !CombatPrimary->InputEnabled() && PrimaryPlayer(World)->InputEnabled()
 			&& FMath::IsNearlyEqual(CombatPrimary->GetEnergy(), 100.0f)
 			&& !ASC->HasMatchingGameplayTag(CombatTags::State_Defending)
 			&& !ASC->HasMatchingGameplayTag(CombatTags::Cooldown_Defend)
 			&& !ASC->HasMatchingGameplayTag(CombatTags::Cooldown_Attack) && !ASC->HasMatchingGameplayTag(CombatTags::Cooldown_Heal)
 			&& CombatPartner.IsValid() && FMath::IsNearlyEqual(CombatPartner->GetHealth(), 70.0f),
-			TEXT("Death rejected stale client defense prediction; energy stayed 100 and defense/cooldown did not survive"));
+			TEXT("Death rejected stale client defense prediction; energy stayed 100 and defense/cooldown did not survive; pawn input disabled while controller input remains enabled"));
 		if (bDone) return;
 		CombatPreviousController = PrimaryPlayer(World);
 		SetCommand(TEXT("PredictFreshLeave"));
@@ -396,10 +809,12 @@ bool UCoopNetTestDriver::CombatPredictionServerTick(UWorld* World)
 		if (CombatEnemy.IsValid()) CombatEnemy->Destroy();
 		Params.Owner = nullptr;
 		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		CombatEnemy = World->SpawnActor<AmultiplayerCombatEnemy>(FVector(500, 0, 4000), FRotator::ZeroRotator, Params);
+		CombatEnemy = World->SpawnActor<AmultiplayerCombatEnemy>(CombatFixtureEnemyClass(),FVector(500, 0, 4000), FRotator::ZeroRotator, Params);
 		if (!Probe.IsValid() || !CombatEnemy.IsValid()) { Finish(false, TEXT("Could not rebuild fresh-session test probes/target")); return true; }
 		if (AAIController* AI = Cast<AAIController>(CombatEnemy->GetController())) { AI->UnPossess(); AI->Destroy(); }
 		CombatEnemy->GetCharacterMovement()->DisableMovement();
+		CombatEnemy->SetActorLocation(FVector(500, 0, 4000), false, nullptr, ETeleportType::TeleportPhysics);
+		CombatEnemy->ForceNetUpdate();
 		CombatEnemy->bAlwaysRelevant = true;
 		Probe->CombatTarget = CombatEnemy.Get(); PartnerProbe->CombatTarget = CombatEnemy.Get();
 		SetCommand(TEXT("PredictPrepare:FreshAttack"));
@@ -449,7 +864,7 @@ bool UCoopNetTestDriver::CombatPredictionServerTick(UWorld* World)
 			ASC->ApplyGameplayEffectSpecToSelf(Spec);
 		}
 		else if (Reason == TEXT("Energy")) ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetEnergyAttribute(), 10.0f);
-		else
+		else if (Reason == TEXT("NoTarget"))
 		{
 			ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), 100.0f);
 			CombatPartner->GetAbilitySystemComponent()->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), 100.0f);
@@ -464,8 +879,27 @@ bool UCoopNetTestDriver::CombatPredictionServerTick(UWorld* World)
 		if (!Receipts.Contains(TEXT("Primary") + Name + TEXT("Predicted"))
 			|| !Receipts.Contains(TEXT("Primary") + Name + TEXT("Rejected"))
 			|| !Receipts.Contains(TEXT("Primary") + Name + TEXT("Rollback"))) return true;
+		if (Reason == TEXT("MissingAim"))
+		{
+			if (!SentReceipts.Contains(TEXT("MissingAimSettling")))
+			{
+				SentReceipts.Add(TEXT("MissingAimSettling"));
+				CombatLifecycleAt = FPlatformTime::Seconds();
+			}
+			// 已收到真正拒绝后再跨过原出手与收招期限，避免只证明当帧没发弹。
+			const auto& Attack = CombatPrimary->GetCombatConfig().Attack;
+			if (FPlatformTime::Seconds() - CombatLifecycleAt < Attack.Windup + Attack.Recovery + .5f) return true;
+			bool HasProjectile = false;
+			for (TActorIterator<AmultiplayerCombatProjectile> It(World); It; ++It)
+				HasProjectile |= It->GetOwner() == CombatPrimary.Get();
+			Assert(TEXT("ServerAttackMissingAimNoLateProjectile"), !HasProjectile && CombatEnemy->GetHealth() == 100,
+				TEXT("Missing activation aim was rejected; original attack release/recovery deadlines passed without any authoritative projectile or damage"));
+			if (bDone) return true;
+		}
 		const bool bUnchanged = CombatPrimary->GetEnergy() == (Reason == TEXT("Energy") ? 10.0f : 100.0f)
 			&& !ASC->HasMatchingGameplayTag(CombatTags::State_Defending)
+			&& (Reason != TEXT("MissingAim") || (!ASC->HasMatchingGameplayTag(CombatTags::Cooldown_Attack)
+				&& CombatEnemy->GetHealth() == 100.0f))
 			&& (Skill != TEXT("Area") || (!CombatPrimary->IsCasting() && CombatEnemy->GetHealth() == 100.0f))
 			&& (Reason != TEXT("Cooldown") || ASC->HasMatchingGameplayTag(PredictionSkill(Skill).CooldownTag))
 			&& (Reason != TEXT("NoTarget") || (CombatPrimary->GetHealth() == 100.0f && CombatPartner->GetHealth() == 100.0f));
@@ -567,9 +1001,12 @@ bool UCoopNetTestDriver::CombatPredictionClientTick(UWorld* World)
 			const FActiveGameplayEffect* Effect = ASC->GetActiveGameplayEffect(Handle);
 			bPredictedEffectSurvived |= Effect != nullptr && Effect->PredictionKey.Current == Key;
 		}
-		if (!bPredictedEffectSurvived)
+		const bool bMissingAim = FString(Case->Rejection) == TEXT("MissingAim");
+		UAnimInstance* Anim = Local->GetMesh()->GetAnimInstance();
+		if (!bPredictedEffectSurvived && (!bMissingAim || !Anim
+			|| !Anim->Montage_IsPlaying(Local->GetActionMontage(EMultiplayerCombatAnimation::Attack))))
 			SendReceipt(TEXT("Primary") + Name + TEXT("Rollback"), true,
-				TEXT("Engine rejection removed that prediction key's effects and restored local energy100 before server fixture replication was released"));
+				TEXT("Engine rejection removed that prediction key's effects and restored local energy100 before server fixture replication was released; rejected attack montage is stopped"));
 	}
 	if (bRetry)
 	{
@@ -601,8 +1038,9 @@ void UCoopNetTestDriver::PredictCombatSkill(AmultiplayerCombatCharacter* Charact
 	int32 ProjectilesBefore = 0;
 	for (TActorIterator<AmultiplayerCombatCharacter> It(Character->GetWorld()); It; ++It) HealthBefore.Add(*It, It->GetHealth());
 	for (TActorIterator<AmultiplayerCombatProjectile> It(Character->GetWorld()); It; ++It) ++ProjectilesBefore;
-	const auto Invoke = [Character, &Skill]()
-		{ if (Skill == TEXT("Attack")) Character->Attack(); else if (Skill == TEXT("Defense")) Character->Defend();
+	const auto Invoke = [Character, ASC, &Skill, &CaseName]()
+		{ if (CaseName == TEXT("AttackMissingAim")) ASC->TryActivateAbilityByClass(UmultiplayerAttackAbility::StaticClass());
+			else if (Skill == TEXT("Attack")) Character->Attack(); else if (Skill == TEXT("Defense")) Character->Defend();
 			else if (Skill == TEXT("Area")) Character->CastArea(); else Character->Heal(); };
 	const bool bStaleReady = Character->IsCombatReady() && FMath::IsNearlyEqual(Character->GetEnergy(), EnergyBefore)
 		&& !ASC->HasMatchingGameplayTag(Definition.CooldownTag);
@@ -670,6 +1108,8 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 	const FString Prefix = bPartner ? TEXT("Partner") : TEXT("Primary");
 	const FString CommandMarker = TEXT("Command:") + Phase;
 	UAbilitySystemComponent* ASC = LocalCharacter->GetAbilitySystemComponent();
+	if (CombatSelfHealObserved.IsValid() && Phase != TEXT("CombatSelfHealPrepare") && Phase != TEXT("CombatSelfHeal"))
+		ClearCombatSelfHealFixture();
 	// Probe 和技能列表可能先于接纳回执或角色就绪属性到达，初始握手必须等本地真实可施法。
 	if (Phase == TEXT("CombatInitial"))
 	{
@@ -685,6 +1125,68 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 			}
 	}
 	CombatEnemy = Cast<AmultiplayerCombatEnemy>(Probe->CombatTarget.Get());
+	if (Phase == TEXT("CombatInitial") && CombatEnemy.IsValid() && FMath::IsNearlyEqual(CombatEnemy->GetHealth(), 80.f)
+		&& !SentReceipts.Contains(Prefix + TEXT("TargetPreview")))
+	{
+		FString FixtureDetails;
+		if (!CombatPreviewFixtureReady(LocalCharacter, CombatEnemy.Get(), bPartner, FixtureDetails))
+		{
+			FWorldDelegates::OnWorldPostActorTick.Remove(CombatPreviewFixtureTick);
+			CombatPreviewFixtureTick.Reset();
+			CombatPreviewFixtureWorldTicks = 0;
+			if (!SentReceipts.Contains(TEXT("PreviewFixtureInputsPending")))
+			{
+				Emit(TEXT("FIXTURE_PENDING"), FixtureDetails);
+				SentReceipts.Add(TEXT("PreviewFixtureInputsPending"));
+			}
+			return;
+		}
+		// 只门控独立的复制输入与真实世界帧，不轮询“预览是否通过”来掩盖算法错误。
+		if (!CombatPreviewFixtureTick.IsValid())
+		{
+			FString BeforeTickGeometry;
+			CombatPreviewsMatchGeometry(LocalCharacter, CombatEnemy.Get(), &BeforeTickGeometry);
+			Emit(TEXT("FIXTURE_BEFORE_WORLD_TICKS"), FixtureDetails + TEXT("; ") + BeforeTickGeometry);
+			CombatPreviewFixtureWorldTicks = 0;
+			CombatPreviewFixtureTick = FWorldDelegates::OnWorldPostActorTick.AddWeakLambda(this,
+				[this, PendingWorld = TWeakObjectPtr<UWorld>(World)](UWorld* TickWorld, ELevelTick, float)
+				{
+					if (TickWorld == PendingWorld.Get()) CombatPreviewFixtureWorldTicks = FMath::Min(2, CombatPreviewFixtureWorldTicks + 1);
+				});
+			Emit(TEXT("FIXTURE_INPUTS_READY"), FixtureDetails);
+			return;
+		}
+		if (CombatPreviewFixtureWorldTicks < 2) return;
+		FWorldDelegates::OnWorldPostActorTick.Remove(CombatPreviewFixtureTick);
+		CombatPreviewFixtureTick.Reset();
+		FString GeometryDetails;
+		const bool bGeometry = CombatPreviewsMatchGeometry(LocalCharacter, CombatEnemy.Get(), &GeometryDetails);
+		SendReceipt(Prefix + TEXT("TargetPreview"), bGeometry,
+			FixtureDetails + TEXT("; WorldPostActorTicks=2; ") + GeometryDetails);
+	}
+	if (bVisualAcceptance && Phase == TEXT("CombatInitial"))
+	{
+		if (!SentReceipts.Contains(Prefix + TEXT("TargetPreview"))) return;
+		if (!CaptureTargetingInput(World, TEXT("TargetingDefense"), EKeys::Q, EMultiplayerCombatSkill::Defend)) return;
+		if (!CaptureTargetingInput(World, TEXT("TargetingArea"), EKeys::R, EMultiplayerCombatSkill::Area)) return;
+		if (!CaptureTargetingInput(World, TEXT("TargetingDashLocked"), EKeys::LeftShift, EMultiplayerCombatSkill::Dash)) return;
+	}
+	if (bVisualAcceptance && Phase == TEXT("CombatHealPreview"))
+	{
+		if (!Subject || !FMath::IsNearlyEqual(Subject->GetHealth(), 40.f)) return;
+		const auto Heal = LocalCharacter->GetSkillTargetPreview(EMultiplayerCombatSkill::Heal);
+		if (!Heal.bValid || Heal.Target.Get() != Subject) return;
+		CaptureTargetingInput(World, TEXT("TargetingHeal"), EKeys::E, EMultiplayerCombatSkill::Heal, Subject);
+		return;
+	}
+	if (Phase == TEXT("CombatHeal") && Subject && Subject->GetHealth() < 90.f
+		&& !SentReceipts.Contains(Prefix + TEXT("HealPreview")))
+	{
+		const auto Heal = LocalCharacter->GetSkillTargetPreview(EMultiplayerCombatSkill::Heal);
+		if (Heal.bValid && Heal.Target.Get() == Subject)
+			SendReceipt(Prefix + TEXT("HealPreview"), LocalCharacter->GetHealTarget() == Subject,
+				TEXT("This connection highlights the actual wounded teammate selected by the authoritative healing rules, not a separate HUD selection"));
+	}
 	// 所有阶段持续检查，避免在阶段回执之后才到达的远端资源泄漏被忽略。
 	for (TActorIterator<AmultiplayerCombatCharacter> It(World); It; ++It)
 	{
@@ -696,6 +1198,130 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 					*It->GetName(), It->GetEnergy(), It->GetMaxEnergy()));
 			return;
 		}
+	}
+	if (bVisualAcceptance && (Phase == TEXT("CombatSelfHealPrepare") || Phase == TEXT("CombatSelfHeal")))
+	{
+		if (!Subject || Subject->GetCombatTeam() != EMultiplayerCombatTeam::Players || !Subject->IsCombatReady()) return;
+		AmultiplayerCombatCharacter* Teammate = bPartner ? LocalCharacter : nullptr;
+		if (!Teammate)
+			for (TActorIterator<AmultiplayerCombatCharacter> It(World); It; ++It)
+				if (*It != Subject && It->GetCombatTeam() == EMultiplayerCombatTeam::Players && It->GetPlayerState()) { Teammate = *It; break; }
+		if (!Teammate) return;
+		auto* SourceASC = Subject->GetAbilitySystemComponent();
+		if (Phase == TEXT("CombatSelfHealPrepare"))
+		{
+			if (SentReceipts.Contains(Prefix + TEXT("SelfHealReady"))) return;
+			const bool Ready = Subject->GetHealth() == 90.f && Teammate->GetHealth() == 70.f
+				&& !SourceASC->HasMatchingGameplayTag(CombatTags::Cooldown_Heal)
+				&& Subject->GetHealTarget() == Subject && FVector::DistSquared(Subject->GetActorLocation(), Teammate->GetActorLocation())
+					> FMath::Square(Subject->GetSkillRule(EMultiplayerCombatSkill::Heal).Range)
+				&& (bPartner || (Subject == LocalCharacter && LocalCharacter->GetEnergy() == 55.f
+					&& ASC->FindAbilitySpecFromClass(UmultiplayerHealAbility::StaticClass())
+					&& LocalCharacter->GetProgressionComponent()->GetSlotSkill(2) == EMultiplayerCombatSkill::Heal));
+			if (!Ready) return;
+			PrepareCombatSelfHealObservation(World, Subject);
+			const auto& Feedback = Subject->GetCombatConfig().HealFeedback;
+			SendReceipt(Prefix + TEXT("SelfHealReady"), !Feedback.CascadeEffect.IsNull() ? Feedback.CascadeEffect.IsValid() : Feedback.Effect.IsValid(),
+				TEXT("Actual replicas preserve health90/teammate70; self is the sole eligible heal target after natural cooldown expiry; owner retains energy55; formal Heal asset preloaded and old particle components snapshotted"));
+			return;
+		}
+		if (!bPartner && !SentReceipts.Contains(CommandMarker))
+		{
+			SentReceipts.Add(CommandMarker);
+			CombatSelfHealInputStep = 0;
+			CombatSelfHealInputTick = FWorldDelegates::OnWorldPostActorTick.AddWeakLambda(this,
+				[this, WeakWorld = TWeakObjectPtr<UWorld>(World), WeakCaster = TWeakObjectPtr<AmultiplayerCombatCharacter>(LocalCharacter)]
+				(UWorld* TickWorld, ELevelTick, float)
+				{
+					if (TickWorld != WeakWorld.Get() || bDone) return;
+					auto* Caster = WeakCaster.Get();
+					auto* Controller = Caster ? Cast<APlayerController>(Caster->GetController()) : nullptr;
+					if (!Caster || !Controller) { Assert(TEXT("PrimarySelfHealInputLifetime"), false, TEXT("Self-heal pawn/controller disappeared during actual E input")); return; }
+					auto* CasterASC = Caster->GetAbilitySystemComponent();
+					if (CombatSelfHealInputStep == 0)
+					{
+						const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Heal);
+						SendReceipt(TEXT("PrimarySelfHealInputPreview"), Controller->IsInputKeyDown(EKeys::E)
+							&& Caster->IsTargetingSkill() && Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Heal
+							&& Preview.bValid && Preview.Target.Get() == Caster && Caster->GetHealth() == 90.f
+							&& Caster->GetEnergy() == 55.f && Caster->GetHealCooldownRemaining() == 0.f,
+							TEXT("Actual E-down entered self-targeted healing preview at unchanged health90/energy55, before any commitment"));
+						if (bDone) return;
+						Controller->InputKey(FInputKeyParams(EKeys::E, IE_Released, 0.));
+						CombatSelfHealInputStep = 1;
+						return;
+					}
+					const auto* Spec = CasterASC->FindAbilitySpecFromClass(UmultiplayerHealAbility::StaticClass());
+					const auto* Instance = Spec ? Spec->GetPrimaryInstance() : nullptr;
+					FPredictionKey Key = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
+					bool KeyedCost = false, KeyedCooldown = false;
+					for (auto Handle : CasterASC->GetActiveEffects(FGameplayEffectQuery()))
+					{
+						const auto* Effect = CasterASC->GetActiveGameplayEffect(Handle);
+						if (!Effect || Effect->PredictionKey != Key) continue;
+						KeyedCost |= Effect->Spec.Def->IsA<UmultiplayerHealCostEffect>();
+						KeyedCooldown |= Effect->Spec.Def->IsA<UmultiplayerHealCooldownEffect>();
+					}
+					SendReceipt(TEXT("PrimarySelfHealPredicted"), Key.IsLocalClientKey() && Key.WasLocallyGenerated()
+						&& KeyedCost && KeyedCooldown && Caster->GetEnergy() == 30.f && Caster->GetHealth() == 90.f,
+						FString::Printf(TEXT("Actual E-up frame before a later network receive: key%d keyed-cost%d keyed-CD%d energy55->%.0f; health remains authoritative90, not locally healed"),
+							Key.Current, KeyedCost, KeyedCooldown, Caster->GetEnergy()));
+					if (bDone) return;
+					CombatPredictionKeys.Add(TEXT("SelfHeal"), Key.Current);
+					Key.NewCaughtUpDelegate().BindWeakLambda(this, [this] { SentReceipts.Add(TEXT("SelfHealCaughtUp")); });
+					SendReceipt(TEXT("PrimarySelfHealInputReleased"), !Controller->IsInputKeyDown(EKeys::E) && !Caster->IsTargetingSkill(),
+						TEXT("Actual E key released and self preview ended through production input binding; no direct Heal injection"));
+					FWorldDelegates::OnWorldPostActorTick.Remove(CombatSelfHealInputTick);
+					CombatSelfHealInputTick.Reset();
+				});
+			PC->InputKey(FInputKeyParams(EKeys::E, IE_Pressed, 1.));
+		}
+		if (!SentReceipts.Contains(Prefix + TEXT("SelfHealEffectObserved")))
+		{
+			const auto& Feedback = Subject->GetCombatConfig().HealFeedback;
+			const FVector Expected = Subject->GetActorLocation() - FVector::UpVector * Subject->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+			const auto Observe = [&](USceneComponent* Component, const TCHAR* Kind)
+			{
+				if (SentReceipts.Contains(Prefix + TEXT("SelfHealEffectObserved")) || Component->GetWorld() != World
+					|| !Component->IsRegistered() || !Component->IsActive() || CombatSelfHealEffectsBefore.Contains(Component)) return;
+				SendReceipt(Prefix + TEXT("SelfHealEffectObserved"), Component->GetComponentLocation().Equals(Expected, 1.f),
+					FString::Printf(TEXT("New actual active %s Heal component=%s selected-formal-asset=1 old-snapshot=0 at-own-feet=%s expected=%s; independent of HP/PNG checks"),
+						Kind, *Component->GetPathName(), *Component->GetComponentLocation().ToString(), *Expected.ToString()));
+				if (!bDone)
+				{
+					CombatSelfHealEffect = Component;
+					// 短粒子与属性复制可能先后抵达；活跃时立即请求画面，生命与预测确认仍分别验收。
+					SentReceipts.Add(Prefix + TEXT("SelfHealCaptureStarted"));
+					CaptureSkillView(TEXT("SelfHeal"), Subject);
+				}
+			};
+			for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+				if (!Feedback.CascadeEffect.IsNull() && It->Template == Feedback.CascadeEffect.Get()) Observe(*It, TEXT("Cascade"));
+			for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+				if (Feedback.CascadeEffect.IsNull() && !Feedback.Effect.IsNull() && It->GetAsset() == Feedback.Effect.Get()) Observe(*It, TEXT("Niagara"));
+		}
+		if (SentReceipts.Contains(Prefix + TEXT("SelfHealCaptureStarted"))
+			&& !SentReceipts.Contains(Prefix + TEXT("VisualSelfHeal"))) CaptureSkillView(TEXT("SelfHeal"), Subject);
+		if (CombatSelfHealHealthChanges > 1)
+		{
+			SendReceipt(Prefix + TEXT("SelfHealOutcome"), false, TEXT("This independent connection observed more than one HP change from one self-heal"));
+			return;
+		}
+		if (!bPartner && SentReceipts.Contains(TEXT("SelfHealCaughtUp")))
+		{
+			int32 CooldownEffects = 0;
+			for (auto Handle : ASC->GetActiveEffects(FGameplayEffectQuery()))
+				if (const auto* Effect = ASC->GetActiveGameplayEffect(Handle);
+					Effect && Effect->Spec.Def->IsA<UmultiplayerHealCooldownEffect>()) ++CooldownEffects;
+			SendReceipt(TEXT("PrimarySelfHealConfirmed"), LocalCharacter->GetEnergy() == 30.f && CooldownEffects == 1,
+				TEXT("Original self-heal prediction key caught up with energy30 and exactly one real authoritative healing cooldown"));
+		}
+		if (Subject->GetHealth() == 100.f && Teammate->GetHealth() == 70.f && CombatSelfHealHealthChanges == 1
+			&& bCombatSelfHealExactHealthChange && (bPartner || LocalCharacter->GetEnergy() == 30.f))
+		{
+			SendReceipt(Prefix + TEXT("SelfHealOutcome"), true, TEXT("This independent client observed one real replicated HP90->100 self-heal; other player stayed70; owner also verifies energy55->30"));
+		}
+		return;
 	}
 	if (CombatPredictionClientTick(World)) return;
 
@@ -726,7 +1352,8 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 				PredictCombatSkill(LocalCharacter, TEXT("Heal"), TEXT("DeathHeal"), 80.0f, true);
 			}
 		}
-		else if (Phase == TEXT("CombatHeal") && ASC->FindAbilitySpecFromClass(UmultiplayerHealAbility::StaticClass()))
+		else if (Phase == TEXT("CombatHeal") && SentReceipts.Contains(TEXT("PrimaryHealPreview"))
+			&& ASC->FindAbilitySpecFromClass(UmultiplayerHealAbility::StaticClass()))
 		{
 			SentReceipts.Add(CommandMarker);
 			PredictCombatSkill(LocalCharacter, TEXT("Heal"), TEXT("Heal"), 80.0f, false);
@@ -767,14 +1394,14 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 			&& FMath::IsNearlyEqual(Subject->GetHealth(), 80.0f))
 			SendReceipt(Prefix + TEXT("CurrentState"), true, TEXT("Received current enemy health 80 without replaying its damage event"));
 		else if (Phase == TEXT("CombatAttack") && Subject->GetCombatTeam() == EMultiplayerCombatTeam::Enemies
-			&& FMath::IsNearlyEqual(Subject->GetHealth(), 55.0f))
+			&& FMath::IsNearlyEqual(Subject->GetHealth(), 55.0f) && CaptureSkillView(TEXT("BasicAttack"),Subject))
 			SendReceipt(Prefix + TEXT("Attack"), true, TEXT("Observed one attack result: enemy health 55"));
 		else if (Phase == TEXT("CombatDefense") && Subject->GetCombatTeam() == EMultiplayerCombatTeam::Players
 			&& FMath::IsNearlyEqual(Subject->GetHealth(), 90.0f)
 			&& (bPartner || FMath::IsNearlyEqual(Subject->GetEnergy(), 80.0f))
 			&& Subject->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Defending))
 		{
-			SendReceipt(Prefix + TEXT("Defense"), true, bPartner
+			if (CaptureSkillView(TEXT("BasicDefense"),Subject)) SendReceipt(Prefix + TEXT("Defense"), true, bPartner
 				? TEXT("Observed reduced damage and replicated defense tag; remote resources remain private")
 				: TEXT("Observed reduced damage, own energy80 and replicated defense tag"));
 			if (bPartner)
@@ -787,7 +1414,7 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 			&& FMath::IsNearlyEqual(Subject->GetHealth(), 70.0f))
 		{
 			// 主客户端同时核对自己的资源，Partner 单独确认自己的治疗结果。
-			if (bPartner || FMath::IsNearlyEqual(LocalCharacter->GetEnergy(), 55.0f))
+			if ((bPartner || FMath::IsNearlyEqual(LocalCharacter->GetEnergy(), 55.0f)) && CaptureSkillView(TEXT("BasicHeal"),Subject))
 				SendReceipt(Prefix + TEXT("Heal"), true, TEXT("Observed teammate health 70; primary also verified energy 55"));
 		}
 		else if ((Phase == TEXT("CombatResourceReady") || Phase == TEXT("CombatDeathReady")) && Subject->IsAlive()
@@ -820,6 +1447,7 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 			SendReceipt(Prefix + TEXT("EnemyDeath"), true, TEXT("Observed enemy zero health, dead state and disabled collision"));
 		else if (Phase == TEXT("CombatPlayerDeath") && Subject->GetCombatTeam() == EMultiplayerCombatTeam::Players
 			&& !Subject->IsAlive() && Subject->GetHealth() == 0.0f && !Subject->GetActorEnableCollision()
+			&& !Subject->InputEnabled() && PC->InputEnabled()
 			&& (bPartner || FMath::IsNearlyEqual(Subject->GetEnergy(), 100.0f))
 			&& !Subject->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Defending)
 			&& !Subject->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::Cooldown_Defend)
@@ -834,7 +1462,7 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 				LocalCharacter->Heal();
 			}
 			SendReceipt(Prefix + TEXT("PlayerDeath"), true,
-				TEXT("Observed authoritative death and cleared prediction tags; owner also verified energy100 and attempted forbidden skills"));
+				TEXT("Observed authoritative death and cleared prediction tags; owner also verified energy100 and attempted forbidden skills; pawn input disabled without disabling controller UI input"));
 		}
 		else if (Phase == TEXT("CombatResourceRouting") && Subject->GetCombatTeam() == EMultiplayerCombatTeam::Players
 			&& (bPartner ? Subject == LocalCharacter : Subject != LocalCharacter)

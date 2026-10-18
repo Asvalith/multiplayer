@@ -12,6 +12,7 @@
 #include "Core/multiplayerLog.h"
 #include "UObject/ConstructorHelpers.h"
 #include "TimerManager.h"
+#include "Combat/multiplayerCombatCharacter.h"
 #if !UE_BUILD_SHIPPING
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -166,6 +167,7 @@ bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* 
 	Character->SetCombatSessionReady(true);
 	OutTicket = IssuedTicket;
 	UE_LOG(LogMultiplayer, Display, TEXT("Combat session accepted: restored=%d; shared round state retained."), Ticket.IsValid());
+	OnCombatSessionAccepted.Broadcast();
 	return true;
 }
 
@@ -196,6 +198,28 @@ APlayerController* AmultiplayerGameMode::ProcessClientTravel(FString& URL, bool 
 	return Super::ProcessClientTravel(URL, bSeamless, bAbsolute);
 }
 
+// 战斗终局只由服务器复核；尚有可行动队友时仍允许其救援和撤离。
+void AmultiplayerGameMode::NotifyCombatPlayerDeath()
+{
+	auto* State = GetGameState<AmultiplayerCoopGameState>();
+	if (!State || State->HasGameWon() || State->HasGameLost()) return;
+	bool bHasCombatPlayers = false;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		const auto* PC = It->Get();
+		const auto* Character = PC ? Cast<AmultiplayerCombatCharacter>(PC->GetPawn()) : nullptr;
+		if (!Character) continue;
+		bHasCombatPlayers = true;
+		if (Character->IsCombatReady()) return;
+	}
+	if (bHasCombatPlayers)
+	{
+		auto Result = State->GetObjectiveState();
+		Result.bGameLost = true;
+		State->ApplyAuthoritativeState(Result);
+	}
+}
+
 //装钥匙
 bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 {
@@ -205,7 +229,7 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 		return false;
 	}
 	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
-	if (CoopState == nullptr || CoopState->GetObjectiveState().bGameWon || CoopState->IsObjectiveComplete())
+	if (CoopState == nullptr || CoopState->HasGameLost() || CoopState->GetObjectiveState().bGameWon || CoopState->IsObjectiveComplete())
 	{
 		return false;
 	}
@@ -232,7 +256,7 @@ bool AmultiplayerGameMode::TryCompleteCoopGame(int32 CurrentPlayers, int32 Requi
 	}
 	//状态校验
 	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
-	if (CoopState == nullptr || CoopState->GetObjectiveState().bGameWon || !CoopState->IsObjectiveComplete())
+	if (CoopState == nullptr || CoopState->HasGameLost() || CoopState->GetObjectiveState().bGameWon || !CoopState->IsObjectiveComplete())
 	{
 		return false;
 	}
@@ -253,7 +277,7 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingCon
 		|| RequestingController == nullptr
 		|| RequestingController->GetWorld() != World
 		|| CoopState == nullptr
-		|| !CoopState->GetObjectiveState().bGameWon
+		|| (!CoopState->HasGameWon() && !CoopState->HasGameLost())
 		|| PendingRestart.bRequested
 		|| GetMatchState() == MatchState::LeavingMap
 		|| !World->NextURL.IsEmpty() || World->IsInSeamlessTravel())

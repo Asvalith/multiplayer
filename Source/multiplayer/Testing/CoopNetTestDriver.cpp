@@ -2,6 +2,10 @@
 #include "Testing/CoopPlatformRideProbe.h"
 
 #include "Core/multiplayerCoopGameState.h"
+#include "Combat/multiplayerCombatCharacter.h"
+#include "Combat/multiplayerCombatCoop.h"
+#include "Combat/multiplayerCombatEnemy.h"
+#include "Combat/multiplayerCombatProjectile.h"
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -40,6 +44,7 @@ void ACoopNetTestProbe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ACoopNetTestProbe, Stage);
 	DOREPLIFETIME(ACoopNetTestProbe, Subject);
 	DOREPLIFETIME(ACoopNetTestProbe, CombatTarget);
+	DOREPLIFETIME(ACoopNetTestProbe, EscapeRoute);
 }
 
 void ACoopNetTestProbe::ServerReceipt_Implementation(const FString& Name, bool bPassed, const FString& Detail)
@@ -84,14 +89,28 @@ void UCoopNetTestDriver::Start()
 	FParse::Value(FCommandLine::Get(), TEXT("CoopTestTimeout="), TimeoutSeconds);
 	bServer = Role == TEXT("Server");
 	bPartner = Role == TEXT("Partner");
+	bVisualAcceptance = FParse::Param(FCommandLine::Get(),TEXT("VisualAcceptance"));
+	bEscapeMovementDiagnostic = FParse::Param(FCommandLine::Get(),TEXT("EscapeMovementDiagnostic"));
 	StartedAt = Now();
 	SetPhase(TEXT("Boot"));
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &ThisClass::Tick), .1f);
 
 	if ((Role != TEXT("Server") && Role != TEXT("Client") && Role != TEXT("Partner")) || Token.IsEmpty())
 		Finish(false, TEXT("Requires CoopTestRole=Server|Client|Partner and a unique CoopTestToken"));
-	if (Mode != TEXT("RideMotion") && Mode != TEXT("Combat") && Mode != TEXT("CombatTraffic") && Mode != TEXT("CombatReconnect") && Mode != TEXT("CombatLifecycle"))
-		Finish(false, TEXT("Supported scenarios: RideMotion, Combat, CombatTraffic, CombatReconnect and CombatLifecycle"));
+	if (Mode != TEXT("RideMotion") && Mode != TEXT("Combat") && Mode != TEXT("CombatTraffic") && Mode != TEXT("CombatReconnect") && Mode != TEXT("CombatLifecycle") && Mode != TEXT("CombatExpansion") && Mode != TEXT("CoopEscape"))
+		Finish(false, TEXT("Supported scenarios: RideMotion, Combat, CombatTraffic, CombatReconnect, CombatLifecycle, CombatExpansion and CoopEscape"));
+	if (bVisualAcceptance)
+	{
+		if ((Mode != TEXT("Combat") && Mode != TEXT("CombatLifecycle") && Mode != TEXT("CombatExpansion"))
+			|| (!bServer && FParse::Param(FCommandLine::Get(),TEXT("NullRHI"))))
+			Finish(false,TEXT("VisualAcceptance requires one existing combat fixture and two rendered clients"));
+		Emit(TEXT("FIXTURE_VISUAL"),TEXT("Controlled GAS fixture with original state/damage assertions; transient setup and observation timings are not a normal escape playthrough or a performance measurement"));
+	}
+	if (bEscapeMovementDiagnostic)
+	{
+		if (Mode != TEXT("CoopEscape")) { Finish(false,TEXT("EscapeMovementDiagnostic requires CoopEscape")); return; }
+		Emit(TEXT("DIAGNOSTIC_ONLY"),TEXT("Direct physical walking to Key4 to diagnose blocking hits; this is not escape-loop, skill, visual or performance acceptance"));
+	}
 
 	FString SyncMode = TEXT("PlatformInertia");
 	FParse::Value(FCommandLine::Get(), TEXT("CoopPlatformSyncMode="), SyncMode);
@@ -102,8 +121,21 @@ void UCoopNetTestDriver::Start()
 
 void UCoopNetTestDriver::Stop()
 {
+	ClearCombatSelfHealFixture();
 	FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 	ClearCombatStateReplicationHolds();
+	ClearCombatAimFixture();
+	FWorldDelegates::OnWorldPostActorTick.Remove(CombatPreviewFixtureTick);
+	CombatPreviewFixtureTick.Reset();
+	CombatPreviewFixtureWorldTicks = 0;
+	FWorldDelegates::OnWorldPostActorTick.Remove(CombatAreaInputTick);
+	CombatAreaInputTick.Reset();
+	if (Mode == TEXT("CombatLifecycle"))
+		if (UWorld* World = FindWorld())
+			if (APlayerController* PC = World->GetFirstPlayerController())
+				PC->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.0));
+	CombatAreaEffectsBefore.Reset();
+	ClearEscapeInput();
 	if (bCombatMovementInputHeld)
 		if (UWorld* World = FindWorld())
 			if (APlayerController* PC = World->GetFirstPlayerController())
@@ -181,6 +213,20 @@ void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FStrin
 void UCoopNetTestDriver::Finish(bool bPassed, const FString& Detail)
 {
 	if (bDone) return;
+	ClearCombatSelfHealFixture();
+	if (CombatAreaInputTick.IsValid())
+	{
+		FWorldDelegates::OnWorldPostActorTick.Remove(CombatAreaInputTick);
+		CombatAreaInputTick.Reset();
+		if (UWorld* World = FindWorld())
+			if (auto* PC = World->GetFirstPlayerController())
+			{
+				if (auto* Character = Cast<AmultiplayerCombatCharacter>(PC->GetPawn())) Character->CancelSkillTargeting();
+				PC->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.0));
+			}
+	}
+	ClearCombatAimFixture();
+	ClearEscapeInput();
 	// 断言失败也释放测试按键，不能让角色在延迟退出窗口继续收到 W。
 	if (bCombatMovementInputHeld)
 		if (UWorld* World = FindWorld())
@@ -204,6 +250,8 @@ bool UCoopNetTestDriver::Tick(float)
 		return true;
 	}
 	if (Now() - StartedAt > TimeoutSeconds) { Finish(false, TEXT("Test timeout")); return true; }
+	if (bVisualAcceptance && Phase.StartsWith(TEXT("Combat")) && Now()-PhaseAt>30.f)
+	{ Finish(false,TEXT("Visual fixture state/image observation window expired: ")+Phase); return true; }
 	UWorld* World = FindWorld();
 	if (!World) return true;
 	GameInstance = Cast<UmultiplayerGameInstance>(World->GetGameInstance());
@@ -239,6 +287,15 @@ void UCoopNetTestDriver::ServerTick(UWorld* World)
 		Assert(TEXT("DedicatedAuthority"), World->GetNetMode() == NM_DedicatedServer
 			&& GameInstance->GetLocalPlayers().IsEmpty(), TEXT("DS has zero local players"));
 		if (bDone) return;
+		if (bVisualAcceptance && !PrepareVisualFixture(World)) return;
+		// 固定数值的战斗/扩展夹具必须在首位玩家接纳前隔离地图 AI，不能让等候第二端的玩家先被小兵打伤。
+		// 仅测试模式清场；正常关卡和专门的真实地图 AI 测试仍保留全部小兵。
+		if (Mode == TEXT("Combat") || Mode == TEXT("CombatExpansion"))
+		{
+			for (TActorIterator<AmultiplayerEnemySpawner> It(World); It; ++It) It->Destroy();
+			for (TActorIterator<AmultiplayerCombatEnemy> It(World); It; ++It) It->Destroy();
+			for (TActorIterator<AmultiplayerCombatProjectile> It(World); It; ++It) It->Destroy();
+		}
 		SetPhase(TEXT("ReadyForPartner"));
 		Emit(TEXT("READY"));
 	}
@@ -275,12 +332,18 @@ void UCoopNetTestDriver::ServerTick(UWorld* World)
 			: World->SpawnActor<ACoopPlatformRideProbe>(Params);
 		Assert(TEXT("Join"), Probe.IsValid(), TEXT("Two remote players; primary probe owned by second connection"));
 		if (!Probe.IsValid()) return;
+		// 旧场景专门验收终局死亡，不能因新加入的合作倒地把原断言悄悄改成另一种生命流程。
+		if (Mode == TEXT("Combat") || Mode == TEXT("CombatLifecycle") || Mode == TEXT("CombatReconnect"))
+			for (auto* PC : {Remote, PartnerSession})
+				if (auto* Character = Cast<AmultiplayerCombatCharacter>(PC->GetPawn())) Character->GetCoopComponent()->bEnableDowned = false;
 		SetPhase(TEXT("ScenarioStart"));
 	}
 	if (Mode == TEXT("Combat")) CombatServerTick(World);
 	else if (Mode == TEXT("CombatTraffic")) TrafficServerTick(World);
 	else if (Mode == TEXT("CombatReconnect")) ReconnectServerTick(World);
 	else if (Mode == TEXT("CombatLifecycle")) LifecycleServerTick(World);
+	else if (Mode == TEXT("CombatExpansion")) ExpansionServerTick(World);
+	else if (Mode == TEXT("CoopEscape")) EscapeServerTick(World);
 	else MotionServerTick(World);
 	// 广播完成状态；服务器延迟退出，外层脚本还会要求 Partner 独立 DONE 才判通过。
 	if (bDone && PartnerProbe.IsValid()) { PartnerProbe->Stage = TEXT("Complete"); PartnerProbe->ForceNetUpdate(); }
@@ -300,7 +363,7 @@ void UCoopNetTestDriver::PartnerTick(UWorld* World)
 	APlayerController* PC = World->GetFirstPlayerController();
 	if (!PC || !PC->GetCharacter()) return;
 	// Lifecycle 必须先验证真实输入和施法后的移动恢复，不能由夹具预先禁用移动。
-	if (Mode != TEXT("CombatLifecycle")) PC->GetCharacter()->GetCharacterMovement()->DisableMovement();
+	if (Mode != TEXT("CombatLifecycle") && Mode != TEXT("CombatExpansion") && Mode != TEXT("CoopEscape")) PC->GetCharacter()->GetCharacterMovement()->DisableMovement();
 	if (!Probe.IsValid())
 	{
 		for (TActorIterator<ACoopNetTestProbe> It(World); It; ++It)
@@ -315,6 +378,8 @@ void UCoopNetTestDriver::PartnerTick(UWorld* World)
 	else if (Mode == TEXT("CombatTraffic")) TrafficClientTick(World);
 	else if (Mode == TEXT("CombatReconnect")) ReconnectClientTick(World);
 	else if (Mode == TEXT("CombatLifecycle")) LifecycleClientTick(World);
+	else if (Mode == TEXT("CombatExpansion")) ExpansionClientTick(World);
+	else if (Mode == TEXT("CoopEscape")) EscapeClientTick(World);
 	if (Probe->Stage == TEXT("Complete"))
 	{
 		SendReceipt(TEXT("PartnerComplete"), true, TEXT("Partner observed completion"));
@@ -358,5 +423,7 @@ void UCoopNetTestDriver::ClientTick(UWorld* World)
 	else if (Mode == TEXT("CombatTraffic")) TrafficClientTick(World);
 	else if (Mode == TEXT("CombatReconnect")) ReconnectClientTick(World);
 	else if (Mode == TEXT("CombatLifecycle")) LifecycleClientTick(World);
+	else if (Mode == TEXT("CombatExpansion")) ExpansionClientTick(World);
+	else if (Mode == TEXT("CoopEscape")) EscapeClientTick(World);
 	else MotionClientTick(World);
 }

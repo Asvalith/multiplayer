@@ -5,6 +5,8 @@
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/BlendSpace.h"
+#include "Animation/AnimNotifies/AnimNotify.h"
+#include "Animation/AnimNotifies/AnimNotifyState.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/Skeleton.h"
 #include "AnimGraphNode_LayeredBoneBlend.h"
@@ -18,9 +20,27 @@
 #include "AssetCompilingManager.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
+#include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BTCompositeNode.h"
+#include "BehaviorTree/BlackboardData.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Bool.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Float.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Object.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Vector.h"
+#include "BehaviorTree/Composites/BTComposite_Selector.h"
+#include "BehaviorTree/Composites/BTComposite_Sequence.h"
+#include "BehaviorTree/Decorators/BTDecorator_Blackboard.h"
+#include "BehaviorTree/Decorators/BTDecorator_ForceSuccess.h"
+#include "BehaviorTree/Tasks/BTTask_MoveTo.h"
+#include "BehaviorTree/Tasks/BTTask_Wait.h"
+#include "BehaviorTreeGraph.h"
+#include "BehaviorTreeGraphNode.h"
+#include "BehaviorTreeGraphNode_Root.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Blueprint/WidgetTree.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatPresentation.h"
@@ -43,11 +63,17 @@
 #include "Components/WidgetComponent.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphSchema_K2.h"
+#include "EdGraphSchema_BehaviorTree.h"
 #include "Engine/Blueprint.h"
+#include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "GameplayTagContainer.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/HUD.h"
+#include "GameFramework/PlayerController.h"
 #include "Factories/AnimMontageFactory.h"
 #include "Factories/AnimBlueprintFactory.h"
 #include "IAssetTools.h"
@@ -55,8 +81,12 @@
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_Event.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
+#include "Serialization/ArchiveReplaceObjectRef.h"
 #include "Materials/MaterialInterface.h"
 #include "NiagaraSystem.h"
 #include "Particles/ParticleSystem.h"
@@ -90,6 +120,7 @@ namespace CombatAssets
 const FString Folder = TEXT("/Game/Combat/Presentation");
 const FString AnimFolder = Folder / TEXT("Animations");
 const FString ConfigPackage = TEXT("/Game/Combat/DA_CombatConfig");
+const FString EnemyConfigPackage = TEXT("/Game/Combat/DA_EnemyCombatConfig");
 const TCHAR* Sources[] = {
 	TEXT("/Game/Mage/Animations/Sequence2/02_Attack/06_Attack/AS_Attack_01_02_Seq"),
 	TEXT("/Game/Mage/Animations/Sequence2/02_Attack/09_Buff/AS_Buff_Seq"),
@@ -114,7 +145,9 @@ template<typename T> T* Load(const FString& Package) { return Keep(LoadObject<T>
 bool Save(UObject* Object)
 {
 	if (!Object || (!Object->GetPackage()->GetName().StartsWith(Folder + TEXT("/"))
-		&& Object->GetPackage()->GetName() != ConfigPackage)) return false;
+		&& Object->GetPackage()->GetName() != ConfigPackage
+		&& Object->GetPackage()->GetName() != EnemyConfigPackage
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/Escape/WBP_EscapeCombatVisuals"))) return false;
 	UPackage* Package = Object->GetPackage();
 	FSavePackageArgs Args;
 	Args.TopLevelFlags = RF_Public | RF_Standalone;
@@ -131,6 +164,113 @@ bool Compile(UBlueprint* Blueprint)
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_COMPILE asset=%s errors=%d warnings=%d"),
 		*Blueprint->GetPathName(), Results.NumErrors, Results.NumWarnings);
 	return Results.NumErrors == 0 && Blueprint->Status != BS_Error;
+}
+
+// 菜单的 UIOnly 会跨地图保留；只给现有战斗 HUD 的 BeginPlay 补回游戏输入，不重建任何界面。
+bool FixCombatInput()
+{
+	const FString HUDPackage = TEXT("/Game/Combat/UI/BP_CombatHUD");
+	UBlueprint* HUD = Load<UBlueprint>(HUDPackage);
+	const auto Fail = [](const TCHAR* Reason)
+	{
+		UE_LOG(LogCombatAssetBuild, Error, TEXT("COMBAT_INPUT_FIX %s; existing HUD was not saved."), Reason);
+		return false;
+	};
+	if (!HUD || !HUD->ParentClass || !HUD->ParentClass->IsChildOf(AHUD::StaticClass()))
+		return Fail(TEXT("Expected the existing AHUD blueprint"));
+
+	const FName InputName(TEXT("CombatInput_GameOnly"));
+	const FName CursorName(TEXT("CombatInput_HideCursor"));
+	const FName OwnerName(TEXT("CombatInput_GetOwner"));
+	UK2Node_Event* Begin = nullptr;
+	TArray<UEdGraph*> Graphs;
+	HUD->GetAllGraphs(Graphs);
+	for (UEdGraph* Graph : Graphs)
+	{
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (auto* Event = Cast<UK2Node_Event>(Node); Event && Event->EventReference.GetMemberName() == TEXT("ReceiveBeginPlay"))
+			{
+				if (Begin) return Fail(TEXT("Multiple BeginPlay events require manual inspection"));
+				Begin = Event;
+			}
+			if (const auto* Call = Cast<UK2Node_CallFunction>(Node); Call
+				&& Call->FunctionReference.GetMemberName().ToString().StartsWith(TEXT("SetInputMode_")) && Node->GetFName() != InputName)
+				return Fail(TEXT("An existing input-mode policy requires manual inspection"));
+			if (const auto* Set = Cast<UK2Node_VariableSet>(Node); Set
+				&& Set->GetVarName() == TEXT("bShowMouseCursor") && Node->GetFName() != CursorName)
+				return Fail(TEXT("An existing cursor policy requires manual inspection"));
+		}
+	}
+	UEdGraphPin* BeginOut = Begin ? Begin->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output) : nullptr;
+	if (!BeginOut || BeginOut->LinkedTo.Num() != 1)
+		return Fail(TEXT("Expected one connected, existing BeginPlay execution chain"));
+	UEdGraph* Graph = Begin->GetGraph();
+	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	const auto Linked = [](const UEdGraphPin* A, const UEdGraphPin* B)
+	{
+		return A && B && A->LinkedTo.Num() == 1 && A->LinkedTo.Contains(B);
+	};
+	UK2Node_CallFunction* Input = FindObject<UK2Node_CallFunction>(Graph, *InputName.ToString());
+	UK2Node_CallFunction* Owner = FindObject<UK2Node_CallFunction>(Graph, *OwnerName.ToString());
+	UK2Node_VariableSet* Cursor = FindObject<UK2Node_VariableSet>(Graph, *CursorName.ToString());
+	if (Input || Owner || Cursor)
+	{
+		// 重复运行只核对自己加过的入口，不再加节点，也不重存资源。
+		if (!Input || !Owner || !Cursor || Input->FunctionReference.GetMemberName() != TEXT("SetInputMode_GameOnly")
+			|| Owner->FunctionReference.GetMemberName() != TEXT("GetOwningPlayerController") || Cursor->GetVarName() != TEXT("bShowMouseCursor")
+			|| !Linked(BeginOut, Input->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input))
+			|| !Linked(Input->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output), Cursor->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input))
+			|| !Linked(Input->FindPin(TEXT("PlayerController"), EGPD_Input), Owner->FindPin(UEdGraphSchema_K2::PN_ReturnValue, EGPD_Output))
+			|| !Linked(Cursor->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input), Owner->FindPin(UEdGraphSchema_K2::PN_ReturnValue, EGPD_Output))
+			|| !Cursor->FindPin(TEXT("bShowMouseCursor"), EGPD_Input)
+			|| Cursor->FindPin(TEXT("bShowMouseCursor"), EGPD_Input)->DefaultValue != TEXT("false")
+			|| !Cursor->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output)
+			|| Cursor->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output)->LinkedTo.Num() != 1)
+			return Fail(TEXT("The previous input patch was edited; inspect it before applying again"));
+		UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_INPUT_FIX asset=%s alreadyApplied=1 saved=0"), *HUD->GetPathName());
+		return true;
+	}
+
+	UFunction* InputFunction = UWidgetBlueprintLibrary::StaticClass()->FindFunctionByName(TEXT("SetInputMode_GameOnly"));
+	UFunction* OwnerFunction = AHUD::StaticClass()->FindFunctionByName(TEXT("GetOwningPlayerController"));
+	if (!InputFunction || !OwnerFunction) return Fail(TEXT("Required engine input functions are unavailable"));
+	const auto AddCall = [Graph, Begin](FName Name, UFunction* Function, int32 OffsetX, int32 OffsetY)
+	{
+		UK2Node_CallFunction* Node = NewObject<UK2Node_CallFunction>(Graph, Name);
+		Graph->AddNode(Node, false, false);
+		Node->CreateNewGuid(); Node->SetFromFunction(Function); Node->PostPlacedNewNode(); Node->AllocateDefaultPins();
+		Node->NodePosX = Begin->NodePosX + OffsetX; Node->NodePosY = Begin->NodePosY + OffsetY;
+		return Node;
+	};
+	Owner = AddCall(OwnerName, OwnerFunction, -960, 200);
+	Input = AddCall(InputName, InputFunction, -640, 0);
+	Cursor = NewObject<UK2Node_VariableSet>(Graph, CursorName);
+	Graph->AddNode(Cursor, false, false);
+	Cursor->CreateNewGuid();
+	Cursor->VariableReference.SetExternalMember(TEXT("bShowMouseCursor"), APlayerController::StaticClass());
+	Cursor->PostPlacedNewNode(); Cursor->AllocateDefaultPins();
+	Cursor->NodePosX = Begin->NodePosX - 320; Cursor->NodePosY = Begin->NodePosY;
+	Input->NodeComment = TEXT("离开连接菜单后恢复游戏输入；随后继续原 HUD 初始化");
+	Cursor->NodeComment = TEXT("隐藏游戏中的菜单鼠标；不修改死亡界面或其他输入规则");
+	UEdGraphPin* OwnerResult = Owner->FindPin(UEdGraphSchema_K2::PN_ReturnValue, EGPD_Output);
+	UEdGraphPin* OriginalNext = BeginOut->LinkedTo[0];
+	BeginOut->BreakLinkTo(OriginalNext);
+	if (!Schema->TryCreateConnection(BeginOut, Input->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input))
+		|| !Schema->TryCreateConnection(Input->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output), Cursor->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input))
+		|| !Schema->TryCreateConnection(Cursor->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output), OriginalNext)
+		|| !Schema->TryCreateConnection(OwnerResult, Input->FindPin(TEXT("PlayerController"), EGPD_Input))
+		|| !Schema->TryCreateConnection(OwnerResult, Cursor->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input)))
+		return Fail(TEXT("Could not connect the input prefix to the preserved BeginPlay chain"));
+	Schema->TrySetDefaultValue(*Cursor->FindPin(TEXT("bShowMouseCursor"), EGPD_Input), TEXT("false"));
+	if (!Compile(HUD)) return false;
+	// 此窄操作只允许保存实际使用的 HUD 包，不扩大原工具的保存范围。
+	FSavePackageArgs Args;
+	Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+	const bool bSaved = HUD->GetPackage()->GetName() == HUDPackage && UPackage::SavePackage(HUD->GetPackage(), HUD,
+		*FPackageName::LongPackageNameToFilename(HUDPackage, FPackageName::GetAssetPackageExtension()), Args);
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_INPUT_FIX asset=%s addedNodes=3 originalChain=preserved saved=%d"), *HUD->GetPathName(), bSaved);
+	return bSaved;
 }
 
 // 使用现成 Rig 的临时副本烘焙骨轨，不靠更换 Skeleton 指针冒充重定向。
@@ -457,6 +597,8 @@ bool CreateCues()
 			BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass(), TEXT("CombatAssetBuild")));
 		if (!Blueprint || !Compile(Blueprint)) return false;
 		UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject();
+		if (FCString::Strcmp(Name, TEXT("Heal")) == 0)
+			CastChecked<AmultiplayerCombatCue>(CDO)->bUniqueInstancePerInstigator = true;
 		FStructProperty* Field = FindFProperty<FStructProperty>(CDO->GetClass(), TEXT("GameplayCueTag"));
 		if (!Field || Field->Struct != FGameplayTag::StaticStruct()) return false;
 		FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*(FString(TEXT("GameplayCue.Combat.")) + Name)));
@@ -618,7 +760,8 @@ bool ConnectARPGHUD()
 	const FString Icons = TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/UI/Icons/");
 	const FString Textures = TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/UI/CombatUI/Texture/");
 	UTexture2D* SkillIcons[] = { Load<UTexture2D>(Icons + TEXT("T_FireballIcon")), Load<UTexture2D>(Icons + TEXT("Ability_Hoarfrost")),
-		Load<UTexture2D>(Icons + TEXT("T_HealAbilityIcon")), Load<UTexture2D>(Icons + TEXT("T_FireblastIcon")) };
+		Load<UTexture2D>(Icons + TEXT("T_HealAbilityIcon")), Load<UTexture2D>(Icons + TEXT("T_FireblastIcon")),
+		Load<UTexture2D>(Icons + TEXT("Ability_Portal_Blast")) };
 	UTexture2D* Empty = Load<UTexture2D>(Textures + TEXT("T_EmptyBar"));
 	UTexture2D* Health = Load<UTexture2D>(Textures + TEXT("T_HealthBar"));
 	UTexture2D* Energy = Load<UTexture2D>(Textures + TEXT("T_ManaBar"));
@@ -675,9 +818,9 @@ bool ConnectARPGHUD()
 		Style.MarqueeImage = Style.FillImage; Value->SetWidgetStyle(Style);
 		return Value;
 	};
-	// 技能与生命/能量放进同一个左下垂直容器，分辨率变化时不再分别定位。
+	// 生命/能量保留左下的独立容器，技能另设底部中央位置。
 	UVerticalBox* Vitals = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ARPGVitalsStack"));
-	Place(Vitals, FVector2D(0, 1), FVector2D(24, -24), FVector2D(216, 160), FVector2D(0, 1));
+	Place(Vitals, FVector2D(0, 1), FVector2D(24, -24), FVector2D(216, 84), FVector2D(0, 1));
 	FSlateBrush Transparent; Transparent.DrawAs = ESlateBrushDrawType::NoDrawType;
 	UBorder* Stats = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ARPGStatsPanel"));
 	Stats->SetBrush(Transparent); Stats->SetPadding(FMargin(0));
@@ -699,20 +842,22 @@ bool ConnectARPGHUD()
 	}
 	UBorder* Skills = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ARPGSkillsPanel"));
 	Skills->SetPadding(FMargin(0)); Skills->SetBrush(Transparent);
+	// 技能独立放在下方中央；生命/能量留在左下，不再把五个技能挤进生命条的宽度。
+	Place(Skills, FVector2D(.5f, 1), FVector2D(0, -24), FVector2D(400, 80), FVector2D(.5f, 1));
 	UHorizontalBox* Row = Tree->ConstructWidget<UHorizontalBox>(); Skills->SetContent(Row);
-	const TCHAR* Slots[] = { TEXT("AttackSlot"), TEXT("DefenseSlot"), TEXT("HealSlot"), TEXT("AreaSlot") };
-	const TCHAR* Labels[] = { TEXT("攻击"), TEXT("防御"), TEXT("治疗"), TEXT("范围") };
-	const TCHAR* Keys[] = { TEXT("LMB"), TEXT("Q"), TEXT("E"), TEXT("R") };
-	const TCHAR* Counters[] = { TEXT("AttackCooldownText"), TEXT("DefenseCooldownText"), TEXT("HealCooldownText"), TEXT("AreaCooldownText") };
-	const TCHAR* Bars[] = { TEXT("AttackCooldownBar"), TEXT("DefenseCooldownBar"), TEXT("HealCooldownBar"), TEXT("AreaCooldownBar") };
-	const TCHAR* IconNames[] = { TEXT("AttackIcon"), TEXT("DefenseIcon"), TEXT("HealIcon"), TEXT("AreaIcon") };
-	for (int32 Index = 0; Index < 4; ++Index)
+	const TCHAR* Slots[] = { TEXT("AttackSlot"), TEXT("DefenseSlot"), TEXT("HealSlot"), TEXT("AreaSlot"), TEXT("DashSlot") };
+	const TCHAR* Labels[] = { TEXT("攻击"), TEXT("防御"), TEXT("治疗"), TEXT("范围"), TEXT("冲刺") };
+	const TCHAR* Keys[] = { TEXT("LMB"), TEXT("Q"), TEXT("E"), TEXT("R"), TEXT("Shift") };
+	const TCHAR* Counters[] = { TEXT("AttackCooldownText"), TEXT("DefenseCooldownText"), TEXT("HealCooldownText"), TEXT("AreaCooldownText"), TEXT("DashCooldownText") };
+	const TCHAR* Bars[] = { TEXT("AttackCooldownBar"), TEXT("DefenseCooldownBar"), TEXT("HealCooldownBar"), TEXT("AreaCooldownBar"), TEXT("DashCooldownBar") };
+	const TCHAR* IconNames[] = { TEXT("AttackIcon"), TEXT("DefenseIcon"), TEXT("HealIcon"), TEXT("AreaIcon"), TEXT("DashIcon") };
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Slots); ++Index)
 	{
 		UBorder* Tile = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), FName(Slots[Index]));
 		// 父类仍可更新技能状态，但 NoDraw 背景不会被运行时 BrushColor 重新染出灰块。
 		Tile->bIsVariable = true; Tile->SetBrush(Transparent); Tile->SetPadding(FMargin(2 * Scale, 0));
 		UHorizontalBoxSlot* TileSlot = Row->AddChildToHorizontalBox(Tile);
-		TileSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); TileSlot->SetPadding(FMargin(0));
+		TileSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); TileSlot->SetPadding(FMargin(0, 0, Index < UE_ARRAY_COUNT(Slots) - 1 ? 10 * Scale : 0, 0));
 		UVerticalBox* Lines = Tree->ConstructWidget<UVerticalBox>(); Tile->SetContent(Lines);
 		UHorizontalBox* Heading = Tree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(Heading);
 		Heading->AddChildToHorizontalBox(Text(*(FString(TEXT("SkillLabel")) + FString::FromInt(Index)), Labels[Index], 10, White))
@@ -727,14 +872,12 @@ bool ConnectARPGHUD()
 		UOverlaySlot* CounterSlot = IconLayer->AddChildToOverlay(Counter);
 		CounterSlot->SetHorizontalAlignment(HAlign_Fill); CounterSlot->SetVerticalAlignment(VAlign_Center);
 		USizeBox* IconSize = Tree->ConstructWidget<USizeBox>();
-		IconSize->SetWidthOverride(40 * Scale); IconSize->SetHeightOverride(40 * Scale); IconSize->SetContent(IconLayer);
+		IconSize->SetWidthOverride(44 * Scale); IconSize->SetHeightOverride(44 * Scale); IconSize->SetContent(IconLayer);
 		UVerticalBoxSlot* IconBoxSlot = Lines->AddChildToVerticalBox(IconSize);
 		IconBoxSlot->SetHorizontalAlignment(HAlign_Center); IconBoxSlot->SetPadding(FMargin(0, 2 * Scale));
 		USizeBox* TimerSize = Tree->ConstructWidget<USizeBox>(); TimerSize->SetHeightOverride(2 * Scale);
 		TimerSize->SetContent(Bar(Bars[Index], Energy, Gold)); Lines->AddChildToVerticalBox(TimerSize);
 	}
-	USizeBox* SkillSize = Tree->ConstructWidget<USizeBox>(); SkillSize->SetHeightOverride(68 * Scale); SkillSize->SetContent(Skills);
-	Vitals->AddChildToVerticalBox(SkillSize)->SetPadding(FMargin(0, 0, 0, 8 * Scale));
 	USizeBox* StatsSize = Tree->ConstructWidget<USizeBox>(); StatsSize->SetHeightOverride(84 * Scale); StatsSize->SetContent(Stats);
 	Vitals->AddChildToVerticalBox(StatsSize);
 	UBorder* Casting = Panel(TEXT("CastingPanel"), FVector2D(.5, 1), FVector2D(0, -142), FVector2D(300, 44), FVector2D(.5, 1));
@@ -753,21 +896,59 @@ bool ConnectARPGHUD()
 	if (bNew) FAssetRegistryModule::AssetCreated(Visual);
 	if (!Compile(Visual) || !Save(Visual)) return false;
 	// 旧 HUD 仅新增一个全屏子控件；不删除或重命名任何原控件，也不改原绑定函数。
-	Original->Modify();
 	UUserWidget* Child = Cast<UUserWidget>(Original->WidgetTree->FindWidget(TEXT("ARPGCombatVisuals")));
 	if (Child && Child->GetClass() != Visual->GeneratedClass) return false;
 	if (!Child)
 	{
+		Original->Modify();
 		Child = Original->WidgetTree->ConstructWidget<UUserWidget>(Visual->GeneratedClass.Get(), TEXT("ARPGCombatVisuals"));
 		Child->SetVisibility(ESlateVisibility::HitTestInvisible);
 		UCanvasPanelSlot* Slot = OriginalCanvas->AddChildToCanvas(Child);
 		Slot->SetAnchors(FAnchors(0, 0, 1, 1)); Slot->SetOffsets(FMargin(0)); Slot->SetZOrder(-1);
+		if (!Compile(Original) || !Save(Original)) return false;
 	}
-	if (!Compile(Original)) return false;
-	FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
-	if (!UPackage::SavePackage(Original->GetPackage(), Original,
-		*FPackageName::LongPackageNameToFilename(OriginalPath, FPackageName::GetAssetPackageExtension()), Args)) return false;
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ARPG_HUD_CONNECTED original=%s child=%s originalGraphsPreserved=1 HUDClassChanged=0"), *OriginalPath, *VisualPath);
+	return true;
+}
+
+// 只刷新专用表现副本与小兵受击/受控反馈，不重建地图、角色或原 HUD。
+bool RefreshCombatFeedbackAndHUD()
+{
+	auto* Original = Load<UWidgetBlueprint>(TEXT("/Game/Combat/UI/WBP_CombatHUD"));
+	if (!Original || !Original->WidgetTree || !Original->WidgetTree->FindWidget(TEXT("ARPGCombatVisuals"))) return false;
+	if (!ConnectARPGHUD()) return false;
+	auto* Source = Load<UWidgetBlueprint>(Folder / TEXT("UI/WBP_ARPGCombatVisuals"));
+	auto* Escape = Load<UWidgetBlueprint>(TEXT("/Game/Combat/Escape/WBP_EscapeCombatVisuals"));
+	auto* PlayerRules = Load<UmultiplayerCombatConfig>(ConfigPackage);
+	auto* MinionRules = Load<UmultiplayerCombatConfig>(EnemyConfigPackage);
+	auto* HealCue = Load<UBlueprint>(Folder / TEXT("Cues/GCN_Heal"));
+	if (!Source || !Source->WidgetTree || !Escape || !Escape->WidgetTree || !PlayerRules || !MinionRules
+		|| !HealCue || !HealCue->GeneratedClass) return false;
+	// 两位施法者同时治疗同一目标时，各自保留自己的异步表现上下文。
+	HealCue->Modify();
+	CastChecked<AmultiplayerCombatCue>(HealCue->GeneratedClass->GetDefaultObject())->bUniqueInstancePerInstigator = true;
+	if (!Compile(HealCue) || !Save(HealCue)) return false;
+	Escape->Modify();
+	Escape->WidgetTree->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+	Escape->WidgetTree = DuplicateObject<UWidgetTree>(Source->WidgetTree, Escape, TEXT("WidgetTree"));
+	// 撤离状态保留原来的上方显示区域，技能布局与基础关卡共用同一份模板。
+	if (auto* Status = Cast<UTextBlock>(Escape->WidgetTree->FindWidget(TEXT("StateText"))))
+	{
+		Status->SetAutoWrapText(true);
+		if (auto* Slot = Cast<UCanvasPanelSlot>(Status->Slot))
+		{
+			Slot->SetAnchors(FAnchors(.5f, 0)); Slot->SetAlignment(FVector2D(.5f, 0));
+			Slot->SetPosition(FVector2D(0, 24)); Slot->SetSize(FVector2D(1050, 120));
+		}
+	}
+	if (!Compile(Escape) || !Save(Escape)) return false;
+	MinionRules->Modify();
+	// 小兵仍只有自己的近战；被打中或被控制的表现不能因为没有玩家支援技能而清空。
+	MinionRules->ImpactFeedback.Effect = PlayerRules->ImpactFeedback.Effect;
+	MinionRules->ImpactFeedback.CascadeEffect = PlayerRules->ImpactFeedback.CascadeEffect;
+	MinionRules->StunFeedback = PlayerRules->StunFeedback;
+	if (!Save(MinionRules)) return false;
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_FEEDBACK_HUD_REFRESHED slots=5 vitals=left skills=center originalHUD=preserved enemyAttack=melee enemyImpactAndStun=connected"));
 	return true;
 }
 
@@ -846,9 +1027,57 @@ bool ConnectARPGEnemyHealth()
 	UWidgetComponent* Component = Defaults ? Cast<UWidgetComponent>(Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))) : nullptr;
 	if (!Component) return false;
 	Component->SetWidgetClass(Outer->GeneratedClass.Get());
-	Component->SetWidgetSpace(EWidgetSpace::Screen); Component->SetDrawSize(FVector2D(180, 30));
+	if (auto* WorldHealth = Cast<UmultiplayerEnemyHealthWidgetComponent>(Component)) WorldHealth->ConfigureWorldDefaults();
+	else return false;
 	if (!Compile(Enemy) || !Save(Enemy)) return false;
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ARPG_ENEMY_HEALTH_CONNECTED sourceLayout=2 nativeWidgets=2 sourceBusinessGraphs=0 healthPolling=0"));
+	return true;
+}
+
+// 仅迁移现有敌人 BP 的展示组件；不重新复制源 UI，不更换布局或业务图。
+bool UpdateEnemyWorldHealth()
+{
+	UBlueprint* Enemy = Load<UBlueprint>(Folder / TEXT("BP_CombatEnemy"));
+	if (!Enemy || !Enemy->GeneratedClass) return false;
+	Enemy->Modify();
+	auto* Defaults = Cast<AmultiplayerCombatEnemy>(Enemy->GeneratedClass->GetDefaultObject());
+	auto* Legacy = Defaults ? Cast<UWidgetComponent>(Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))) : nullptr;
+	auto* Component = Cast<UmultiplayerEnemyHealthWidgetComponent>(Legacy);
+	auto* ExistingWidget = Load<UWidgetBlueprint>(Folder / TEXT("UI/WBP_ARPGEnemyHealth"));
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("WORLD_HEALTH_COMPONENT_AUDIT bp=%s componentClass=%s nativeClass=%s"),
+		*GetNameSafe(Enemy), *GetNameSafe(Legacy ? Legacy->GetClass() : nullptr),
+		*GetNameSafe(GetMutableDefault<AmultiplayerCombatEnemy>()->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))->GetClass()));
+	if (!Component && Legacy && Legacy->GetClass() == UWidgetComponent::StaticClass())
+	{
+		// 旧BP序列化了同名基类子对象，单改C++构造类型不会升级它。按编辑器换组件类的方式
+		// 复制共同属性并替换CDO引用，只迁移这个继承组件，不重建敌人或任何UI布局。
+		const FName ComponentName = Legacy->GetFName();
+		const EObjectFlags Flags = Legacy->GetFlags();
+		Legacy->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+		Component = NewObject<UmultiplayerEnemyHealthWidgetComponent>(Defaults, ComponentName, Flags);
+		UEngine::CopyPropertiesForUnrelatedObjects(Legacy, Component);
+		TMap<UObject*, UObject*> Replacements;
+		Replacements.Add(Legacy, Component);
+		FArchiveReplaceObjectRef<UObject> ReplaceReferences(Defaults, Replacements);
+		Defaults->RemoveOwnedComponent(Legacy);
+		Defaults->AddOwnedComponent(Component);
+		FindFProperty<FObjectPropertyBase>(Defaults->GetClass(), TEXT("HealthBarWidget"))->SetObjectPropertyValue_InContainer(Defaults, Component);
+		Legacy->MarkAsGarbage();
+	}
+	if (!Component || !ExistingWidget || !ExistingWidget->GeneratedClass)
+	{
+		UE_LOG(LogCombatAssetBuild, Error, TEXT("World health migration requires the native component and existing widget: component=%s widget=%s"),
+			*GetNameSafe(Defaults ? Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget")) : nullptr), *GetNameSafe(ExistingWidget));
+		return false;
+	}
+	// 原生组件类型更新后旧BP覆盖可能失去WidgetClass；明确重连已有布局，不复制或重建源UI。
+	Component->SetWidgetClass(ExistingWidget->GeneratedClass.Get());
+	Component->ConfigureWorldDefaults();
+	if (!Compile(Enemy)) return false;
+	Defaults = Cast<AmultiplayerCombatEnemy>(Enemy->GeneratedClass->GetDefaultObject());
+	Component = Defaults ? Cast<UmultiplayerEnemyHealthWidgetComponent>(Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))) : nullptr;
+	if (!Component || Component->GetWidgetClass() != ExistingWidget->GeneratedClass || !Save(Enemy)) return false;
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ENEMY_WORLD_HEALTH_UPDATED asset=%s worldSpace=1 manualRedraw=1 layout=preserved depthTest=1"), *Enemy->GetPathName());
 	return true;
 }
 
@@ -1221,8 +1450,9 @@ bool ConnectARPGAnimations()
 		if (Index == 0)
 		{
 			// 玩家朝向跟随镜头，横移/后退由四向动画表示；不修改 Co-op 基础角色或敌人的 AI 朝向。
-			Character->bUseControllerRotationYaw = true;
-			Character->GetCharacterMovement()->bOrientRotationToMovement = false;
+			// 更新转向规则：镜头独立观察，身体随移动或接纳的攻击转身；不再使用上面的跟镜头方案。
+			Character->bUseControllerRotationYaw = false;
+			Character->GetCharacterMovement()->bOrientRotationToMovement = true;
 		}
 		Character->GetMesh()->SetAnimInstanceClass(Index == 0 ? PlayerAnimation->GeneratedClass : EnemyAnimation->GeneratedClass);
 		if (!SetAsset(Character, TEXT("AttackMontage"), Montages[0]) || !SetAsset(Character, TEXT("HealMontage"), Montages[1])
@@ -1236,29 +1466,90 @@ bool ConnectARPGAnimations()
 }
 
 // 敌人直接使用素材包骨架和动作；动画图由本项目构建，不接入素材包的技能、AI 或属性框架。
-bool ConnectARPGEnemySource()
+bool ConnectARPGEnemySource(bool bAuditOnly = false)
 {
 	const FString Output = Folder / TEXT("ARPG/EnemySource");
-	const FString SourceFolder = TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/Animations");
-	USkeletalMesh* Mesh = Load<USkeletalMesh>(TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SKM_CombatMannequin_Simple"));
-	UBlendSpace* SourceBlend = Load<UBlendSpace>(SourceFolder / TEXT("Locomotion/BS_MagicLocomotion"));
+	const FString SourceFolder = TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/Animations");
+	USkeletalMesh* Mesh = Load<USkeletalMesh>(TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SKM_CombatMannequin"));
+	UBlendSpace* SourceBlend = Load<UBlendSpace>(SourceFolder / TEXT("1Handed/Locomotion/BS_1HandedWeaponLocomotion"));
+	UAnimMontage* SourceAttack = Load<UAnimMontage>(SourceFolder / TEXT("AI/ExampleSwordMob/SwordMob_MeleeClose01_Montage"));
 	UBlueprint* Enemy = Load<UBlueprint>(Folder / TEXT("BP_CombatEnemy"));
-	if (!Mesh || !SourceBlend || !Enemy || !Enemy->GeneratedClass || !Mesh->GetSkeleton()->ContainsSlotName(TEXT("DefaultSlot"))) return false;
+	if (!Mesh || !SourceBlend || !SourceAttack || SourceAttack->SlotAnimTracks.IsEmpty()
+		|| SourceAttack->SlotAnimTracks[0].AnimTrack.AnimSegments.IsEmpty()
+		|| !Enemy || !Enemy->GeneratedClass || !Mesh->GetSkeleton()->ContainsSlotName(TEXT("DefaultSlot"))) return false;
+	UAnimSequence* SwordAttack = Keep(Cast<UAnimSequence>(SourceAttack->SlotAnimTracks[0].AnimTrack.AnimSegments[0].GetAnimReference()));
+	if (!SwordAttack) return false;
+	const FStructProperty* SourceParameters = FindFProperty<FStructProperty>(SourceBlend->GetClass(), TEXT("BlendParameters"));
+	if (!SourceParameters || SourceParameters->ArrayDim < 2) return false;
+	if (bAuditOnly)
+	{
+		// 先读原始出手窗口和速度轴，再离线接线；审计模式不创建、编译或保存任何资产。
+		for (const FSlotAnimationTrack& Track : SourceAttack->SlotAnimTracks)
+			for (const FAnimSegment& Segment : Track.AnimTrack.AnimSegments)
+				UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_SEGMENT slot=%s animation=%s start=%.6f animStart=%.6f animEnd=%.6f rate=%.6f loops=%d length=%.6f"),
+					*Track.SlotName.ToString(), *GetPathNameSafe(Segment.GetAnimReference()), Segment.StartPos, Segment.AnimStartTime, Segment.AnimEndTime,
+					Segment.AnimPlayRate, Segment.LoopingCount, SourceAttack->GetPlayLength());
+		for (const UAnimSequenceBase* Source : { static_cast<UAnimSequenceBase*>(SourceAttack), static_cast<UAnimSequenceBase*>(SwordAttack) })
+			for (const FAnimNotifyEvent& Notify : Source->Notifies)
+				UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_NOTIFY animation=%s name=%s notify=%s state=%s start=%.6f end=%.6f"),
+					*Source->GetPathName(), *Notify.NotifyName.ToString(), *GetPathNameSafe(Notify.Notify.Get()),
+					*GetPathNameSafe(Notify.NotifyStateClass.Get()), Notify.GetTriggerTime(), Notify.GetEndTriggerTime());
+		for (int32 Axis = 0; Axis < 2; ++Axis)
+		{
+			const FBlendParameter* Parameter = SourceParameters->ContainerPtrToValuePtr<FBlendParameter>(SourceBlend, Axis);
+			UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_AXIS axis=%d name=%s min=%.6f max=%.6f"),
+				Axis, *Parameter->DisplayName, Parameter->Min, Parameter->Max);
+		}
+		for (const FBlendSample& Sample : SourceBlend->GetBlendSamples())
+			UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_SAMPLE animation=%s value=%s rate=%.6f"),
+				*GetPathNameSafe(Sample.Animation), *Sample.SampleValue.ToString(), Sample.RateScale);
+		const auto* Character = Cast<AmultiplayerCombatEnemy>(Enemy->GeneratedClass->GetDefaultObject());
+		UBehaviorTree* Tree = Character ? Character->GetCombatBehaviorTree() : nullptr;
+		if (!Tree || !Tree->RootNode) return false;
+		TArray<UBTCompositeNode*> Pending{ Tree->RootNode };
+		while (!Pending.IsEmpty())
+		{
+			const UBTCompositeNode* Node = Pending.Pop(EAllowShrinking::No);
+			for (const FBTCompositeChild& Child : Node->Children)
+			{
+				if (Child.ChildComposite) Pending.Add(Child.ChildComposite);
+				if (const auto* Move = Cast<UBTTask_MoveTo>(Child.ChildTask))
+					UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_BT_MOVE task=%s acceptableRadius=%s includesAgentRadius=%s includesGoalRadius=%s description=%s"),
+						*Move->GetPathName(), *Move->AcceptableRadius.ToString(), *Move->bReachTestIncludesAgentRadius.ToString(),
+						*Move->bReachTestIncludesGoalRadius.ToString(), *Move->GetStaticDescription());
+			}
+		}
+		return true;
+	}
+	if (SourceAttack->SlotAnimTracks.Num() != 1 || SourceAttack->SlotAnimTracks[0].AnimTrack.AnimSegments.Num() != 1) return false;
+	// 原 SwordMob 的挥刀轨迹窗口实测为 0.342609～0.528883 秒；只借用时间，不执行原包通知逻辑。
+	const FAnimNotifyEvent* AttackTrace = SourceAttack->Notifies.FindByPredicate([](const FAnimNotifyEvent& Notify)
+	{
+		return Notify.NotifyName == TEXT("AttackTraceNS_C");
+	});
+	if (!AttackTrace || AttackTrace->GetTriggerTime() <= 0 || AttackTrace->GetTriggerTime() >= SwordAttack->GetPlayLength()) return false;
+	const float AttackRelease = AttackTrace->GetTriggerTime();
 	IAssetTools& Assets = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
 	const TPair<const TCHAR*, const TCHAR*> EnemySequences[] = {
-		{ TEXT("Idle"), TEXT("Locomotion/Idle") }, { TEXT("JogFwd"), TEXT("Locomotion/Jog_Fwd") },
-		{ TEXT("JogBwd"), TEXT("Locomotion/Jog_Bwd") }, { TEXT("JogLeft"), TEXT("Locomotion/Jog_Left") },
-		{ TEXT("JogRight"), TEXT("Locomotion/Jog_Right") }, { TEXT("Sprint"), TEXT("Locomotion/TravelMode_Sprint") },
-		{ TEXT("Fall"), TEXT("Jump/Travel_Mode_Jump_Fall_Loop") }, { TEXT("Attack"), TEXT("FireMagicProjectile_A_Short") },
-		{ TEXT("Heal"), TEXT("FireMagicProjectile_A_Medium") }, { TEXT("Area"), TEXT("Skills/Flameblast_Anim") },
-		{ TEXT("Death"), TEXT("Death/Death_Fwd") }, { TEXT("Hit"), TEXT("ExampleMagicEnemy/HitReact_Front_Ranged_Anim") }
+		{ TEXT("Idle"), TEXT("1Handed/Locomotion/1Handed_Idle_Anim") },
+		{ TEXT("JogFwd"), TEXT("1Handed/Locomotion/Jog_Fwd_Anim") },
+		{ TEXT("JogBwd"), TEXT("1Handed/Locomotion/Jog_Bwd_Anim") },
+		{ TEXT("JogLeft"), TEXT("1Handed/Locomotion/Jog_Left_Anim") },
+		{ TEXT("JogRight"), TEXT("1Handed/Locomotion/Jog_Right_Anim") },
+		{ TEXT("Fall"), TEXT("1Handed/Jump/GreystoneJump_Fall") },
+		{ TEXT("Attack"), nullptr },
+		{ TEXT("Death"), TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/Animations/Death/Death_Fwd") },
+		{ TEXT("Hit"), TEXT("1Handed/HitReactions/HitReact_Front_Anim") }
 	};
 	TMap<FString, UAnimSequence*> Sequences, BySourceName;
 	for (const auto& Entry : EnemySequences)
 	{
-		UAnimSequence* Source = Load<UAnimSequence>(SourceFolder / Entry.Value);
+		UAnimSequence* Source = Entry.Value
+			? Load<UAnimSequence>(FString(Entry.Value).StartsWith(TEXT("/Game/")) ? FString(Entry.Value) : SourceFolder / Entry.Value)
+			: SwordAttack;
 		if (!Source || Source->GetSkeleton() != Mesh->GetSkeleton()) return false;
-		const FString Name = FString(TEXT("AS_Enemy_")) + Entry.Key;
+		// 近战副本与旧法师副本分开命名，避免复用旧资产时保留了错误的骨轨。
+		const FString Name = FString(TEXT("AS_Enemy_Melee_")) + Entry.Key;
 		UAnimSequence* Sequence = Load<UAnimSequence>(Output / Name);
 		if (!Sequence) Sequence = Keep(Cast<UAnimSequence>(Assets.DuplicateAsset(Name, Output, Source)));
 		if (!Sequence || Sequence->GetSkeleton() != Mesh->GetSkeleton()) return false;
@@ -1268,15 +1559,17 @@ bool ConnectARPGEnemySource()
 		if (!Save(Sequence)) return false;
 		Sequences.Add(Entry.Key, Sequence); BySourceName.Add(Source->GetName(), Sequence);
 	}
-	UBlendSpace* Locomotion = Load<UBlendSpace>(Output / TEXT("BS_EnemySourceLocomotion"));
-	if (!Locomotion) Locomotion = Keep(Cast<UBlendSpace>(Assets.DuplicateAsset(TEXT("BS_EnemySourceLocomotion"), Output, SourceBlend)));
+	UBlendSpace* Locomotion = Load<UBlendSpace>(Output / TEXT("BS_EnemyMeleeLocomotion"));
+	if (!Locomotion) Locomotion = Keep(Cast<UBlendSpace>(Assets.DuplicateAsset(TEXT("BS_EnemyMeleeLocomotion"), Output, SourceBlend)));
 	if (!Locomotion || Locomotion->GetSkeleton() != Mesh->GetSkeleton()
 		|| Locomotion->GetNumberOfBlendSamples() != SourceBlend->GetNumberOfBlendSamples()) return false;
 	Locomotion->Modify();
 	const FStructProperty* Parameters = FindFProperty<FStructProperty>(Locomotion->GetClass(), TEXT("BlendParameters"));
 	if (!Parameters || Parameters->ArrayDim < 2) return false;
 	FBlendParameter* SpeedAxis = Parameters->ContainerPtrToValuePtr<FBlendParameter>(Locomotion, 1);
-	SpeedAxis->Min = 0; SpeedAxis->Max = 800.f * 220.f / 600.f; SpeedAxis->bSnapToGrid = false;
+	// 原四向 Jog 样本位于 600，映射到小兵 CMC 的 220 速度；方向轴与原 14 个样本布局保持一致。
+	const FBlendParameter* SourceSpeedAxis = SourceParameters->ContainerPtrToValuePtr<FBlendParameter>(SourceBlend, 1);
+	SpeedAxis->Min = 0; SpeedAxis->Max = SourceSpeedAxis->Max * 220.f / 600.f; SpeedAxis->bSnapToGrid = false;
 	for (int32 Index = 0; Index < SourceBlend->GetNumberOfBlendSamples(); ++Index)
 	{
 		const FBlendSample& Sample = SourceBlend->GetBlendSample(Index);
@@ -1301,6 +1594,7 @@ bool ConnectARPGEnemySource()
 	}
 	if (!Animation || Animation->TargetSkeleton != Mesh->GetSkeleton()) return false;
 	Animation->Modify(); Animation->ParentClass = UmultiplayerCombatAnimInstance::StaticClass();
+	Animation->SetPreviewMesh(Mesh);
 	TArray<UEdGraph*> Graphs; Animation->GetAllGraphs(Graphs);
 	UEdGraph* Graph = nullptr;
 	for (UEdGraph* Candidate : Graphs) if (Candidate->GetFName() == TEXT("AnimGraph")) { Graph = Candidate; break; }
@@ -1343,9 +1637,9 @@ bool ConnectARPGEnemySource()
 		|| !Graph->GetSchema()->TryCreateConnection(Slot->FindPin(TEXT("Pose"), EGPD_Output), Root->FindPin(TEXT("Result"), EGPD_Input))
 		|| !Compile(Animation) || !Save(Animation)) return false;
 
-	const TCHAR* MontageFields[] = { TEXT("AttackMontage"), TEXT("HealMontage"), TEXT("DeathMontage"), TEXT("AreaMontage"), TEXT("HitMontage") };
-	const TCHAR* Actions[] = { TEXT("Attack"), TEXT("Heal"), TEXT("Death"), TEXT("Area"), TEXT("Hit") };
-	UAnimMontage* Montages[5] = {};
+	const TCHAR* MontageFields[] = { TEXT("AttackMontage"), TEXT("DeathMontage"), TEXT("HitMontage") };
+	const TCHAR* Actions[] = { TEXT("Attack"), TEXT("Death"), TEXT("Hit") };
+	UAnimMontage* Montages[3] = {};
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Montages); ++Index)
 	{
 		const FString Name = FString(TEXT("AM_Enemy_")) + Actions[Index];
@@ -1359,19 +1653,35 @@ bool ConnectARPGEnemySource()
 		Montage->SlotAnimTracks[0].AnimTrack.AnimSegments.Add(Segment);
 		Montage->CompositeSections.Reset();
 		FCompositeSection& First = Montage->CompositeSections.AddDefaulted_GetRef();
-		First.SectionName = Index == 3 ? TEXT("Windup") : TEXT("Default"); First.SetTime(0);
-		if (Index == 3)
-		{
-			First.NextSectionName = TEXT("Release");
-			FCompositeSection& Release = Montage->CompositeSections.AddDefaulted_GetRef();
-			Release.SectionName = TEXT("Release"); Release.SetTime(.321208f);
-		}
-		Montage->SetCompositeLength(Sequence->GetPlayLength()); Montage->bEnableAutoBlendOut = Index != 2;
+		First.SectionName = TEXT("Default"); First.SetTime(0);
+		Montage->SetCompositeLength(Sequence->GetPlayLength()); Montage->bEnableAutoBlendOut = Index != 1;
 		Montage->BlendIn.SetBlendTime(.1f); Montage->BlendOut.SetBlendTime(.15f); Montage->PostEditChange();
 		if (bCreated) FAssetRegistryModule::AssetCreated(Montage);
 		if (!Save(Montage)) return false;
 		Montages[Index] = Montage;
 	}
+	// 小兵只有自己的近战规则，不共享玩家的弹体、治疗和范围施法配置。
+	UmultiplayerCombatConfig* Config = Load<UmultiplayerCombatConfig>(EnemyConfigPackage);
+	const bool bConfigCreated = Config == nullptr;
+	if (!Config) Config = Keep(NewObject<UmultiplayerCombatConfig>(CreatePackage(*EnemyConfigPackage), TEXT("DA_EnemyCombatConfig"), RF_Public | RF_Standalone));
+	Config->Modify();
+	Config->Attack = FmultiplayerCombatSkillRule(0, 1.8f, 15, 160, 0, AttackRelease,
+		FMath::Max(.05f, Montages[0]->GetPlayLength() - AttackRelease));
+	Config->ProjectileEffect.Reset(); Config->ProjectileCascadeEffect.Reset(); Config->AreaMarkerMaterial.Reset();
+	Config->AttackFeedback = {}; Config->ImpactFeedback = {}; Config->CastingFeedback = {};
+	Config->HealFeedback = {}; Config->DefenseFeedback = {}; Config->AreaFeedback = {};
+	Config->StunFeedback = {}; Config->FailureFeedback = {};
+	Config->AttackFeedback.Sound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(ObjectPath(
+		TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/DemoAssets/SoundFX/A_Sword_Swing_Cue"))));
+	Config->ImpactFeedback.Sound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(ObjectPath(
+		TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/DemoAssets/SoundFX/A_Guardian_ImpactL_Cue"))));
+	const auto* SharedFeedback = Load<UmultiplayerCombatConfig>(ConfigPackage);
+	if (!SharedFeedback) return false;
+	Config->ImpactFeedback.Effect = SharedFeedback->ImpactFeedback.Effect;
+	Config->ImpactFeedback.CascadeEffect = SharedFeedback->ImpactFeedback.CascadeEffect;
+	Config->StunFeedback = SharedFeedback->StunFeedback;
+	if (bConfigCreated) FAssetRegistryModule::AssetCreated(Config);
+	if (!Keep(Config->AttackFeedback.Sound.LoadSynchronous()) || !Keep(Config->ImpactFeedback.Sound.LoadSynchronous()) || !Save(Config)) return false;
 	ACharacter* Character = Cast<ACharacter>(Enemy->GeneratedClass->GetDefaultObject());
 	if (!Character) return false;
 	Enemy->Modify(); Character->Modify(); Character->GetMesh()->Modify();
@@ -1380,13 +1690,205 @@ bool ConnectARPGEnemySource()
 	Character->GetMesh()->SetRelativeRotation(FRotator(0, -90, 0)); Character->GetMesh()->SetRelativeScale3D(FVector::OneVector);
 	Character->GetMesh()->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 	Character->GetMesh()->SetAnimInstanceClass(Animation->GeneratedClass);
+	// 原生基类没有骨骼网格；只在这个已接好素材的蓝图上保存手部挂点，避免空网格实例报插槽警告。
+	UStaticMeshComponent* Weapon = Cast<UStaticMeshComponent>(Character->GetDefaultSubobjectByName(TEXT("EnemyWeapon")));
+	if (!Weapon) return false;
+	UStaticMesh* Polearm = Load<UStaticMesh>(TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/DemoAssets/Meshes/Weapons/Paragon/FengMao_Weapon"));
+	const FName GripSocket(TEXT("FengMaoWeapon_Active"));
+	if (!Polearm || !Character->GetMesh()->DoesSocketExist(GripSocket)
+		|| Character->GetMesh()->GetSocketBoneName(GripSocket) != TEXT("hand_r")) return false;
+	// 复用源素材的握持偏移；武器组件本身不再叠加一份手工位置或旋转，也不参与伤害碰撞。
+	Weapon->Modify(); Weapon->SetupAttachment(Character->GetMesh(), GripSocket);
+	Weapon->SetRelativeTransform(FTransform::Identity);
+	Weapon->SetStaticMesh(Polearm);
+	Weapon->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Weapon->SetGenerateOverlapEvents(false);
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Montages); ++Index)
 		if (!SetAsset(Character, MontageFields[Index], Montages[Index])) return false;
+	FFloatProperty* Distance = FindFProperty<FFloatProperty>(Character->GetClass(), TEXT("AttackDistance"));
+	if (!Distance || !SetAsset(Character, TEXT("HealMontage"), nullptr) || !SetAsset(Character, TEXT("AreaMontage"), nullptr)
+		|| !SetAsset(Character, TEXT("CombatConfig"), Config)
+		|| !SetAsset(Character, TEXT("AttackAbilityClass"), UmultiplayerEnemyMeleeAbility::StaticClass())) return false;
+	Distance->SetPropertyValue_InContainer(Character, Config->Attack.Range);
 	if (!Compile(Enemy) || !Save(Enemy)) return false;
 	FAssetCompilingManager::Get().FinishAllCompilation();
-	UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_CONNECTED mesh=%s skeleton=%s animation=%s sequences=%d montages=5 gameplay=unchanged visualPreview=NOT_RUN"),
-		*Mesh->GetPathName(), *Mesh->GetSkeleton()->GetPathName(), *Animation->GetPathName(), Sequences.Num());
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_CONNECTED mesh=%s skeleton=%s animation=%s sequences=%d montages=3 attackSource=%s release=%.6f duration=%.6f ability=EnemyMelee gameplay=ownBT_GAS_CMC visualPreview=NOT_RUN"),
+		*Mesh->GetPathName(), *Mesh->GetSkeleton()->GetPathName(), *Animation->GetPathName(), Sequences.Num(),
+		*SourceAttack->GetPathName(), AttackRelease, Montages[0]->GetPlayLength());
 	return true;
+}
+
+// 只更新两个固定 AI 包；复用运行时节点，编辑器图由树反建，不重建角色、HUD 或地图。
+bool UpdateCombatAI(bool bValidateOnly)
+{
+	const FString BlackboardPackage = TEXT("/Game/Combat/AI/BB_CombatEnemy"), TreePackage = TEXT("/Game/Combat/AI/BT_CombatEnemy");
+	UBlackboardData* Blackboard = Load<UBlackboardData>(BlackboardPackage);
+	UBehaviorTree* Tree = Load<UBehaviorTree>(TreePackage);
+	if (!Blackboard || !Tree) return false;
+	const FName Keys[] = { CombatAIKeys::TargetActor, CombatAIKeys::CanAttack, CombatAIKeys::LastKnownLocation,
+		CombatAIKeys::SearchUntil, CombatAIKeys::HomeLocation, CombatAIKeys::PatrolLocation, CombatAIKeys::CanMove };
+	UClass* KeyTypes[] = { UBlackboardKeyType_Object::StaticClass(), UBlackboardKeyType_Bool::StaticClass(),
+		UBlackboardKeyType_Vector::StaticClass(), UBlackboardKeyType_Float::StaticClass(),
+		UBlackboardKeyType_Vector::StaticClass(), UBlackboardKeyType_Vector::StaticClass(), UBlackboardKeyType_Bool::StaticClass() };
+	const FName Conditions[] = { CombatAIKeys::CanAttack, CombatAIKeys::TargetActor, CombatAIKeys::LastKnownLocation };
+	const FName MoveKeys[] = { CombatAIKeys::TargetActor, CombatAIKeys::LastKnownLocation, CombatAIKeys::PatrolLocation };
+	if (!bValidateOnly)
+	{
+		Blackboard->Modify(); Tree->Modify(); Blackboard->Keys.Reset();
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Keys); ++Index)
+		{
+			FBlackboardEntry& Entry = Blackboard->Keys.AddDefaulted_GetRef();
+			Entry.EntryName = Keys[Index]; Entry.bInstanceSynced = false;
+			Entry.KeyType = NewObject<UBlackboardKeyType>(Blackboard, KeyTypes[Index], NAME_None, RF_Transactional);
+			if (auto* Object = Cast<UBlackboardKeyType_Object>(Entry.KeyType)) Object->BaseClass = AmultiplayerCombatCharacter::StaticClass();
+		}
+		Blackboard->PostEditChange();
+		Tree->BlackboardAsset = Blackboard; Tree->RootDecorators.Reset(); Tree->RootDecoratorOps.Reset();
+		bool bConfigured = true;
+		auto SetKey = [&](UObject* Node, FName Key)
+		{
+			const FStructProperty* Property = FindFProperty<FStructProperty>(Node->GetClass(), TEXT("BlackboardKey"));
+			if (!Property || Property->Struct != FBlackboardKeySelector::StaticStruct()) { bConfigured = false; return; }
+			auto* Selector = Property->ContainerPtrToValuePtr<FBlackboardKeySelector>(Node);
+			Selector->SelectedKeyName = Key; Selector->ResolveSelectedKey(*Blackboard);
+			bConfigured &= Selector->GetSelectedKeyID() != FBlackboard::InvalidKey;
+		};
+		auto SetByte = [&](UObject* Node, FName Name, uint8 Value)
+		{
+			FByteProperty* Property = FindFProperty<FByteProperty>(Node->GetClass(), Name);
+			if (Property) Property->SetPropertyValue_InContainer(Node, Value); else bConfigured = false;
+		};
+		auto NewWait = [&](UBTCompositeNode* Parent, float Time, float Deviation)
+		{
+			auto* Wait = NewObject<UBTTask_Wait>(Tree, NAME_None, RF_Transactional);
+			Wait->WaitTime = FValueOrBBKey_Float(Time); Wait->RandomDeviation = FValueOrBBKey_Float(Deviation);
+			Parent->Children.AddDefaulted_GetRef().ChildTask = Wait;
+		};
+		auto* Root = NewObject<UBTComposite_Selector>(Tree, NAME_None, RF_Transactional);
+		Root->NodeName = TEXT("Attack / Chase / Search / Patrol"); Tree->RootNode = Root;
+		Root->Services.Add(NewObject<UmultiplayerBTService_UpdateCombatTarget>(Tree, NAME_None, RF_Transactional));
+		const TCHAR* Labels[] = { TEXT("Attack visible target"), TEXT("Chase visible target"), TEXT("Search last seen location"), TEXT("Patrol near home") };
+		UBTComposite_Sequence* Branches[4] = {};
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			Branches[Index] = NewObject<UBTComposite_Sequence>(Tree, NAME_None, RF_Transactional);
+			Branches[Index]->NodeName = Labels[Index];
+			FBTCompositeChild& Branch = Root->Children.AddDefaulted_GetRef(); Branch.ChildComposite = Branches[Index];
+			if (Index > 0)
+			{
+				// 禁锢只中止追击、搜索和巡逻；攻击分支仍可独立在射程内执行。
+				auto* CanMove = NewObject<UBTDecorator_Blackboard>(Tree, NAME_None, RF_Transactional);
+				SetKey(CanMove, CombatAIKeys::CanMove); SetByte(CanMove, TEXT("FlowAbortMode"), EBTFlowAbortMode::Both);
+				SetByte(CanMove, TEXT("BasicOperation"), EBasicKeyOperation::Set); SetByte(CanMove, TEXT("OperationType"), EBasicKeyOperation::Set);
+				CanMove->BuildDescription(); Branch.Decorators.Add(CanMove);
+			}
+			if (Index >= UE_ARRAY_COUNT(Conditions)) continue;
+			auto* Condition = NewObject<UBTDecorator_Blackboard>(Tree, NAME_None, RF_Transactional);
+			SetKey(Condition, Conditions[Index]); SetByte(Condition, TEXT("FlowAbortMode"), EBTFlowAbortMode::Both);
+			SetByte(Condition, TEXT("BasicOperation"), EBasicKeyOperation::Set); SetByte(Condition, TEXT("OperationType"), EBasicKeyOperation::Set);
+			Condition->BuildDescription(); Branch.Decorators.Add(Condition);
+		}
+		Branches[0]->Children.AddDefaulted_GetRef().ChildTask = NewObject<UmultiplayerBTTask_RequestCombatAttack>(Tree, NAME_None, RF_Transactional);
+		NewWait(Branches[0], .25f, 0);
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			UBTComposite_Sequence* Parent = Branches[Index + 1];
+			if (Index == 2) Parent->Children.AddDefaulted_GetRef().ChildTask = NewObject<UmultiplayerBTTask_SelectPatrolLocation>(Tree, NAME_None, RF_Transactional);
+			auto* Move = NewObject<UBTTask_MoveTo>(Tree, NAME_None, RF_Transactional); SetKey(Move, MoveKeys[Index]);
+			Move->AcceptableRadius = FValueOrBBKey_Float(50.f); Move->bObserveBlackboardValue = true;
+			Move->bTrackMovingGoal = FValueOrBBKey_Bool(Index == 0); Move->bAllowPartialPath = FValueOrBBKey_Bool(false);
+			Move->bReachTestIncludesAgentRadius = FValueOrBBKey_Bool(false); Move->bReachTestIncludesGoalRadius = FValueOrBBKey_Bool(false);
+			FBTCompositeChild& Child = Parent->Children.AddDefaulted_GetRef(); Child.ChildTask = Move;
+			Child.Decorators.Add(NewObject<UBTDecorator_ForceSuccess>(Tree, NAME_None, RF_Transactional));
+			NewWait(Parent, Index == 0 ? .25f : Index == 1 ? 1.f : 1.5f, Index == 0 ? 0.f : Index == 1 ? .25f : .5f);
+		}
+		NewWait(Root, 1.f, 0); // 导航选点失败也等待一秒，避免空场景每帧重试寻路。
+		if (!bConfigured) return false;
+		UClass* GraphClass = UBehaviorTreeGraph::StaticClass();
+		Tree->BTGraph = FBlueprintEditorUtils::CreateNewGraph(Tree, MakeUniqueObjectName(Tree, GraphClass, TEXT("Behavior Tree")),
+			GraphClass, UEdGraphSchema_BehaviorTree::StaticClass());
+		auto* Graph = CastChecked<UBehaviorTreeGraph>(Tree->BTGraph);
+		// 反建期间锁住重编译；Root 尚未连线时不能让编辑器清空新树。
+		Graph->LockUpdates(); Graph->GetSchema()->CreateDefaultNodesForGraph(*Graph);
+		for (UEdGraphNode* Node : Graph->Nodes)
+			if (auto* RootGraph = Cast<UBehaviorTreeGraphNode_Root>(Node)) { RootGraph->BlackboardAsset = Blackboard; RootGraph->UpdateBlackboard(); }
+		Graph->OnCreated(); Graph->Initialize(); Graph->UpdateClassData(); Graph->UnlockUpdates();
+		for (UObject* Asset : { static_cast<UObject*>(Blackboard), static_cast<UObject*>(Tree) })
+		{
+			const FString Package = Asset->GetPackage()->GetName();
+			if (Package != BlackboardPackage && Package != TreePackage) return false;
+			Asset->MarkPackageDirty(); FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+			if (!UPackage::SavePackage(Asset->GetPackage(), Asset,
+				*FPackageName::LongPackageNameToFilename(Package, FPackageName::GetAssetPackageExtension()), Args)) return false;
+		}
+	}
+	// ValidateCombatAI 在新进程只读冷加载，检查实际序列化的键、分支、等待和可编辑图。
+	// 编辑器会按版本补入持久 SelfActor 键；业务键逐项验证，不把该引擎键当成额外玩法状态。
+	if (Tree->BlackboardAsset != Blackboard || Blackboard->Keys.Num() < UE_ARRAY_COUNT(Keys)
+		|| Blackboard->Keys.Num() > UE_ARRAY_COUNT(Keys) + 1) return false;
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Keys); ++Index)
+	{
+		const FBlackboardEntry* Entry = Blackboard->GetKey(Blackboard->GetKeyID(Keys[Index]));
+		if (!Entry || Entry->bInstanceSynced || !Entry->KeyType || Entry->KeyType->GetClass() != KeyTypes[Index]) return false;
+	}
+	const auto* TargetType = Cast<UBlackboardKeyType_Object>(Blackboard->GetKey(Blackboard->GetKeyID(Keys[0]))->KeyType);
+	const auto* Root = Cast<UBTComposite_Selector>(Tree->RootNode);
+	if (!TargetType || TargetType->BaseClass != AmultiplayerCombatCharacter::StaticClass() || !Root || Root->Children.Num() != 5
+		|| Root->Services.Num() != 1 || !Root->Services[0] || !Root->Services[0]->IsA<UmultiplayerBTService_UpdateCombatTarget>()) return false;
+	const UBlackboardComponent* NoBlackboard = nullptr;
+	auto CheckWait = [NoBlackboard](const UBTTaskNode* Node, float Time, float Deviation)
+	{
+		const auto* Wait = Cast<UBTTask_Wait>(Node);
+		return Wait && Wait->WaitTime.GetKey().IsNone() && Wait->RandomDeviation.GetKey().IsNone()
+			&& FMath::IsNearlyEqual(Wait->WaitTime.GetValue(NoBlackboard), Time) && FMath::IsNearlyEqual(Wait->RandomDeviation.GetValue(NoBlackboard), Deviation);
+	};
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		const FBTCompositeChild& Child = Root->Children[Index]; const auto* Sequence = Cast<UBTComposite_Sequence>(Child.ChildComposite);
+		if (!Sequence || Sequence->Children.Num() != (Index == 3 ? 3 : 2)) return false;
+		if (Index < UE_ARRAY_COUNT(Conditions))
+		{
+			const int32 ConditionIndex = Index == 0 ? 0 : 1;
+			const auto* Condition = Child.Decorators.Num() == ConditionIndex + 1 ? Cast<UBTDecorator_Blackboard>(Child.Decorators[ConditionIndex]) : nullptr;
+			const auto* Operation = Condition ? FindFProperty<FByteProperty>(Condition->GetClass(), TEXT("OperationType")) : nullptr;
+			if (!Condition || Condition->GetSelectedBlackboardKey() != Conditions[Index] || Condition->GetFlowAbortMode() != EBTFlowAbortMode::Both
+				|| !Operation || Operation->GetPropertyValue_InContainer(Condition) != EBasicKeyOperation::Set) return false;
+		}
+		if (Index > 0)
+		{
+			const auto* CanMove = Child.Decorators.Num() > 0 ? Cast<UBTDecorator_Blackboard>(Child.Decorators[0]) : nullptr;
+			if (!CanMove || CanMove->GetSelectedBlackboardKey() != CombatAIKeys::CanMove
+				|| CanMove->GetFlowAbortMode() != EBTFlowAbortMode::Both) return false;
+		}
+		if (!CheckWait(Sequence->Children.Last().ChildTask, Index < 2 ? .25f : Index == 2 ? 1.f : 1.5f, Index < 2 ? 0.f : Index == 2 ? .25f : .5f)) return false;
+		if (Index == 0) { if (!Sequence->Children[0].ChildTask || !Sequence->Children[0].ChildTask->IsA<UmultiplayerBTTask_RequestCombatAttack>()) return false; continue; }
+		if (Index == 3 && (!Sequence->Children[0].ChildTask || !Sequence->Children[0].ChildTask->IsA<UmultiplayerBTTask_SelectPatrolLocation>())) return false;
+		const FBTCompositeChild& MoveChild = Sequence->Children[Index == 3 ? 1 : 0]; const auto* Move = Cast<UBTTask_MoveTo>(MoveChild.ChildTask);
+		if (!Move || Move->GetSelectedBlackboardKey() != MoveKeys[Index - 1] || !Move->bObserveBlackboardValue
+			|| !FMath::IsNearlyEqual(Move->AcceptableRadius.GetValue(NoBlackboard), 50.f) || Move->bTrackMovingGoal.GetValue(NoBlackboard) != (Index == 1)
+			|| Move->bAllowPartialPath.GetValue(NoBlackboard) || Move->bReachTestIncludesAgentRadius.GetValue(NoBlackboard) || Move->bReachTestIncludesGoalRadius.GetValue(NoBlackboard)
+			|| MoveChild.Decorators.Num() != 1 || !MoveChild.Decorators[0] || !MoveChild.Decorators[0]->IsA<UBTDecorator_ForceSuccess>()) return false;
+	}
+	const auto* Graph = Cast<UBehaviorTreeGraph>(Tree->BTGraph);
+	if (!CheckWait(Root->Children[4].ChildTask, 1.f, 0) || !Graph || Graph->Nodes.Num() != 16) return false;
+	int32 GraphRoots = 0, Services = 0, Decorators = 0;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		const auto* BTNode = Cast<UBehaviorTreeGraphNode>(Node); if (!BTNode) return false;
+		if (const auto* GraphRoot = Cast<UBehaviorTreeGraphNode_Root>(Node))
+		{
+			++GraphRoots;
+			if (GraphRoot->BlackboardAsset != Blackboard || !BTNode->GetOutputPin() || BTNode->GetOutputPin()->LinkedTo.Num() != 1) return false;
+			const auto* Linked = Cast<UBehaviorTreeGraphNode>(BTNode->GetOutputPin()->LinkedTo[0]->GetOwningNode());
+			if (!Linked || Linked->NodeInstance != Root) return false;
+		}
+		else if (!BTNode->NodeInstance || BTNode->NodeInstance->GetOuter() != Tree) return false;
+		Services += BTNode->Services.Num(); Decorators += BTNode->Decorators.Num();
+	}
+	const bool bValid = GraphRoots == 1 && Services == 1 && Decorators == 9;
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_AI_ASSET mode=%s valid=%d keys=%d branches=5 graphNodes=%d decorators=%d mapsSaved=0"),
+		bValidateOnly ? TEXT("Validate") : TEXT("Update"), bValid, Blackboard->Keys.Num(), Graph->Nodes.Num(), Decorators);
+	return bValid;
 }
 
 // 新进程冷加载验证实际 Skeleton、最终图连线和 CDO，而不是只统计资产文件。
@@ -1394,7 +1896,7 @@ bool Validate()
 {
 	// 从实际角色 CDO 出发检查正在使用的资产，不再验证已退出运行链路的旧 Quinn 子蓝图。
 	const TCHAR* MeshPaths[] = { TEXT("/Game/Characters/Mannequins/Meshes/SKM_Quinn_Simple"),
-		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SKM_CombatMannequin_Simple") };
+		TEXT("/Game/AdvancedARPGCombat/Characters/Heroes/Mannequins/Meshes/SKM_CombatMannequin") };
 	const TCHAR* AnimationPaths[] = { TEXT("ARPG/ABP_ARPGLocomotion"), TEXT("ARPG/EnemySource/ABP_EnemySourceLocomotion") };
 	const TCHAR* MontageFields[] = { TEXT("AttackMontage"), TEXT("HealMontage"), TEXT("DeathMontage"), TEXT("AreaMontage"), TEXT("HitMontage") };
 	ACharacter* Characters[2] = {};
@@ -1472,6 +1974,12 @@ bool Validate()
 		{
 			const FObjectPropertyBase* Field = FindFProperty<FObjectPropertyBase>(CDO->GetClass(), MontageFields[Action]);
 			const UAnimMontage* Montage = Field ? Cast<UAnimMontage>(Field->GetObjectPropertyValue_InContainer(CDO)) : nullptr;
+			if (Index == 1 && (Action == 1 || Action == 3))
+			{
+				// 小兵不再携带玩家的治疗与范围施法动作，旧未引用资产不影响当前链路。
+				if (!Field || Montage) return false;
+				continue;
+			}
 			const FName ExpectedSlot = Index == 0 && Action != 2 ? TEXT("UpperBody") : TEXT("DefaultSlot");
 			if (!Montage || Montage->GetSkeleton() != Mesh->GetSkeleton() || Montage->SlotAnimTracks.Num() != 1
 				|| Montage->SlotAnimTracks[0].SlotName != ExpectedSlot || Montage->GetPlayLength() <= 0 || !Montage->Notifies.IsEmpty()) return false;
@@ -1480,7 +1988,33 @@ bool Validate()
 				const auto* Sequence = Cast<UAnimSequence>(Segment.GetAnimReference());
 				if (!Sequence || Sequence->GetSkeleton() != Mesh->GetSkeleton() || !Sequence->GetDataModel()
 					|| Sequence->GetDataModel()->GetNumBoneTracks() == 0 || !Sequence->Notifies.IsEmpty() || !FMath::IsNearlyEqual(Segment.AnimPlayRate, 1.f)) return false;
+				if (Index == 1 && (!Sequence->GetName().StartsWith(TEXT("AS_Enemy_Melee_")) || Sequence->bEnableRootMotion)) return false;
 			}
+		}
+		if (Index == 1)
+		{
+			const auto* Minion = Cast<AmultiplayerCombatEnemy>(CDO);
+			const auto* Rules = Minion ? Minion->GetCombatConfigAsset() : nullptr;
+			const UAnimMontage* Attack = Minion ? Minion->GetActionMontage(EMultiplayerCombatAnimation::Attack) : nullptr;
+			const auto* Weapon = Minion ? Cast<UStaticMeshComponent>(CDO->GetDefaultSubobjectByName(TEXT("EnemyWeapon"))) : nullptr;
+			const auto* Polearm = Load<UStaticMesh>(TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/DemoAssets/Meshes/Weapons/Paragon/FengMao_Weapon"));
+			if (!Weapon || !Polearm || Weapon->GetStaticMesh() != Polearm
+				|| Weapon->GetAttachParent() != Minion->GetMesh() || Weapon->GetAttachSocketName() != TEXT("FengMaoWeapon_Active")
+				|| Minion->GetMesh()->GetSocketBoneName(Weapon->GetAttachSocketName()) != TEXT("hand_r")
+				|| !Weapon->GetRelativeTransform().Equals(FTransform::Identity)
+				|| Weapon->GetCollisionEnabled() != ECollisionEnabled::NoCollision || Weapon->GetGenerateOverlapEvents()) return false;
+			if (!Minion || Minion->GetAttackAbilityClass() != UmultiplayerEnemyMeleeAbility::StaticClass()
+				|| !Rules || !Attack || Rules->GetPackage()->GetName() != EnemyConfigPackage
+				|| !FMath::IsNearlyEqual(Rules->Attack.Amount, 15.f) || !FMath::IsNearlyEqual(Rules->Attack.Cooldown, 1.8f)
+				|| !FMath::IsNearlyEqual(Rules->Attack.Range, 160.f) || !FMath::IsNearlyEqual(Minion->GetAttackDistance(), Rules->Attack.Range)
+				|| !FMath::IsNearlyEqual(Rules->Attack.Windup + Rules->Attack.Recovery, Attack->GetPlayLength(), .001f)
+				|| Rules->Attack.Cooldown < Attack->GetPlayLength()
+				|| !Rules->ProjectileEffect.IsNull() || !Rules->ProjectileCascadeEffect.IsNull() || !Rules->AreaMarkerMaterial.IsNull()
+				|| !Rules->AttackFeedback.Effect.IsNull() || !Rules->AttackFeedback.CascadeEffect.IsNull()
+				|| !Rules->CastingFeedback.Effect.IsNull() || !Rules->CastingFeedback.CascadeEffect.IsNull()
+				|| !Keep(Rules->AttackFeedback.Sound.LoadSynchronous()) || !Keep(Rules->ImpactFeedback.Sound.LoadSynchronous())) return false;
+			UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_MINION_VALIDATED config=%s ability=EnemyMelee damage=%.2f range=%.2f cooldown=%.2f windup=%.6f recovery=%.6f supportMontages=none projectile=none"),
+				*Rules->GetPathName(), Rules->Attack.Amount, Rules->Attack.Range, Rules->Attack.Cooldown, Rules->Attack.Windup, Rules->Attack.Recovery);
 		}
 		UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_CHARACTER_VALIDATED asset=%s skeleton=%s nativeMotionReads=verified legBoneTracks=animated slots=connected"), *Blueprint->GetPathName(), *Mesh->GetSkeleton()->GetPathName());
 	}
@@ -1521,7 +2055,8 @@ bool Validate()
 	UWidgetBlueprint* EnemyWidget = Load<UWidgetBlueprint>(Folder / TEXT("UI/WBP_ARPGEnemyHealth"));
 	const auto* HealthComponent = Cast<UWidgetComponent>(Characters[1]->GetDefaultSubobjectByName(TEXT("HealthBarWidget")));
 	if (!EnemyWidget || EnemyWidget->ParentClass != UmultiplayerEnemyHealthWidget::StaticClass() || !HealthComponent
-		|| HealthComponent->GetWidgetClass().Get() != EnemyWidget->GeneratedClass.Get() || HealthComponent->GetWidgetSpace() != EWidgetSpace::Screen) return false;
+		|| HealthComponent->GetWidgetClass().Get() != EnemyWidget->GeneratedClass.Get() || HealthComponent->GetWidgetSpace() != EWidgetSpace::World
+		|| !HealthComponent->GetManuallyRedraw() || !HealthComponent->IsA<UmultiplayerEnemyHealthWidgetComponent>()) return false;
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_VALIDATE actualCDOs=2 skeletons=matched montageSlots=verified nativeMotion=verified effects=verified originalHUD=preserved enemyWidget=verified visualPreview=NOT_RUN"));
 	return true;
 }
@@ -1537,16 +2072,23 @@ int32 UCombatAssetBuildCommandlet::Main(const FString& Params)
 	const bool bUpdateAnimations = FParse::Param(*Params, TEXT("UpdateAnimations"));
 	const bool bConnectARPG = FParse::Param(*Params, TEXT("ConnectARPGAnimations"));
 	const bool bConnectARPGHUD = FParse::Param(*Params, TEXT("ConnectARPGHUD"));
+	const bool bRefreshCombatFeedback = FParse::Param(*Params, TEXT("RefreshCombatFeedbackAndHUD"));
 	const bool bConnectARPGEnemyHealth = FParse::Param(*Params, TEXT("ConnectARPGEnemyHealth"));
+	const bool bUpdateEnemyWorldHealth = FParse::Param(*Params, TEXT("UpdateEnemyWorldHealth"));
 	const bool bConnectARPGEnemySource = FParse::Param(*Params, TEXT("ConnectARPGEnemySource"));
-	if (int32(bCreate) + int32(bValidate) + int32(bUpdateUI) + int32(bUpdateAnimations) + int32(bConnectARPG) + int32(bConnectARPGHUD) + int32(bConnectARPGEnemyHealth) + int32(bConnectARPGEnemySource) != 1) return 1;
-	const bool bSuccess = bConnectARPGEnemySource ? CombatAssets::ConnectARPGEnemySource() : bConnectARPG ? CombatAssets::ConnectARPGAnimations()
-		: bConnectARPGHUD ? CombatAssets::ConnectARPGHUD() : bConnectARPGEnemyHealth ? CombatAssets::ConnectARPGEnemyHealth() : bUpdateAnimations ? CombatAssets::UpdateAnimations()
+	const bool bAuditARPGEnemySource = FParse::Param(*Params, TEXT("AuditARPGEnemySource"));
+	const bool bFixCombatInput = FParse::Param(*Params, TEXT("FixCombatInput"));
+	const bool bUpdateCombatAI = FParse::Param(*Params, TEXT("UpdateCombatAI"));
+	const bool bValidateCombatAI = FParse::Param(*Params, TEXT("ValidateCombatAI"));
+	if (int32(bCreate) + int32(bValidate) + int32(bUpdateUI) + int32(bUpdateAnimations) + int32(bConnectARPG) + int32(bConnectARPGHUD) + int32(bRefreshCombatFeedback) + int32(bConnectARPGEnemyHealth) + int32(bUpdateEnemyWorldHealth) + int32(bConnectARPGEnemySource) + int32(bAuditARPGEnemySource) + int32(bFixCombatInput) + int32(bUpdateCombatAI) + int32(bValidateCombatAI) != 1) return 1;
+	const bool bSuccess = bUpdateCombatAI || bValidateCombatAI ? CombatAssets::UpdateCombatAI(bValidateCombatAI)
+		: bAuditARPGEnemySource ? CombatAssets::ConnectARPGEnemySource(true) : bFixCombatInput ? CombatAssets::FixCombatInput() : bConnectARPGEnemySource ? CombatAssets::ConnectARPGEnemySource() : bConnectARPG ? CombatAssets::ConnectARPGAnimations()
+		: bUpdateEnemyWorldHealth ? CombatAssets::UpdateEnemyWorldHealth() : bRefreshCombatFeedback ? CombatAssets::RefreshCombatFeedbackAndHUD() : bConnectARPGHUD ? CombatAssets::ConnectARPGHUD() : bConnectARPGEnemyHealth ? CombatAssets::ConnectARPGEnemyHealth() : bUpdateAnimations ? CombatAssets::UpdateAnimations()
 		: bUpdateUI ? CombatAssets::CreateUI(true) : bCreate ? CombatAssets::Create() : CombatAssets::Validate();
 	// 离线操作结束即释放临时强引用，不让工具对象滞留到编辑器模块销毁阶段。
 	CombatAssets::References.Reset();
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_BUILD mode=%s success=%d"),
-		bConnectARPGEnemySource ? TEXT("ConnectARPGEnemySource") : bConnectARPG ? TEXT("ConnectARPGAnimations") : bConnectARPGHUD ? TEXT("ConnectARPGHUD") : bConnectARPGEnemyHealth ? TEXT("ConnectARPGEnemyHealth") : bUpdateAnimations ? TEXT("UpdateAnimations") : bUpdateUI ? TEXT("UpdateUI") : bCreate ? TEXT("Create") : TEXT("Validate"), bSuccess);
+		bUpdateCombatAI ? TEXT("UpdateCombatAI") : bValidateCombatAI ? TEXT("ValidateCombatAI") : bAuditARPGEnemySource ? TEXT("AuditARPGEnemySource") : bFixCombatInput ? TEXT("FixCombatInput") : bConnectARPGEnemySource ? TEXT("ConnectARPGEnemySource") : bConnectARPG ? TEXT("ConnectARPGAnimations") : bUpdateEnemyWorldHealth ? TEXT("UpdateEnemyWorldHealth") : bRefreshCombatFeedback ? TEXT("RefreshCombatFeedbackAndHUD") : bConnectARPGHUD ? TEXT("ConnectARPGHUD") : bConnectARPGEnemyHealth ? TEXT("ConnectARPGEnemyHealth") : bUpdateAnimations ? TEXT("UpdateAnimations") : bUpdateUI ? TEXT("UpdateUI") : bCreate ? TEXT("Create") : TEXT("Validate"), bSuccess);
 	return bSuccess ? 0 : 1;
 #else
 	return 1;

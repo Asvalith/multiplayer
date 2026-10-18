@@ -10,6 +10,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
+class UmultiplayerCombatProgressionWidget;
 struct FInputActionValue;
 
 /**
@@ -36,6 +37,7 @@ class AmultiplayerCharacter : public AmultiplayerCombatCharacter
 
 public:
 	AmultiplayerCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	virtual FVector GetCombatViewOrigin(const FRotator& Aim) const override;
 
 protected:
 	// 控制权和输入初始化。
@@ -50,6 +52,17 @@ private:
 	void Move(const FInputActionValue& Value);
 	// 修改 Controller 的 Yaw/Pitch；镜头通过 SpringArm 使用控制器旋转。
 	void Look(const FInputActionValue& Value);
+	void ToggleProgressionMenu();
+	void PreviewDefense() { BeginSlotTargeting(1); }
+	void PreviewHeal() { BeginSlotTargeting(2); }
+	void PreviewArea() { BeginSlotTargeting(3); }
+	void PreviewDash() { BeginSlotTargeting(4); }
+	void ReleaseDefense();
+	void ReleaseHeal();
+	void ReleaseArea();
+	void ReleaseDash();
+	void ReleaseTargetSlot(int32 Slot);
+	UPROPERTY(Transient) TObjectPtr<UmultiplayerCombatProgressionWidget> ProgressionMenu;
 
 	// 相机组件。
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))

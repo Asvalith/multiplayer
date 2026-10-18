@@ -19,7 +19,7 @@ class UParticleSystem;
 class UParticleSystemComponent;
 struct FStreamableHandle;
 
-// 本 Demo 的弹道恒速直线飞行；只在 Actor 初次相关时发送发射状态，不持续发送位置。
+// 本 Demo 的每段弹道恒速直线飞行；初次相关或弹反改变轨迹时发送快照，不持续发送位置。
 USTRUCT()
 struct FMultiplayerCombatProjectileLaunchState
 {
@@ -33,6 +33,13 @@ struct FMultiplayerCombatProjectileLaunchState
 
 	UPROPERTY()
 	double ServerLaunchTime = 0.0;
+
+	// 弹反只开启新轨迹段，不延长最初的服务器寿命；晚加入也按同一个截止时刻隐藏。
+	UPROPERTY()
+	double ServerExpiryTime = 0.0;
+
+	UPROPERTY()
+	uint16 Revision = 0;
 
 	UPROPERTY()
 	bool bInitialized = false;
@@ -48,10 +55,13 @@ public:
 	AmultiplayerCombatProjectile();
 
 	// 配合延迟生成，在 FinishSpawning 前设置来源、伤害和速度。
-	void Initialize(AmultiplayerCombatCharacter* Source, float Damage, float Speed);
+	void Initialize(AmultiplayerCombatCharacter* Source, float Damage, float Speed, float MaxDistance = 0.f);
 
 	// 只读观测初始状态，测试和统计不需要向客户端开放发射或伤害入口。
 	const FMultiplayerCombatProjectileLaunchState& GetLaunchState() const { return LaunchState; }
+
+	// 仅服务器碰撞业务可调用；防御窗口、方向、敌我与次数仍在此处重新检查，不开放 RPC。
+	bool TryReflectFrom(AmultiplayerCombatCharacter* Defender, const FHitResult& Hit);
 
 protected:
 	virtual void BeginPlay() override;
@@ -67,6 +77,8 @@ private:
 	void OnRep_LaunchState();
 	void StartClientTrajectory();
 	void UpdateClientTrajectory();
+	// 原扫掠的重叠/阻挡通知可能仍在派发；离开该栈后才恢复新轨迹，不能处理旧方向的命中。
+	void ResumeReflectedTrajectory();
 	// 已预载直接绑定，否则只发一次异步请求；不在 Tick 中查找或同步加载资产。
 	void RequestProjectileEffect();
 	void AttachProjectileEffect();
@@ -104,10 +116,15 @@ private:
 	TWeakObjectPtr<AmultiplayerCombatCharacter> SourceCharacter;
 	TWeakObjectPtr<AGameStateBase> ClientGameState;
 	FTimerHandle ClientLaunchRetry;
+	FTimerHandle ReflectionResume;
 	TSoftObjectPtr<UNiagaraSystem> ProjectileEffectAsset;
 	TSoftObjectPtr<UParticleSystem> ProjectileCascadeAsset;
 	TSharedPtr<FStreamableHandle> ProjectileEffectLoad;
 	float DamageAmount = 0.0f;
+	int32 ReflectionCount = 0;
+	int32 ReflectionLimit = 0;
 	bool bHitResolved = false;
+	bool bReflectionPending = false;
+	bool bResolvingImpact = false;
 	bool bPresentationEnded = false;
 };

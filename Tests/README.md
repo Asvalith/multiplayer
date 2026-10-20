@@ -4,6 +4,34 @@
 
 当前恢复原埃及地图后的规则与验收入口见下文“原埃及图恢复后的正式技能验收（2026-10-20）”。旧 `CoopEscape` 全流程依赖原型的 `Escape_*` 机关布局，不适用于恢复后的原图；本文此前各日期的通过记录只对应当时的布局、规则和构建。
 
+## GAS 架构收口
+
+2026-10-20 本轮整理保留原玩法数值、蓝图父类、配置资产和网络边界，收敛规则归属，不增加新的战斗框架。完整阅读顺序和连续追问见 [GAS 架构与调用链](../Docs/Study/GAS架构与调用链.md)。
+
+- `CheckSkillAvailable` 查询实际已授予能力的 `CanActivateAbility`，不再自行实现成本、冷却、标签关系和治疗目标判断。角色业务资格留在 `CheckSkillBusinessRequirements`，治疗目标资格留在治疗能力。
+- 成本、冷却和提示统一读取 `GetSkillRule`。`CommitExecute` 以一份局部规则提交本次成本和冷却；激活与提交两个时点的必要校验继续保留。
+- ASC 集成实现集中到 `multiplayerCombatAbilitySystem.cpp`，原反射类型与头文件不变。普通攻击发弹归 `Projectile::FireFromSkill`，范围结算归 `AreaAbility::ResolveTargets`，角色不再代管这两项专属执行。
+- 范围查询先收集去重弱引用候选，再在每个目标应用前完整检查一次阵营、存活、圆柱范围与遮挡。同轮数值取局部快照，目标合法性仍实时复核。旧几何测试只迁移生产入口，不降低断言。
+- 保留激活版本、预测键、效果句柄、异步任务与重入收尾；没有把取消改成退款或权威伤害回滚。
+
+新增五项 `Multiplayer.Combat.Admission` 测试覆盖派生能力条件、原生输入限制、只读查询、提交二次检查与忽略开关、扣费回调改变等级后的成本和冷却快照。另新增 `Targeting.AreaCandidateBoundary` 和 `Targeting.AreaRuleSnapshot`，验证真实碰撞过滤与同轮结算数值一致。
+
+本轮报告位于 `C:/UEBuild/CoopGASArchitecture_20261020`：
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Editor 编译 | 最终 `BuildFinalVerified.log` 成功；首轮测试作用域与旧发弹调用迁移错误已修复，原错误日志保留 |
+| 完整战斗回归 | 首轮 `Regression/index.json` 153 项通过；补充提交快照测试后的 `RegressionFinal/index.json` 154 项通过，均为 0 测试警告、0 失败；DX12 离屏运行 |
+| 测试脚本契约 | `RunMultiplayerNetworkTests.ps1 -SelfTest` 通过；此项本身不启动 UE、不代表网络测试通过 |
+| Combat | `CombatNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，恢复后的 `CoopEscape` 地图、渲染客户端与受控输入夹具 |
+| CombatLifecycle | `LifecycleNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含取消、眩晕、死亡与重新激活 |
+| CombatExpansion | `ExpansionNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含预测冲刺、弹反与救援 |
+| CombatReconnect | `ReconnectNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含真实断线后的存活、倒地超时与死亡恢复 |
+
+网络验证为本机 Editor DS 加两个独立客户端，共 8 轮；后三组使用 NullRHI。Harsh 的配置参数为 PktLag 200、PktLagVariance 50、PktLoss 5，作用于三端，不作为实测 RTT。四组报告的磁盘模块 SHA256 均为 `e48f7594516dc17ff760a0659ae71340e87b92bcd7bef0b21071d04abcf39d6f`，受测源清单指纹均为 `e63643303039f5dab7f9d9acf01eb3df97200de3bd056491902889f5602d7740`；294 个清单文件在联网验证期间无变化。报告保留 `loadedByRuntimeVerified=false`，不把磁盘指纹称为额外的运行时加载证明。验收后补写本节记录，并在提交检查中移除 ASC 实现文件末尾的一个空行，未改变运行逻辑。
+
+渲染夹具保留双端技能截图，本轮抽查了范围预览和界面，不代替连续操作录像、首次冷加载特效、全部动画质量或原埃及地图完整通关验收；也未覆盖公网、Linux DS 或 Shipping 发布包。本轮没有新增帧率或带宽优化数据。
+
 ## 集中能力冲突关系（2026-10-20）
 
 本轮参考 [Lyra 5.5 的 Ability Tag Relationship Mapping](https://dev.epicgames.com/documentation/en-us/unreal-engine/abilities-in-lyra-in-unreal-engine?application_version=5.5)，把静态关系嵌入现有 `UmultiplayerCombatConfig::AbilityRelationships`，不引入完整 Lyra、Experience 或一套重复的状态机。玩家五技能和救援均使用实际配置；现有配置资产未存储新字段时继承原生构造默认，不改变数值和素材引用。

@@ -383,7 +383,7 @@ bool FCoopCombatHealingAuthorityTest::RunTest(const FString& Parameters)
 	Player->Heal();
 	TestEqual(TEXT("Valid retry heals the actual nearby friendly target"), Friend->GetHealth(), 70.0f);
 	TestEqual(TEXT("Valid retry consumes exactly one cost"), Player->GetEnergy(), 75.0f);
-	TestFalse(TEXT("Nonfinite projectile damage rejected at server entry"), Player->FireProjectile(std::numeric_limits<float>::quiet_NaN(), 1600.0f));
+	TestFalse(TEXT("Nonfinite projectile damage rejected at server entry"), AmultiplayerCombatProjectile::FireFromSkill(*Player, std::numeric_limits<float>::quiet_NaN(), 1600.0f));
 	return true;
 }
 
@@ -496,7 +496,7 @@ bool FCoopCombatProjectileWallTest::RunTest(const FString& Parameters)
 	Wall->SetCollisionResponseToAllChannels(ECR_Block);
 	Wall->RegisterComponent();
 	WallActor->SetActorLocation(FVector(175, 0, 140));
-	TestTrue(TEXT("Clear muzzle creates real projectile"), Source->FireProjectile(25, 1600));
+	TestTrue(TEXT("Clear muzzle creates real projectile"), AmultiplayerCombatProjectile::FireFromSkill(*Source, 25, 1600));
 	TWeakObjectPtr<AmultiplayerCombatProjectile> FiredProjectile;
 	for (TActorIterator<AmultiplayerCombatProjectile> It(World); It; ++It) FiredProjectile = *It;
 	TestTrue(TEXT("Wall test observes the fired projectile"), FiredProjectile.IsValid());
@@ -507,11 +507,11 @@ bool FCoopCombatProjectileWallTest::RunTest(const FString& Parameters)
 	// 墙位于来源到 75 cm 枪口之间时，出生前检测直接拒绝发射。
 	// 现在不再前移出生点：前方的墙由真实飞行扫掠阻挡，只有起点自身在墙内才拒绝。
 	WallActor->SetActorLocation(FVector(40, 0, 140));
-	TestTrue(TEXT("Close wall is handled by the real projectile sweep"), Source->FireProjectile(25, 1600));
+	TestTrue(TEXT("Close wall is handled by the real projectile sweep"), AmultiplayerCombatProjectile::FireFromSkill(*Source, 25, 1600));
 	Fixture.Advance(0.1f);
 	TestEqual(TEXT("Close wall prevents damage without skipping the first 75cm"), Enemy->GetHealth(), 100.0f);
 	WallActor->SetActorLocation(FVector(0, 0, 140));
-	TestFalse(TEXT("Wall containing the actual muzzle rejects firing"), Source->FireProjectile(25, 1600));
+	TestFalse(TEXT("Wall containing the actual muzzle rejects firing"), AmultiplayerCombatProjectile::FireFromSkill(*Source, 25, 1600));
 	int32 ProjectileCount = 0;
 	for (TActorIterator<AmultiplayerCombatProjectile> It(World); It; ++It) ++ProjectileCount;
 	TestEqual(TEXT("Rejected muzzle shot creates no projectile"), ProjectileCount, 0);

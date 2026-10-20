@@ -57,6 +57,8 @@ protected:
 	// 所有技能的资源与冷却从同一份规则读取；效果继续交给 GAS 预测与确认。
 	virtual bool CheckCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
+	virtual bool CheckCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
 	virtual void ApplyCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayAbilityActivationInfo ActivationInfo) const override;
 	virtual void ApplyCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
@@ -67,6 +69,12 @@ protected:
 	EMultiplayerCombatSkill Skill = EMultiplayerCombatSkill::Attack;
 	// InstancedPerActor 会复用实例；同步取消后再激活时，旧调用栈不能继续推动新一轮技能。
 	uint32 ActivationRevision = 0;
+private:
+	// CommitExecute 用同一份局部规则提交成本和冷却，不把提交快照保存成跨激活成员。
+	void ApplyRuleCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const;
+	void ApplyRuleCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const;
 };
 
 // 攻击：伤害效果、冷却和技能放在一起。
@@ -249,6 +257,9 @@ class MULTIPLAYER_API UmultiplayerHealAbility : public UmultiplayerCombatAbility
 
 public:
 	UmultiplayerHealAbility();
+	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
+		const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags = nullptr,
+		const FGameplayTagContainer* TargetTags = nullptr, FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
 
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle,
@@ -291,6 +302,8 @@ class MULTIPLAYER_API UmultiplayerAreaAbility : public UmultiplayerCombatAbility
 	GENERATED_BODY()
 public:
 	UmultiplayerAreaAbility();
+	// 范围结算归属于该技能；服务器在出手时验证目标，角色不再代管技能专属执行。
+	static void ResolveTargets(AmultiplayerCombatCharacter& Character, const FVector& Center);
 protected:
 	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;

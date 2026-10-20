@@ -29,6 +29,10 @@ namespace CombatTargeting
 	bool CanMeleeHit(const AmultiplayerCombatCharacter& Source, const AmultiplayerCombatCharacter& Target, bool bCheckFacing);
 	bool CanAffectArea(const AmultiplayerCombatCharacter& Source, const AmultiplayerCombatCharacter& Target,
 		const FVector& Center, float Radius);
+	// 宽阶段只收集去重的候选，不做遮挡射线；结算必须在每个目标应用前调用 CanAffectArea。
+	TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CollectAreaCandidates(
+		const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius);
+	// 预览需要当前完整命中集合，因此在候选上执行一次范围、阵营与遮挡过滤。
 	TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CollectAreaTargets(
 		const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius);
 }

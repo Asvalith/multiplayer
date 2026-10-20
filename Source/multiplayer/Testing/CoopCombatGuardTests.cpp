@@ -204,7 +204,7 @@ bool FCoopCombatGuardUndirectedDamageTest::RunTest(const FString&)
 	auto* AreaTarget = Fixture.Character(false, FVector(0, 2000, 100), GuardConfig());
 	Source->SetActorLocation(FVector(500, 2000, 100));
 	AreaTarget->Defend();
-	Source->ResolveArea(FVector(0, 2000, 0));
+	UmultiplayerAreaAbility::ResolveTargets(*Source, FVector(0, 2000, 0));
 	TestEqual(TEXT("Frontal guard does not suppress a real area's undirected damage"), AreaTarget->GetShield(), 0.f);
 	TestEqual(TEXT("The area's thirty-five damage is absorbed by its thirty-five shield"), AreaTarget->GetHealth(), 100.f);
 	return !HasAnyErrors();

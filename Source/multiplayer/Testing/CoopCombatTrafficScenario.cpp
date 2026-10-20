@@ -78,7 +78,7 @@ void UCoopNetTestDriver::TrafficServerTick(UWorld* World)
 			{
 				TrafficMaxScheduleDelay = FMath::Max(TrafficMaxScheduleDelay, Elapsed - TrafficProjectileSpawns * .5);
 				PrimaryPlayer(World)->SetControlRotation(FRotator(90, 0, 0));
-				if (!CombatPrimary->FireProjectile(25, 1600)) { Finish(false, TEXT("Real projectile spawn failed")); return; }
+				if (!AmultiplayerCombatProjectile::FireFromSkill(*CombatPrimary, 25, 1600)) { Finish(false, TEXT("Real projectile spawn failed")); return; }
 				++TrafficProjectileSpawns; // FireProjectile 仅在真实弹体完成生成后返回成功。
 			}
 			while (TrafficEnergyUpdates < 60 && Elapsed >= TrafficEnergyUpdates * .25)

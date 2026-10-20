@@ -54,6 +54,11 @@ class MULTIPLAYER_API AmultiplayerCombatProjectile : public AActor
 public:
 	AmultiplayerCombatProjectile();
 
+	// 仅服务器技能调用；先初始化来源和速度，再开启投射物碰撞。
+	// 普攻的服务器出手入口：检查真实弹源并延迟生成，不接受客户端起点、命中对象或伤害 RPC。
+	static bool FireFromSkill(AmultiplayerCombatCharacter& Source, float Damage, float Speed,
+		const FRotator* AimSnapshot = nullptr);
+
 	// 配合延迟生成，在 FinishSpawning 前设置来源、伤害和速度。
 	void Initialize(AmultiplayerCombatCharacter* Source, float Damage, float Speed, float MaxDistance = 0.f);
 

@@ -3,7 +3,6 @@
 #include "Combat/multiplayerCombatCharacter.h"
 
 #include "AbilitySystemComponent.h"
-#include "AbilitySystemGlobals.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatCoop.h"
 #include "Combat/multiplayerCombatTags.h"
@@ -25,8 +24,8 @@ namespace
 	}
 }
 
-// 只查询已有状态，不调用 CanActivateAbility；输入、HUD 和 GAS 资格检查共用这条无副作用路径。
-bool AmultiplayerCombatCharacter::CheckSkillAvailable(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons) const
+// 会话、生命和学习状态属于角色业务；此处不重复实现 GAS 的标签、资源或冷却校验。
+bool AmultiplayerCombatCharacter::CheckSkillBusinessRequirements(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons) const
 {
 	const auto Reject = [OutReasons](FGameplayTag Reason)
 	{
@@ -44,9 +43,6 @@ bool AmultiplayerCombatCharacter::CheckSkillAvailable(EMultiplayerCombatSkill Sk
 		return Reject(CombatTags::Failure_NotLearned);
 	const FGameplayAbilitySpec* Spec = AbilitySystem->FindAbilitySpecFromClass(Class);
 	if (!Spec) return Reject(CombatTags::Failure_NotReady);
-	// 读取实际授予能力的完整分类，派生能力增加的子标签也参与父子关系匹配。
-	if (!CastChecked<UmultiplayerCombatAbilitySystem>(AbilitySystem)
-		->CheckAbilityTagRelationships(Spec->Ability->GetAssetTags(), OutReasons)) return false;
 	if (Skill == EMultiplayerCombatSkill::Dash)
 	{
 		// MOVE_None 是实际 CMC 状态，不把非标签来源的移动锁遗漏在关系查询之外。
@@ -56,13 +52,30 @@ bool AmultiplayerCombatCharacter::CheckSkillAvailable(EMultiplayerCombatSkill Sk
 	if (Spec->IsActive())
 		return Reject(CombatTags::Failure_AlreadyActive);
 	// 不检查其他技能的 Active 标记：治疗/范围技能仍可按原规则取消普通攻击。
-	const UAbilitySystemGlobals& Globals = UAbilitySystemGlobals::Get();
-	if (!Globals.ShouldIgnoreCooldowns() && AbilitySystem->HasMatchingGameplayTag(SkillCooldownTag(Skill)))
-		return Reject(CombatTags::Failure_Cooldown);
-	if (!Globals.ShouldIgnoreCosts() && GetEnergy() < GetCombatConfig().GetSkill(Skill).Cost)
-		return Reject(CombatTags::Failure_InsufficientEnergy);
-	if (Skill == EMultiplayerCombatSkill::Heal && !GetHealTarget()) return Reject(CombatTags::Failure_NoHealTarget);
 	return true;
+}
+
+// 预览只读查询真实能力，包括派生技能的特殊资格；正式激活和提交仍会重新校验当时状态。
+bool AmultiplayerCombatCharacter::CheckSkillAvailable(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons) const
+{
+	if (!AbilitySystem || !AbilitySystem->AbilityActorInfo.IsValid())
+	{
+		if (OutReasons) OutReasons->AddTag(CombatTags::Failure_NotReady);
+		return false;
+	}
+	const auto Class = GetSkillAbilityClass(Skill);
+	const FGameplayAbilitySpec* Spec = Class ? AbilitySystem->FindAbilitySpecFromClass(Class) : nullptr;
+	if (!Spec || !Spec->Ability)
+	{
+		// 缺少 Spec 时仍区分未学习和连接未就绪，不把不可调用的能力当作普通冷却失败。
+		if (CheckSkillBusinessRequirements(Skill, OutReasons) && OutReasons)
+			OutReasons->AddTag(CombatTags::Failure_NotReady);
+		return false;
+	}
+	// 与 InternalTryActivateAbility 一样优先使用已有实例，避免遗漏实例上的技能特有资格。
+	const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
+	const UGameplayAbility* Ability = Instance ? Instance : Spec->Ability.Get();
+	return Ability->CanActivateAbility(Spec->Handle, AbilitySystem->AbilityActorInfo.Get(), nullptr, nullptr, OutReasons);
 }
 
 // 时间与消耗实时读取 GAS/配置；不另存一套可能与预测撤销脱节的失败状态或倒计时。
@@ -78,7 +91,7 @@ FText AmultiplayerCombatCharacter::GetSkillFailureText(EMultiplayerCombatSkill S
 	if (Reason == CombatTags::Failure_AlreadyActive) return FText::FromString(TEXT("本次未能释放：请求时该技能已在生效，不能重复释放"));
 	if (Reason == CombatTags::Failure_NotLearned) return FText::FromString(TEXT("技能尚未学习，按 B 打开技能菜单"));
 	if (Reason == CombatTags::Failure_InsufficientEnergy)
-		return FText::FromString(FString::Printf(TEXT("能量不足：需要 %.0f，当前 %.0f"), GetCombatConfig().GetSkill(Skill).Cost,
+		return FText::FromString(FString::Printf(TEXT("能量不足：需要 %.0f，当前 %.0f"), GetSkillRule(Skill).Cost,
 			AuthorityValue >= 0 ? AuthorityValue : GetEnergy()));
 	if (Reason == CombatTags::Failure_Cooldown)
 	{

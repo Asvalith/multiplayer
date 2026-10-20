@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Animation/AnimMontage.h"
@@ -350,7 +351,7 @@ bool FCoopCombatAreaBoundaryPreviewTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A different floor is not part of the displayed ground circle"), PreviewHas(Preview, Upstairs));
 	TestFalse(TEXT("Friendly inside circle is not a damage target"), PreviewHas(Preview, Friendly));
 	TestEqual(TEXT("Two components cannot duplicate a highlighted target"), Preview.AffectedTargets.Num(), 1);
-	Caster->ResolveArea(Preview.End);
+	UmultiplayerAreaAbility::ResolveTargets(*Caster, Preview.End);
 	TestEqual(TEXT("Inside target receives exactly one authoritative hit"), Inside->GetHealth(), 100.f - Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Amount);
 	for (auto* Unaffected : { static_cast<AmultiplayerCombatCharacter*>(Outside), static_cast<AmultiplayerCombatCharacter*>(Blocked),
 		static_cast<AmultiplayerCombatCharacter*>(Upstairs), Friendly })
@@ -420,7 +421,7 @@ bool FCoopCombatEnemyProjectilePitchTest::RunTest(const FString& Parameters)
 	const auto Preview = Source->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
 	const FVector Expected = (Preview.End - Preview.Origin).GetSafeNormal();
 	TestTrue(TEXT("Enemy trajectory retains meaningful upward aim"), Expected.Z > .3f);
-	if (!TestTrue(TEXT("Enemy production firing entry still accepts its three-dimensional snapshot"), Source->FireProjectile(25, 1600, &Aim))) return false;
+	if (!TestTrue(TEXT("Enemy production firing entry still accepts its three-dimensional snapshot"), AmultiplayerCombatProjectile::FireFromSkill(*Source, 25, 1600, &Aim))) return false;
 	AmultiplayerCombatProjectile* Projectile = nullptr;
 	for (TActorIterator<AmultiplayerCombatProjectile> It(Fixture.World); It; ++It) Projectile = *It;
 	if (!TestNotNull(TEXT("Enemy real projectile exists"), Projectile)) return false;
@@ -524,7 +525,7 @@ bool FCoopCombatProjectileWallPreviewTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Displayed horizontal trajectory stops at near wall regardless of camera pitch"), Preview.End.X < 115.f);
 		TestTrue(TEXT("Occluded enemy is not highlighted as a hit"), Preview.Target.Get() != Target);
 		TestTrue(TEXT("The wall-truncated preview still has no downward or upward component"), FMath::IsNearlyEqual(Preview.Origin.Z, Preview.End.Z, .01f));
-		Caster->FireProjectile(25, 1600, &Aim);
+		AmultiplayerCombatProjectile::FireFromSkill(*Caster, 25, 1600, &Aim);
 		Fixture.Advance(.6f);
 		TestEqual(TEXT("Authoritative projectile cannot damage through the wall"), Target->GetHealth(), 100.f);
 	}
@@ -587,7 +588,7 @@ bool FCoopCombatReceivedEffectsFacingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Ordinary damage does not redirect the hostile toward the caster camera"),
 		EnemyFacing.Equals(Enemy->GetActorRotation(), .001f));
 	const FVector AreaCenter = Enemy->GetActorLocation() - FVector::UpVector * Enemy->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	Caster->ResolveArea(AreaCenter);
+	UmultiplayerAreaAbility::ResolveTargets(*Caster, AreaCenter);
 	TestEqual(TEXT("Real area settlement applies its configured damage"), Enemy->GetHealth(), 90.f - Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Amount);
 	TestTrue(TEXT("The area victim receives actual stun"), Enemy->IsStunned());
 	TestTrue(TEXT("Area damage and control leave the hostile facing unchanged"), EnemyFacing.Equals(Enemy->GetActorRotation(), .001f));
@@ -813,7 +814,7 @@ bool FCoopCombatProjectileConfiguredRangeTest::RunTest(const FString& Parameters
 		if (!bInside)
 			TestTrue(TEXT("Third-person camera setback does not shorten unobstructed nominal range"),
 				FMath::IsNearlyEqual(FVector::Distance(Preview.Origin, Preview.End), 200.f, .1f));
-		Caster->FireProjectile(25, Config->ProjectileSpeed);
+		AmultiplayerCombatProjectile::FireFromSkill(*Caster, 25, Config->ProjectileSpeed);
 		Fixture.Advance(1.f);
 		TestEqual(TEXT("Only a target inside configured range takes real swept projectile damage"), Target->GetHealth(), bInside ? 75.f : 100.f);
 	}
@@ -853,6 +854,82 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaReleaseParticleTest, "Multiplaye
 bool FCoopCombatAreaReleaseParticleTest::RunTest(const FString& Parameters)
 {
 	return RunAreaInputCase(*this, EAreaInputCase::Release, true);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaCandidateBoundaryTest, "Multiplayer.Combat.Targeting.AreaCandidateBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 宽阶段不提前裁决命中；预览和结算使用同一完整过滤，但结算在应用前才查询遮挡。
+bool FCoopCombatAreaCandidateBoundaryTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture;
+	auto* Caster = Fixture.Player();
+	const FVector Center(600, 0, 0);
+	constexpr float Radius = 200.f;
+	auto* Visible = Fixture.Enemy(Center + FVector(0, 130, 100));
+	auto* Occluded = Fixture.Enemy(Center + FVector(0, -130, 100));
+	auto* Corner = Fixture.Enemy(Center + FVector(180, 180, 100));
+	auto* Ally = Fixture.Player(Center + FVector(-100, 0, 100));
+	if (!TestNotNull(TEXT("Caster exists"), Caster) || !TestNotNull(TEXT("Visible target exists"), Visible)
+		|| !TestNotNull(TEXT("Occluded target exists"), Occluded) || !TestNotNull(TEXT("Corner target exists"), Corner)
+		|| !TestNotNull(TEXT("Ally exists"), Ally)) return false;
+	Fixture.Box(Center + FVector(0, -65, 100), FVector(45, 8, 100));
+	const auto Candidates = CombatTargeting::CollectAreaCandidates(*Caster, Center, Radius);
+	TestTrue(TEXT("Broad phase retains the obstructed candidate"), Candidates.Contains(Occluded));
+	TestTrue(TEXT("Broad phase retains box corners outside the final cylinder"), Candidates.Contains(Corner));
+	TestTrue(TEXT("Broad phase does not decide allegiance"), Candidates.Contains(Ally));
+	const auto Targets = CombatTargeting::CollectAreaTargets(*Caster, Center, Radius);
+	TestEqual(TEXT("Full preview retains only the visible hostile inside the cylinder"), Targets.Num(), 1);
+	TestTrue(TEXT("Full preview selects the visible target"), Targets.Contains(Visible));
+	UmultiplayerAreaAbility::ResolveTargets(*Caster, Center);
+	TestTrue(TEXT("The real settlement damages the visible target"), Visible->GetHealth() < Visible->GetMaxHealth());
+	TestEqual(TEXT("Settlement retains its wall check"), Occluded->GetHealth(), Occluded->GetMaxHealth());
+	TestEqual(TEXT("Settlement never harms an ally"), Ally->GetHealth(), Ally->GetMaxHealth());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaRuleSnapshotTest, "Multiplayer.Combat.Targeting.AreaRuleSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 属性通知同步提升技能等级时，本次范围结算仍使用同一份规则；下一次结算才读取新等级。
+bool FCoopCombatAreaRuleSnapshotTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture;
+	auto* Caster = Fixture.Player();
+	const FVector Center(600, 0, 0);
+	auto* First = Fixture.Enemy(Center + FVector(0, -100, 100));
+	auto* Second = Fixture.Enemy(Center + FVector(0, 100, 100));
+	if (!TestNotNull(TEXT("Caster exists"), Caster) || !TestNotNull(TEXT("First target exists"), First)
+		|| !TestNotNull(TEXT("Second target exists"), Second)) return false;
+	const auto Rule = Caster->GetSkillRule(EMultiplayerCombatSkill::Area);
+	bool bLevelChanged = false;
+	TArray<TPair<UAbilitySystemComponent*, FDelegateHandle>> Subscriptions;
+	ON_SCOPE_EXIT
+	{
+		for (const auto& Subscription : Subscriptions)
+			Subscription.Key->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetHealthAttribute())
+				.Remove(Subscription.Value);
+	};
+	for (auto* Target : {First, Second})
+	{
+		auto* TargetASC = Target->GetAbilitySystemComponent();
+		const FDelegateHandle Handle = TargetASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetHealthAttribute())
+			.AddLambda([Caster, &bLevelChanged](const FOnAttributeChangeData& Change)
+			{
+				if (bLevelChanged || Change.NewValue >= Change.OldValue) return;
+				bLevelChanged = true;
+				auto* ASC = Caster->GetAbilitySystemComponent();
+				auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+				if (Spec) { Spec->Level += 5; ASC->MarkAbilitySpecDirty(*Spec); }
+			});
+		Subscriptions.Emplace(TargetASC, Handle);
+	}
+	UmultiplayerAreaAbility::ResolveTargets(*Caster, Center);
+	TestTrue(TEXT("A real damage callback changed the ability level during settlement"), bLevelChanged);
+	TestTrue(TEXT("Later skill queries see the upgraded rule"), Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Amount > Rule.Amount);
+	TestEqual(TEXT("First target uses the release snapshot"), First->GetHealth(), First->GetMaxHealth() - Rule.Amount);
+	TestEqual(TEXT("Second target uses the same release snapshot"), Second->GetHealth(), Second->GetMaxHealth() - Rule.Amount);
+	return true;
 }
 
 #endif

@@ -398,7 +398,7 @@ bool FCoopCombatProjectileSweepBoundariesTest::RunTest(const FString& Parameters
 			{
 				if (Change.NewValue < Change.OldValue) ++DamageNotifications;
 			});
-		TestTrue(*FString::Printf(TEXT("%s launches through the production entry"), Case.Name), Caster->FireProjectile(25, 8000));
+		TestTrue(*FString::Printf(TEXT("%s launches through the production entry"), Case.Name), AmultiplayerCombatProjectile::FireFromSkill(*Caster, 25, 8000));
 		++GFrameCounter;
 		Fixture.World->Tick(LEVELTICK_All, .15f);
 		const bool bBlocked = Case.WallX > 0 && Case.WallX < Case.NearX;
@@ -444,7 +444,7 @@ bool FCoopCombatProjectileCloseRangeTest::RunTest(const FString& Parameters)
 					bHasHitContext = true;
 				}
 			});
-		TestTrue(*FString::Printf(TEXT("%.0fcm enemy does not become a rejected scene obstruction"), Distance), Caster->FireProjectile(25, 8000));
+		TestTrue(*FString::Printf(TEXT("%.0fcm enemy does not become a rejected scene obstruction"), Distance), AmultiplayerCombatProjectile::FireFromSkill(*Caster, 25, 8000));
 		Fixture.Advance(.20f);
 		TestEqual(*FString::Printf(TEXT("%.0fcm enemy receives one hit, including an initial overlap"), Distance), Target->GetHealth(), 75.f);
 		TestTrue(TEXT("Real damage GE carries a hit context"), bHasHitContext);

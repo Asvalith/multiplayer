@@ -13,12 +13,12 @@
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatMobility.h"
+#include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 #include "GameplayCueManager.h"
-#include "TimerManager.h"
 
 namespace
 {
@@ -54,130 +54,6 @@ namespace
 	}
 }
 
-// 标签只描述资格；目标、距离、遮挡等实时业务仍由各能力在接纳/生效阶段分别复核。
-bool UmultiplayerCombatAbilitySystem::CheckAbilityTagRelationships(const FGameplayTagContainer& AbilityTags,
-	FGameplayTagContainer* Reasons) const
-{
-	const auto* Character = Cast<AmultiplayerCombatCharacter>(GetAvatarActor());
-	if (!Character) return true;
-	FGameplayTagContainer Required, Blocked, Owned;
-	Character->GetCombatConfig().GetAbilityActivationTagRequirements(AbilityTags, Required, Blocked);
-	GetOwnedGameplayTags(Owned);
-	const auto Reject = [Reasons](FGameplayTag Reason)
-	{
-		if (Reasons) Reasons->AddTag(Reason);
-		return false;
-	};
-	const FGameplayTagContainer BlockingStates = Owned.Filter(Blocked);
-	if (!BlockingStates.IsEmpty())
-	{
-		// 稳定优先级让本地预览与服务器拒绝说明一致；不另存一份状态 bool。
-		const TPair<FGameplayTag, FGameplayTag> Failures[] = {
-			{CombatTags::State_Downed, CombatTags::Failure_Downed}, {CombatTags::State_Dead, CombatTags::Failure_Dead},
-			{CombatTags::State_Rescuing, CombatTags::Failure_Rescuing}, {CombatTags::State_Stunned, CombatTags::Failure_Stunned},
-			{CombatTags::State_Casting, CombatTags::Failure_Casting}, {CombatTags::State_Dashing, CombatTags::Failure_Dashing},
-			{CombatTags::State_Defending, CombatTags::Failure_AlreadyActive},
-			{CombatTags::State_MovementBlocked, CombatTags::Failure_MovementBlocked}, {CombatTags::State_Rooted, CombatTags::Failure_MovementBlocked}};
-		for (const auto& Failure : Failures)
-			if (BlockingStates.HasTag(Failure.Key)) return Reject(Failure.Value);
-		return Reject(CombatTags::Failure_Conflict);
-	}
-	if (!Owned.HasAll(Required)) return Reject(CombatTags::Failure_Requirements);
-	return !AreAbilityTagsBlocked(AbilityTags) || Reject(CombatTags::Failure_Conflict);
-}
-
-// 借鉴 Lyra：把中央关系叠加到原生/蓝图参数，而非覆盖它们或自行维护活动能力列表。
-void UmultiplayerCombatAbilitySystem::ApplyAbilityBlockAndCancelTags(const FGameplayTagContainer& AbilityTags,
-	UGameplayAbility* RequestingAbility, bool bEnableBlockTags, const FGameplayTagContainer& BlockTags,
-	bool bExecuteCancelTags, const FGameplayTagContainer& CancelTags)
-{
-	FGameplayTagContainer ExpandedBlock = BlockTags, ExpandedCancel = CancelTags;
-	if (const auto* Character = Cast<AmultiplayerCombatCharacter>(GetAvatarActor()))
-		Character->GetCombatConfig().GetAbilityBlockAndCancelTags(AbilityTags, ExpandedBlock, ExpandedCancel);
-	Super::ApplyAbilityBlockAndCancelTags(AbilityTags, RequestingAbility, bEnableBlockTags, ExpandedBlock,
-		bExecuteCancelTags, ExpandedCancel);
-}
-
-// 原生拒绝 RPC 只携带预测键；业务原因另发给同一拥有者，不把提示广播给旁观客户端。
-void UmultiplayerCombatAbilitySystem::NotifyAbilityFailed(FGameplayAbilitySpecHandle Handle,
-	UGameplayAbility* Ability, const FGameplayTagContainer& FailureReason)
-{
-	Super::NotifyAbilityFailed(Handle, Ability, FailureReason);
-	auto* Character = Cast<AmultiplayerCombatCharacter>(GetAvatarActor());
-	const auto* CombatAbility = Cast<UmultiplayerCombatAbility>(Ability);
-	if (!Character || !CombatAbility || !IsOwnerActorAuthoritative() || Character->IsLocallyControlled()
-		|| !Character->GetNetConnection()) return;
-	FGameplayTag Reason = CombatTags::Failure_Rejected;
-	for (const FGameplayTag& Tag : FailureReason)
-	{
-		if (Tag.MatchesTag(FGameplayTag::RequestGameplayTag(TEXT("Failure.Combat"))))
-		{
-			Reason = Tag;
-			break;
-		}
-	}
-	float AuthorityValue = -1.f;
-	if (Reason == CombatTags::Failure_InsufficientEnergy) AuthorityValue = Character->GetEnergy();
-	else if (Reason == CombatTags::Failure_Cooldown)
-	{
-		switch (CombatAbility->GetCombatSkill())
-		{
-		case EMultiplayerCombatSkill::Attack: AuthorityValue = Character->GetAttackCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Defend: AuthorityValue = Character->GetDefenseCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Heal: AuthorityValue = Character->GetHealCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Area: AuthorityValue = Character->GetAreaCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Dash: AuthorityValue = Character->GetDashCooldownRemaining(); break;
-		}
-	}
-	Character->ClientSkillRejected(CombatAbility->GetCombatSkill(), Reason, AuthorityValue);
-}
-
-void UmultiplayerCombatAbilitySystem::InternalServerTryActivateAbility(FGameplayAbilitySpecHandle Handle,
-	bool InputPressed, const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData)
-{
-	const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle);
-	const auto* CombatAbility = Spec ? Cast<UmultiplayerCombatAbility>(Spec->Ability) : nullptr;
-	// 阻止远程调用普通激活 RPC 绕过瞄准数据检查；不改变其他技能的原生激活流程。
-	if (!TriggerEventData && CombatAbility && CombatTags::GetSkillTags(CombatAbility->GetCombatSkill()).Event.IsValid())
-	{
-		if (auto* Character = Cast<AmultiplayerCombatCharacter>(GetAvatarActor()))
-			Character->ClientSkillRejected(CombatAbility->GetCombatSkill(), CombatTags::Failure_InvalidAim);
-		ClientActivateAbilityFailed(Handle, PredictionKey.Current);
-		return;
-	}
-	Super::InternalServerTryActivateAbility(Handle, InputPressed, PredictionKey, TriggerEventData);
-}
-
-void UmultiplayerCombatAbilitySystem::EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey)
-{
-	if (IsOwnerActorAuthoritative())
-	{
-		if (GetActiveGameplayEffect(ServerHandle)) RemoveActiveGameplayEffect(ServerHandle);
-		return;
-	}
-	if (!AbilityActorInfo.IsValid() || !AbilityActorInfo->IsLocallyControlled() || !ActivationKey.IsLocalClientKey()) return;
-	const auto Query = FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(CombatTags::State_Casting));
-	for (auto Handle : GetActiveEffects(Query))
-	{
-		const FActiveGameplayEffect* Effect = GetActiveGameplayEffect(Handle);
-		// 确认接管后句柄会变化，但同一次施法的预测键不变。不得删除别次施法或任何冷却。
-		if (Effect && Effect->PredictionKey == ActivationKey
-			&& Effect->Spec.Def->GetClass() == UmultiplayerCastingEffect::StaticClass())
-			RemoveActiveGameplayEffect_AllowClientRemoval(Handle);
-	}
-}
-
-// 仅权威重连使用；修改真正持有的周期句柄，移除 GE 时仍能取消同一个定时器。
-void UmultiplayerCombatAbilitySystem::SetPeriodicEffectDelay(FActiveGameplayEffectHandle Handle, float FirstDelay)
-{
-	if (!IsOwnerActorAuthoritative()) return;
-	FActiveGameplayEffect* Effect = ActiveGameplayEffects.GetActiveGameplayEffect(Handle);
-	if (!Effect || Effect->Spec.GetPeriod() <= 0.f) return;
-	const FTimerDelegate Callback = FTimerDelegate::CreateWeakLambda(this, [this, Handle] { ExecutePeriodicEffect(Handle); });
-	GetWorld()->GetTimerManager().SetTimer(Effect->PeriodHandle, Callback, Effect->Spec.GetPeriod(), true,
-		FMath::Max(FirstDelay, UE_SMALL_NUMBER));
-}
-
 // 预测客户端的消耗、冷却和表现；伤害、发弹及治疗结果仍只在服务器提交。
 UmultiplayerCombatAbility::UmultiplayerCombatAbility()
 {
@@ -195,33 +71,50 @@ bool UmultiplayerCombatAbility::CheckCost(FGameplayAbilitySpecHandle Handle, con
 	FGameplayTagContainer* OptionalRelevantTags) const
 {
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
-	const bool bEnough = Character && Character->GetEnergy() >= Character->GetCombatConfig().GetSkill(Skill).Cost;
+	// 原生 CanActivateAbility/CommitCheck 负责 IgnoreCosts；这里仅校验当前有效规则。
+	const bool bEnough = Character && Character->GetEnergy() >= Character->GetSkillRule(Skill).Cost;
 	if (!bEnough && OptionalRelevantTags) OptionalRelevantTags->AddTag(CombatTags::Failure_InsufficientEnergy);
 	return bEnough;
+}
+
+bool UmultiplayerCombatAbility::CheckCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	FGameplayTagContainer* OptionalRelevantTags) const
+{
+	const bool bReady = Super::CheckCooldown(Handle, ActorInfo, OptionalRelevantTags);
+	// 保留原生冷却标签查询，只把真实失败映射为项目提示，不在角色里再维护一套判断。
+	if (!bReady && OptionalRelevantTags) OptionalRelevantTags->AddTag(CombatTags::Failure_Cooldown);
+	return bReady;
 }
 
 void UmultiplayerCombatAbility::ApplyCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo) const
 {
-	if (UAbilitySystemGlobals::Get().ShouldIgnoreCosts()) return;
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
-	if (!Character) return;
-	const float Cost = Character->GetCombatConfig().GetSkill(Skill).Cost;
-	if (!CostGameplayEffectClass || Cost <= 0) return;
+	if (Character) ApplyRuleCost(Handle, ActorInfo, ActivationInfo, Character->GetSkillRule(Skill));
+}
+
+void UmultiplayerCombatAbility::ApplyRuleCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const
+{
+	if (UAbilitySystemGlobals::Get().ShouldIgnoreCosts() || !CostGameplayEffectClass || Rule.Cost <= 0) return;
 	FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(Handle, ActorInfo, ActivationInfo, CostGameplayEffectClass, 1);
-	Spec.Data->SetSetByCallerMagnitude(CombatTags::Data_Cost, -Cost);
+	Spec.Data->SetSetByCallerMagnitude(CombatTags::Data_Cost, -Rule.Cost);
 	ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
 }
 
 void UmultiplayerCombatAbility::ApplyCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo) const
 {
-	if (UAbilitySystemGlobals::Get().ShouldIgnoreCooldowns()) return;
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
-	if (!Character) return;
-	const float Cooldown = Character->GetSkillRule(Skill).Cooldown;
+	if (Character) ApplyRuleCooldown(Handle, ActorInfo, ActivationInfo, Character->GetSkillRule(Skill));
+}
+
+void UmultiplayerCombatAbility::ApplyRuleCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const
+{
+	if (UAbilitySystemGlobals::Get().ShouldIgnoreCooldowns()) return;
 	FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(Handle, ActorInfo, ActivationInfo, CooldownGameplayEffectClass, 1);
-	Spec.Data->SetDuration(Cooldown, true);
+	Spec.Data->SetDuration(Rule.Cooldown, true);
 	ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
 }
 
@@ -229,6 +122,11 @@ void UmultiplayerCombatAbility::CommitExecute(FGameplayAbilitySpecHandle Handle,
 	FGameplayAbilityActivationInfo ActivationInfo)
 {
 	const uint32 Revision = ActivationRevision;
+	const auto* CommitCharacter = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
+	if (!CommitCharacter) return;
+	// 仅锁定本次提交的成本/CD；扣费通知同步修改等级时，冷却不能改读成另一份规则。
+	// 伤害、目标和出手合法性仍由具体技能在生效阶段决定，不宣称全量技能快照。
+	const FmultiplayerCombatSkillRule Rule = CommitCharacter->GetSkillRule(Skill);
 	if (!ActorInfo->IsNetAuthority())
 	{
 		// 服务器拒绝不走本地 CanActivate 失败通知；只补提示，不另写属性回滚。
@@ -248,10 +146,9 @@ void UmultiplayerCombatAbility::CommitExecute(FGameplayAbilitySpecHandle Handle,
 			});
 	}
 	// 先扣资源再通知冷却变化，阻止冷却监听回调用同一份旧余额嵌套施放另一技能。
-	ApplyCost(Handle, ActorInfo, ActivationInfo);
-	const auto* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
-	if (Revision == ActivationRevision && IsActive() && Character && Character->IsCombatReady())
-		ApplyCooldown(Handle, ActorInfo, ActivationInfo);
+	ApplyRuleCost(Handle, ActorInfo, ActivationInfo, Rule);
+	if (Revision == ActivationRevision && IsActive() && IsValid(CommitCharacter) && CommitCharacter->IsCombatReady())
+		ApplyRuleCooldown(Handle, ActorInfo, ActivationInfo, Rule);
 }
 
 // 连接接纳与角色存活是所有技能共用的业务边界；资源、冷却与阻断标签继续由 GAS 校验。
@@ -259,8 +156,8 @@ bool UmultiplayerCombatAbility::CanActivateAbility(const FGameplayAbilitySpecHan
 	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags,
 	const FGameplayTagContainer* TargetTags, FGameplayTagContainer* OptionalRelevantTags) const
 {
-	const AmultiplayerCombatCharacter* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
-	return Character != nullptr && Character->CheckSkillAvailable(Skill, OptionalRelevantTags)
+	const AmultiplayerCombatCharacter* Character = ActorInfo ? Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get()) : nullptr;
+	return Character != nullptr && Character->CheckSkillBusinessRequirements(Skill, OptionalRelevantTags)
 		&& Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags);
 }
 
@@ -417,7 +314,8 @@ void UmultiplayerAttackAbility::ReleaseProjectile()
 	if (CurrentActorInfo->IsNetAuthority())
 	{
 		const auto Launch = Character->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &AimRotation);
-		const bool bFired = Character->FireProjectile(GetRule().Amount, Character->GetCombatConfig().ProjectileSpeed, &AimRotation);
+		const bool bFired = AmultiplayerCombatProjectile::FireFromSkill(*Character, GetRule().Amount,
+			Character->GetCombatConfig().ProjectileSpeed, &AimRotation);
 		if (bFired && Revision == ActivationRevision && IsActive() && IsValid(Character))
 		{
 			FGameplayCueParameters Feedback(CurrentActorInfo->AbilitySystemComponent->MakeEffectContext());
@@ -691,8 +589,18 @@ UmultiplayerHealAbility::UmultiplayerHealAbility()
 	CooldownGameplayEffectClass = UmultiplayerHealCooldownEffect::StaticClass();
 }
 
-// 无合法目标时在服务器接纳之前拒绝，让 GAS 对同一 PredictionKey 撤销本地消耗与冷却。
-// 基类共用资格查询已检查治疗目标，不在派生 CanActivate 中再扫描整场角色和遮挡。
+// 治疗特有的目标资格留在治疗能力；HUD 和正式激活都通过同一个虚函数查询。
+// 生效前仍需重新选取/验证目标，不能把无副作用准入查询当作目标锁定。
+bool UmultiplayerHealAbility::CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags,
+	const FGameplayTagContainer* TargetTags, FGameplayTagContainer* OptionalRelevantTags) const
+{
+	if (!Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags)) return false;
+	const auto* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
+	if (Character->GetHealTarget()) return true;
+	if (OptionalRelevantTags) OptionalRelevantTags->AddTag(CombatTags::Failure_NoHealTarget);
+	return false;
+}
 
 // 服务器选目标和检查遮挡；客户端不能提交任意治疗对象或回血数值。
 void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle,
@@ -799,6 +707,41 @@ UmultiplayerAreaAbility::UmultiplayerAreaAbility()
 	bServerRespectsRemoteAbilityCancellation = true;
 }
 
+// 一次释放只遍历查询到的唯一角色；友军、死亡、越界或隔墙目标都不参与结算。
+void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Character, const FVector& Center)
+{
+	if (!Character.HasAuthority() || !Character.IsCombatReady() || Character.IsStunned()) return;
+	const auto& Config = Character.GetCombatConfig();
+	// 一次范围结算固定本次规则；命中回调可以改变后续技能等级，但不能让同一轮目标承受不同数值。
+	const auto Rule = Character.GetSkillRule(EMultiplayerCombatSkill::Area);
+	const float Radius = Config.AreaRadius;
+	const float RootDuration = Config.AreaRootDuration;
+	const float BurningDamage = Config.BurningDamagePerTick;
+	const float BurningDuration = Config.BurningDuration;
+	const auto Targets = CombatTargeting::CollectAreaCandidates(Character, Center, Radius);
+	const FVector NoDirection = FVector::ZeroVector;
+	// 快照与去重先完成，结算回调中即使销毁其他目标也不会访问悬空指针。
+	for (auto Weak : Targets)
+	{
+		auto* Target = Weak.Get();
+		// 候选收集不做射线；应用前检查一次完整合法性，前一目标的回调改动也能及时生效。
+		if (!Target || !CombatTargeting::CanAffectArea(Character, *Target, Center, Radius)) continue;
+		Character.ApplyCombatDamage(Target, Rule.Amount, nullptr, &NoDirection);
+		if (IsValid(Target) && Target->IsCombatReady()) Target->ApplyStun(Rule.Duration);
+		// 持续效果仍由本次服务器技能施加；只扩展目标效果，不让 Cue 或客户端再执行伤害。
+		if (IsValid(Target) && Target->IsCombatReady())
+		{
+			if (RootDuration > 0) Target->ApplyRoot(RootDuration);
+			Character.ApplyBurning(Target, BurningDamage, BurningDuration);
+		}
+		if (!Character.IsCombatReady() || Character.IsStunned()) break;
+	}
+	FGameplayCueParameters Feedback;
+	Feedback.Location = Center;
+	Feedback.RawMagnitude = Radius;
+	Character.GetAbilitySystemComponent()->ExecuteGameplayCue(CombatTags::Cue_Area, Feedback);
+}
+
 void UmultiplayerAreaAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData)
 {
@@ -884,7 +827,7 @@ void UmultiplayerAreaAbility::ReleaseArea()
 	if (Revision != ActivationRevision || !IsActive()) return;
 	// 结算回调可能复用技能实例，本次已经释放的落点不能随成员变量一起改变。
 	const FVector ReleaseLocation = TargetLocation;
-	if (CurrentActorInfo->IsNetAuthority()) Character->ResolveArea(ReleaseLocation);
+	if (CurrentActorInfo->IsNetAuthority()) ResolveTargets(*Character, ReleaseLocation);
 	if (Revision != ActivationRevision || !IsActive()) return;
 	auto* Delay = UAbilityTask_WaitDelay::WaitDelay(this, GetRule().Recovery);
 	Delay->OnFinish.AddDynamic(this, &ThisClass::FinishRecovery);

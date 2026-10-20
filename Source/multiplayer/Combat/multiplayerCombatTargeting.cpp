@@ -80,7 +80,7 @@ bool CombatTargeting::CanAffectArea(const AmultiplayerCombatCharacter& Source,
 		|| Hit.GetActor() == &Target;
 }
 
-TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectAreaTargets(
+TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectAreaCandidates(
 	const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius)
 {
 	TArray<FOverlapResult> Hits;
@@ -89,8 +89,20 @@ TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectArea
 		FCollisionQueryParams(SCENE_QUERY_STAT(CombatAreaCandidates), false, &Source));
 	TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> Targets;
 	for (const FOverlapResult& Hit : Hits)
-		if (auto* Target = Cast<AmultiplayerCombatCharacter>(Hit.GetActor()); Target && CanAffectArea(Source, *Target, Center, Radius))
+		if (auto* Target = Cast<AmultiplayerCombatCharacter>(Hit.GetActor()))
 			Targets.AddUnique(Target);
+	return Targets;
+}
+
+TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectAreaTargets(
+	const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius)
+{
+	auto Targets = CollectAreaCandidates(Source, Center, Radius);
+	Targets.RemoveAll([&](const auto& Weak)
+	{
+		const auto* Target = Weak.Get();
+		return !Target || !CanAffectArea(Source, *Target, Center, Radius);
+	});
 	return Targets;
 }
 

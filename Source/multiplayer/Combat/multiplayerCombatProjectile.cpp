@@ -68,6 +68,35 @@ AmultiplayerCombatProjectile::AmultiplayerCombatProjectile()
 	ProjectileMovement->PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
+// 网络技能固定本次输入方向，服务器 AI 则读取本地控制朝向；不接受客户端提供的伤害、起点或命中对象。
+bool AmultiplayerCombatProjectile::FireFromSkill(AmultiplayerCombatCharacter& Source, float Damage, float Speed,
+	const FRotator* AimSnapshot)
+{
+	if (!Source.HasAuthority() || !Source.IsCombatReady() || !FMath::IsFinite(Damage) || !FMath::IsFinite(Speed)) return false;
+	UWorld* World = Source.GetWorld();
+	const FRotator Aim = AimSnapshot ? *AimSnapshot : Source.GetControlRotation();
+	if (Aim.ContainsNaN()) return false;
+	const FVector MuzzleStart = Source.GetCombatMuzzleLocation(&Aim);
+	// 不能把发射点直接放到墙后，否则贴墙时会绕过投射物的碰撞检测。
+	// 从真实起点开启扫掠，不再跳过前 75cm 的敌人；出生在实体内部时才拒绝，友军与触发盒不阻挡。
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(CoopProjectileMuzzle), false, &Source);
+	FCollisionResponseParams SceneOnly(ECR_Ignore);
+	SceneOnly.CollisionResponse.SetResponse(ECC_WorldStatic, ECR_Block);
+	SceneOnly.CollisionResponse.SetResponse(ECC_WorldDynamic, ECR_Block);
+	if (World->OverlapBlockingTestByChannel(MuzzleStart, FQuat::Identity, ECC_WorldDynamic,
+		FCollisionShape::MakeSphere(CombatTargeting::ProjectileRadius), Query, SceneOnly)) return false;
+	// 预览与真实弹道共用查询；玩家前射、AI 三维瞄准的规则不在生成器里再复制。
+	const auto Preview = Source.GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
+	const FRotator LaunchRotation = (Preview.End - MuzzleStart).Rotation();
+	const FTransform Transform(LaunchRotation, MuzzleStart);
+	AmultiplayerCombatProjectile* Projectile = World->SpawnActorDeferred<AmultiplayerCombatProjectile>(
+		StaticClass(), Transform, &Source, &Source, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!Projectile) return false;
+	Projectile->Initialize(&Source, Damage, Speed, Source.GetSkillRule(EMultiplayerCombatSkill::Attack).Range);
+	Projectile->FinishSpawning(Transform);
+	return true;
+}
+
 // 只在服务器初始化真实投射物，忽略来源角色避免在枪口附近重复重叠。
 void AmultiplayerCombatProjectile::Initialize(AmultiplayerCombatCharacter* Source, float Damage, float Speed, float MaxDistance)
 {

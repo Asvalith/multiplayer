@@ -143,6 +143,9 @@ public:
 	virtual FVector GetCombatViewOrigin(const FRotator& Aim) const;
 	FVector GetCombatMuzzleLocation(const FRotator* AimSnapshot = nullptr) const;
 	AmultiplayerCombatCharacter* GetHealTarget() const;
+	// 只检查角色自己的业务资格；标签关系、成本和冷却仍由能力的 GAS 准入负责。
+	bool CheckSkillBusinessRequirements(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons = nullptr) const;
+	// 输入和 HUD 查询实际已授予能力的 CanActivateAbility，不另维护一套完整准入规则。
 	bool CheckSkillAvailable(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons = nullptr) const;
 	FText GetSkillFailureReason(EMultiplayerCombatSkill Skill) const;
 	FText GetSkillFailureText(EMultiplayerCombatSkill Skill, FGameplayTag Reason, float AuthorityValue = -1.f) const;
@@ -192,11 +195,8 @@ public:
 	FActiveGameplayEffectHandle ApplyBurning(AmultiplayerCombatCharacter* Target, float DamagePerTick, float Duration);
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Combat") void GrantShield(float Amount);
 	FVector GetAreaTarget(FVector* OutGroundNormal = nullptr, const FRotator* AimSnapshot = nullptr) const;
-	void ResolveArea(const FVector& Center);
 	void SetCastTiming(float Duration);
 
-	// 仅服务器技能调用；先初始化来源和速度，再开启投射物碰撞。
-	bool FireProjectile(float Damage, float Speed, const FRotator* AimSnapshot = nullptr);
 	// 受击只是表现，不取消技能或结算伤害；已有施法/死亡动作优先。
 	void PlayImpactReaction();
 

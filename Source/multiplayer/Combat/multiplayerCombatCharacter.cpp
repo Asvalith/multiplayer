@@ -8,7 +8,6 @@
 #include "Animation/AnimMontage.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatAttributes.h"
-#include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatCoop.h"
@@ -624,61 +623,6 @@ FVector AmultiplayerCombatCharacter::GetAreaTarget(FVector* OutGroundNormal, con
 	const auto Preview = GetSkillTargetPreview(EMultiplayerCombatSkill::Area, AimSnapshot);
 	if (OutGroundNormal) *OutGroundNormal = Preview.Normal;
 	return Preview.End;
-}
-
-// 一次释放只遍历查询到的唯一角色；友军、死亡、越界或隔墙目标都不参与结算。
-void AmultiplayerCombatCharacter::ResolveArea(const FVector& Center)
-{
-	if (!HasAuthority() || !IsCombatReady() || IsStunned()) return;
-	const auto Targets = CombatTargeting::CollectAreaTargets(*this, Center, GetCombatConfig().AreaRadius);
-	const FVector NoDirection = FVector::ZeroVector;
-	// 快照与去重先完成，结算回调中即使销毁其他目标也不会访问悬空指针。
-	for (auto Weak : Targets)
-	{
-		auto* Target = Weak.Get();
-		if (!Target || !CombatTargeting::CanAffectArea(*this, *Target, Center, GetCombatConfig().AreaRadius)) continue;
-		ApplyCombatDamage(Target, GetSkillRule(EMultiplayerCombatSkill::Area).Amount, nullptr, &NoDirection);
-		if (IsValid(Target) && Target->IsCombatReady()) Target->ApplyStun(GetSkillRule(EMultiplayerCombatSkill::Area).Duration);
-		// 持续效果仍由本次服务器技能施加；只扩展目标效果，不让 Cue 或客户端再执行伤害。
-		if (IsValid(Target) && Target->IsCombatReady())
-		{
-			if (GetCombatConfig().AreaRootDuration > 0) Target->ApplyRoot(GetCombatConfig().AreaRootDuration);
-			ApplyBurning(Target, GetCombatConfig().BurningDamagePerTick, GetCombatConfig().BurningDuration);
-		}
-		if (!IsCombatReady() || IsStunned()) break;
-	}
-	FGameplayCueParameters Feedback;
-	Feedback.Location = Center;
-	Feedback.RawMagnitude = GetCombatConfig().AreaRadius;
-	AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Area, Feedback);
-}
-
-// 网络技能固定本次输入方向，服务器 AI 则读取本地控制朝向；不接受客户端提供的伤害、起点或命中对象。
-bool AmultiplayerCombatCharacter::FireProjectile(float Damage, float Speed, const FRotator* AimSnapshot)
-{
-	if (!HasAuthority() || !IsCombatReady() || !FMath::IsFinite(Damage) || !FMath::IsFinite(Speed)) return false;
-	UWorld* World = GetWorld();
-	const FRotator Aim = AimSnapshot ? *AimSnapshot : GetControlRotation();
-	if (Aim.ContainsNaN()) return false;
-	const FVector MuzzleStart = GetCombatMuzzleLocation(&Aim);
-	// 不能把发射点直接放到墙后，否则贴墙时会绕过投射物的碰撞检测。
-	// 从真实起点开启扫掠，不再跳过前 75cm 的敌人；出生在实体内部时才拒绝，友军与触发盒不阻挡。
-	FCollisionQueryParams Query(SCENE_QUERY_STAT(CoopProjectileMuzzle), false, this);
-	FCollisionResponseParams SceneOnly(ECR_Ignore);
-	SceneOnly.CollisionResponse.SetResponse(ECC_WorldStatic, ECR_Block);
-	SceneOnly.CollisionResponse.SetResponse(ECC_WorldDynamic, ECR_Block);
-	if (World->OverlapBlockingTestByChannel(MuzzleStart, FQuat::Identity, ECC_WorldDynamic,
-		FCollisionShape::MakeSphere(CombatTargeting::ProjectileRadius), Query, SceneOnly)) return false;
-	// 镜头选目标、真实弹源收敛；贴近敌人或俯视时也不会发出平行于准星的另一条弹道。
-	const auto Preview = GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
-	const FRotator LaunchRotation = (Preview.End - MuzzleStart).Rotation();
-	const FTransform Transform(LaunchRotation, MuzzleStart);
-	AmultiplayerCombatProjectile* Projectile = World->SpawnActorDeferred<AmultiplayerCombatProjectile>(
-		AmultiplayerCombatProjectile::StaticClass(), Transform, this, this, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-	if (!Projectile) return false;
-	Projectile->Initialize(this, Damage, Speed, GetSkillRule(EMultiplayerCombatSkill::Attack).Range);
-	Projectile->FinishSpawning(Transform);
-	return true;
 }
 
 void AmultiplayerCombatCharacter::PlayImpactReaction()

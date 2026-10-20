@@ -4,9 +4,24 @@
 
 #include "NativeGameplayTags.h"
 
+enum class EMultiplayerCombatSkill : uint8;
+
+// 同一技能的分类、定向事件和冷却键只在一处配对；输入槽位与能力类仍由成长组件/角色决定。
+struct FmultiplayerCombatSkillTags
+{
+	FGameplayTag Ability;
+	FGameplayTag Event;
+	FGameplayTag Cooldown;
+};
+
 // 战斗标签集中声明；技能、属性和表现使用同一组名字，避免散落的字符串。
 namespace CombatTags
 {
+	MULTIPLAYER_API const FmultiplayerCombatSkillTags& GetSkillTags(EMultiplayerCombatSkill Skill);
+	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Combat);
+	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Rescue);
+	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Failure_Requirements);
+	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Failure_Conflict);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Failure_MuzzleBlocked);
 	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Attack);
 	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Defend);

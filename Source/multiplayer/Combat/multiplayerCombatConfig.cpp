@@ -1,5 +1,57 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "Combat/multiplayerCombatConfig.h"
+#include "Combat/multiplayerCombatTags.h"
+
+// 旧资产未序列化关系字段时也继承这些默认值；不重写地图配置、数值或表现资源。
+UmultiplayerCombatConfig::UmultiplayerCombatConfig()
+{
+	const auto Add = [this](FGameplayTag AbilityTag) -> FmultiplayerAbilityTagRelationship&
+	{
+		auto& Relationship = AbilityRelationships.AddDefaulted_GetRef();
+		Relationship.AbilityTag = AbilityTag;
+		return Relationship;
+	};
+	auto& Common = Add(CombatTags::Ability_Combat);
+	for (FGameplayTag Tag : {CombatTags::State_Dead.GetTag(), CombatTags::State_Downed.GetTag(),
+		CombatTags::State_Stunned.GetTag(), CombatTags::State_Casting.GetTag(), CombatTags::State_Rescuing.GetTag()})
+		Common.ActivationBlockedTags.AddTag(Tag);
+	Add(CombatTags::Ability_Defend).ActivationBlockedTags.AddTag(CombatTags::State_Defending);
+	auto& DashRelationship = Add(CombatTags::Ability_Dash);
+	for (FGameplayTag Tag : {CombatTags::State_Dashing.GetTag(), CombatTags::State_MovementBlocked.GetTag(), CombatTags::State_Rooted.GetTag()})
+		DashRelationship.ActivationBlockedTags.AddTag(Tag);
+	for (FGameplayTag Tag : {CombatTags::Ability_Heal.GetTag(), CombatTags::Ability_Area.GetTag()})
+		Add(Tag).AbilityTagsToCancel.AddTag(CombatTags::Ability_Attack);
+	auto& Rescue = Add(CombatTags::Ability_Rescue);
+	for (FGameplayTag Tag : {CombatTags::State_Dashing.GetTag(), CombatTags::State_MovementBlocked.GetTag(), CombatTags::State_Rooted.GetTag()})
+		Rescue.ActivationBlockedTags.AddTag(Tag);
+	// 救援引导替换尚未出手的普攻；阻断由 GAS 计数，结束时不会清掉另一来源的阻断。
+	Rescue.AbilityTagsToCancel.AddTag(CombatTags::Ability_Attack);
+	Rescue.AbilityTagsToBlock.AddTag(CombatTags::Ability_Combat);
+}
+
+// 父类规则与精确技能规则共同生效；只追加，保留调用者已有的原生/蓝图约束。
+void UmultiplayerCombatConfig::GetAbilityActivationTagRequirements(const FGameplayTagContainer& AbilityTags,
+	FGameplayTagContainer& OutRequired, FGameplayTagContainer& OutBlocked) const
+{
+	for (const auto& Relationship : AbilityRelationships)
+		if (AbilityTags.HasTag(Relationship.AbilityTag))
+		{
+			OutRequired.AppendTags(Relationship.ActivationRequiredTags);
+			OutBlocked.AppendTags(Relationship.ActivationBlockedTags);
+		}
+}
+
+// 激活与结束使用同一映射，只把成对增减交给 ASC，不另存 bool 或手动清空阻断容器。
+void UmultiplayerCombatConfig::GetAbilityBlockAndCancelTags(const FGameplayTagContainer& AbilityTags,
+	FGameplayTagContainer& OutBlock, FGameplayTagContainer& OutCancel) const
+{
+	for (const auto& Relationship : AbilityRelationships)
+		if (AbilityTags.HasTag(Relationship.AbilityTag))
+		{
+			OutBlock.AppendTags(Relationship.AbilityTagsToBlock);
+			OutCancel.AppendTags(Relationship.AbilityTagsToCancel);
+		}
+}
 
 const FmultiplayerCombatSkillRule& UmultiplayerCombatConfig::GetSkill(EMultiplayerCombatSkill Skill) const
 {

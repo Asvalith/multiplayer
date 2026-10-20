@@ -99,10 +99,24 @@ FVector AmultiplayerCombatCharacter::GetCombatViewOrigin(const FRotator& Aim) co
 	return GetPawnViewLocation();
 }
 
-FVector AmultiplayerCombatCharacter::GetCombatMuzzleLocation() const
+FVector AmultiplayerCombatCharacter::GetCombatMuzzleLocation(const FRotator* AimSnapshot) const
 {
 	// 不依赖DS骨骼刷新；起手特效、轨迹预览和真实弹体从同一位置出发。
-	return GetActorLocation() + FVector(0, 0, 40);
+	const FRotator Aim = AimSnapshot ? *AimSnapshot
+		: bHasAttackAim && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Attacking)
+			? ActiveAttackAim : GetControlRotation();
+	const FVector Chest = GetActorLocation() + FVector(0, 0, 40);
+	// 发射点在身体正面胶囊外，额外留出弹体半径和6cm间距；俯仰只影响弹道，不把起点压进地面。
+	const float ForwardDistance = GetCapsuleComponent()->GetScaledCapsuleRadius() + CombatTargeting::ProjectileRadius + 6.f;
+	const FVector Forward = Chest + FRotator(0, Aim.Yaw, 0).Vector() * ForwardDistance;
+	if (GetWorld())
+	{
+		// 近墙或贴身敌人不能被前移起点跳过；这种情况下仍从胸前原点开始真实扫掠。
+		TWeakObjectPtr<AmultiplayerCombatCharacter> EarlyTarget;
+		const FVector Reachable = ProjectileTrace(*this, Chest, Forward, CombatTargeting::ProjectileRadius, EarlyTarget);
+		if (EarlyTarget.IsValid() || !Reachable.Equals(Forward, .01f)) return Chest;
+	}
+	return Forward;
 }
 
 // 客户端不提交治疗目标；服务器在接纳与实际提交时共用同一套选目标规则。
@@ -153,14 +167,20 @@ FmultiplayerCombatTargetPreview AmultiplayerCombatCharacter::GetSkillTargetPrevi
 	FCollisionQueryParams Query(SCENE_QUERY_STAT(CombatTargetGround), false, this);
 	if (Skill == EMultiplayerCombatSkill::Attack)
 	{
-		Result.Origin = GetCombatMuzzleLocation();
+		Result.Origin = GetCombatMuzzleLocation(&Aim);
 		const float LifetimeRange = GetCombatConfig().ProjectileSpeed * CombatTargeting::ProjectileLifetime;
 		const float Range = Rule.Range > 0 ? FMath::Min(Rule.Range, LifetimeRange) : LifetimeRange;
-		const FVector View = GetCombatViewOrigin(Aim);
-		TWeakObjectPtr<AmultiplayerCombatCharacter> ViewTarget;
-		FVector Point = ProjectileTrace(*this, View, View + Aim.Vector() * (Range + FVector::Distance(View, Result.Origin)), .1f, ViewTarget);
-		if (FVector::DotProduct(Point - Result.Origin, Aim.Vector()) <= 0) Point = Result.Origin + Aim.Vector() * Range;
-		const FVector DesiredEnd = Result.Origin + (Point - Result.Origin).GetSafeNormal() * Range;
+		// 玩家普攻沿本轮身体出手的水平正前方发射；自由镜头俯仰不再把普攻引向地面。
+		FVector DesiredEnd = Result.Origin + FRotator(0, Aim.Yaw, 0).Vector() * Range;
+		if (GetCombatTeam() != EMultiplayerCombatTeam::Players)
+		{
+			// 远程敌人仍保留其AI目标的三维瞄准，不因玩家前射规则丢失高度差命中。
+			const FVector View = GetCombatViewOrigin(Aim);
+			TWeakObjectPtr<AmultiplayerCombatCharacter> ViewTarget;
+			FVector Point = ProjectileTrace(*this, View, View + Aim.Vector() * (Range + FVector::Distance(View, Result.Origin)), .1f, ViewTarget);
+			if (FVector::DotProduct(Point - Result.Origin, Aim.Vector()) <= 0) Point = Result.Origin + Aim.Vector() * Range;
+			DesiredEnd = Result.Origin + (Point - Result.Origin).GetSafeNormal() * Range;
+		}
 		Result.End = ProjectileTrace(*this, Result.Origin, DesiredEnd, CombatTargeting::ProjectileRadius, Result.Target);
 		Result.Radius = CombatTargeting::ProjectileRadius;
 		Result.bValid = !GetWorld()->OverlapBlockingTestByChannel(Result.Origin, FQuat::Identity, ECC_WorldDynamic,
@@ -178,7 +198,7 @@ FmultiplayerCombatTargetPreview AmultiplayerCombatCharacter::GetSkillTargetPrevi
 	}
 	if (Skill == EMultiplayerCombatSkill::Defend)
 	{
-		Result.End = Result.Origin + FRotator(0, Aim.Yaw, 0).Vector() * 120.f;
+		Result.End = Result.Origin + GetActorForwardVector().GetSafeNormal2D() * 120.f;
 		Result.bValid = true;
 		return Result;
 	}

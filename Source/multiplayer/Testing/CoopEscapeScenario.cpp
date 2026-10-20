@@ -1,20 +1,24 @@
 #include "Testing/CoopNetTestDriver.h"
 #include "AbilitySystemComponent.h"
+#include "AbilitySystemGlobals.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatCoop.h"
 #include "Combat/multiplayerCombatEncounter.h"
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatProgression.h"
+#include "Combat/multiplayerCombatPresentation.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Core/multiplayerCoopGameState.h"
+#include "Engine/AssetManager.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/StreamableManager.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
@@ -35,10 +39,14 @@
 #include "NavigationData.h"
 #include "NavigationSystem.h"
 #include "NavMesh/RecastNavMesh.h"
+#include "NiagaraSystem.h"
 #include "Player/multiplayerCoopPlayerController.h"
 #include "UnrealClient.h"
 #include "UObject/UnrealType.h"
 #include "Animation/AnimMontage.h"
+#if WITH_EDITOR
+#include "ShaderCompiler.h"
+#endif
 
 namespace
 {
@@ -243,8 +251,17 @@ bool UCoopNetTestDriver::CaptureEscapeView(const FString& Name)
 bool UCoopNetTestDriver::PrepareVisualFixture(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING
-	UClass* PlayerClass=LoadClass<AmultiplayerCombatCharacter>(nullptr,TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
-	UClass* HUDClass=LoadClass<AHUD>(nullptr,TEXT("/Game/Combat/Escape/BP_EscapeHUD.BP_EscapeHUD_C"));
+	const bool bEscapeMap=World->GetMapName().Contains(TEXT("CoopEscape"));
+	const TCHAR* PlayerPath=bEscapeMap ? TEXT("/Game/Combat/Escape/BP_EscapePlayerVariant.BP_EscapePlayerVariant_C")
+		: TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C");
+	const TCHAR* HUDPath=bEscapeMap ? TEXT("/Game/Combat/Escape/BP_EscapeHUD.BP_EscapeHUD_C")
+		: TEXT("/Game/Combat/UI/BP_CombatHUD.BP_CombatHUD_C");
+	const TCHAR* ModePath=bEscapeMap ? TEXT("/Game/Combat/Escape/BP_EscapeGameMode.BP_EscapeGameMode_C")
+		: TEXT("/Game/Combat/BP_CombatGameMode.BP_CombatGameMode_C");
+	const TCHAR* ConfigPath=bEscapeMap ? TEXT("/Game/Combat/Escape/DA_EscapeCombat.DA_EscapeCombat")
+		: TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig");
+	UClass* PlayerClass=LoadClass<AmultiplayerCombatCharacter>(nullptr,PlayerPath);
+	UClass* HUDClass=LoadClass<AmultiplayerCombatHUD>(nullptr,HUDPath);
 	UClass* EnemyClass=CombatFixtureEnemyClass();
 	auto* FixtureMode=World->GetAuthGameMode();
 	const auto* Player=PlayerClass ? PlayerClass->GetDefaultObject<AmultiplayerCombatCharacter>() : nullptr;
@@ -252,17 +269,20 @@ bool UCoopNetTestDriver::PrepareVisualFixture(UWorld* World)
 	const auto* DeathField=Player ? FindFProperty<FObjectPropertyBase>(Player->GetClass(),TEXT("DeathMontage")) : nullptr;
 	const auto* Death=DeathField ? Cast<UAnimMontage>(DeathField->GetObjectPropertyValue_InContainer(Player)) : nullptr;
 	const bool bReady=FixtureMode && Player && HUDClass && EnemyClass && Rules && Player->GetMesh()->GetAnimClass()
-		&& Player->GetActionMontage(EMultiplayerCombatAnimation::Attack) && Player->GetActionMontage(EMultiplayerCombatAnimation::Heal)
+		&& FixtureMode->GetClass()->GetPathName()==ModePath && Rules->GetPathName()==ConfigPath
+		&& FixtureMode->DefaultPawnClass.Get()==PlayerClass && FixtureMode->HUDClass.Get()==HUDClass
+		&& !FParse::Param(FCommandLine::Get(),TEXT("CoopSkillDemo"))
+		&& !UAbilitySystemGlobals::Get().ShouldIgnoreCosts() && !UAbilitySystemGlobals::Get().ShouldIgnoreCooldowns()
+		&& Player->GetActionMontage(EMultiplayerCombatAnimation::Attack)
 		&& Player->GetActionMontage(EMultiplayerCombatAnimation::Area) && Death && !Death->bEnableAutoBlendOut
-		&& (!Rules->DefenseFeedback.Effect.IsNull() || !Rules->DefenseFeedback.CascadeEffect.IsNull())
-		&& (!Rules->HealFeedback.Effect.IsNull() || !Rules->HealFeedback.CascadeEffect.IsNull()) && !Rules->AreaMarkerMaterial.IsNull()
-		&& Rules->Attack.Amount==25.f && Rules->Heal.Amount==30.f && Rules->DefenseDamageMultiplier==.5f
-		&& Rules->DefenseShieldAmount==0.f && Rules->BurningDamagePerTick==0.f && Rules->AreaRootDuration==0.f;
-	Assert(TEXT("ServerVisualFixture"),bReady,TEXT("Formal player/enemy/HUD BPs, actual animation/VFX/decal and unchanged legacy numeric rules must exist before the first login"));
+		&& Rules->DefenseFeedback.Effect.IsNull() && Rules->DefenseFeedback.CascadeEffect.IsNull()
+		&& Rules->HealFeedback.CascadeEffect.IsNull() && Rules->HealFeedback.Effect.ToSoftObjectPath().ToString()
+			==TEXT("/Game/Combat/Presentation/Effects/NS_CombatDefenseShield.NS_CombatDefenseShield") && !Rules->AreaMarkerMaterial.IsNull()
+		&& Rules->Attack.Amount==25.f && Rules->Heal.Amount==30.f
+		&& (bEscapeMap || (Rules->DefenseShieldAmount==0.f && Rules->BurningDamagePerTick==0.f && Rules->AreaRootDuration==0.f));
+	Assert(TEXT("ServerVisualFixture"),bReady,TEXT("Controlled combat fixture requires the saved map's formal GameMode/player/config/HUD before login, real costs/cooldowns, no CoopSkillDemo, Heal feedback and particle-free defense; CombatTest retains its legacy numeric rules. This is not original-map mechanism acceptance"));
 	if (!bReady) return false;
-	// 只覆盖本次 dev World 的模式实例；不改模式 CDO、保存资产或替换已经接纳的玩家。
-	FixtureMode->DefaultPawnClass=PlayerClass;
-	FixtureMode->HUDClass=HUDClass;
+	// 正式界面的接线也是验收对象，不能换成另一套 HUD 后再将夹具通过当成正式画面通过。
 	return true;
 #else
 	return false;
@@ -312,11 +332,64 @@ bool UCoopNetTestDriver::ValidateVisualFixturePawn(AmultiplayerCombatCharacter* 
 	if (SentReceipts.Contains(Receipt)) return true;
 	const auto* Controller=Character ? Cast<APlayerController>(Character->GetController()) : nullptr;
 	if (!Controller || !Controller->GetHUD()) return false;
-	const bool bReady=Character->GetClass()->GetPathName()==TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C")
-		&& Controller->GetHUD()->GetClass()->GetPathName()==TEXT("/Game/Combat/Escape/BP_EscapeHUD.BP_EscapeHUD_C")
-		&& Character->GetMesh()->GetAnimInstance() && Character->GetCombatConfigAsset()
+	const bool bEscapeMap=Character->GetWorld()->GetMapName().Contains(TEXT("CoopEscape"));
+	const TCHAR* PlayerPath=bEscapeMap ? TEXT("/Game/Combat/Escape/BP_EscapePlayerVariant.BP_EscapePlayerVariant_C")
+		: TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C");
+	const TCHAR* HUDPath=bEscapeMap ? TEXT("/Game/Combat/Escape/BP_EscapeHUD.BP_EscapeHUD_C")
+		: TEXT("/Game/Combat/UI/BP_CombatHUD.BP_CombatHUD_C");
+	const TCHAR* ConfigPath=bEscapeMap ? TEXT("/Game/Combat/Escape/DA_EscapeCombat.DA_EscapeCombat")
+		: TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig");
+	const auto* Rules=Character->GetCombatConfigAsset();
+	const bool bReady=Character->GetClass()->GetPathName()==PlayerPath
+		&& Controller->GetHUD()->GetClass()->GetPathName()==HUDPath
+		&& Controller->GetHUD()->IsA<AmultiplayerCombatHUD>()
+		&& Character->GetMesh()->GetAnimInstance() && Rules && Rules->GetPathName()==ConfigPath
+		&& !FParse::Param(FCommandLine::Get(),TEXT("CoopSkillDemo"))
+		&& !UAbilitySystemGlobals::Get().ShouldIgnoreCosts() && !UAbilitySystemGlobals::Get().ShouldIgnoreCooldowns()
+		&& Rules->DefenseFeedback.Effect.IsNull() && Rules->DefenseFeedback.CascadeEffect.IsNull()
+		&& Rules->HealFeedback.CascadeEffect.IsNull() && Rules->HealFeedback.Effect.ToSoftObjectPath().ToString()
+			==TEXT("/Game/Combat/Presentation/Effects/NS_CombatDefenseShield.NS_CombatDefenseShield")
 		&& Character->GetActionMontage(EMultiplayerCombatAnimation::Attack) && Character->GetActionMontage(EMultiplayerCombatAnimation::Area);
-	SendReceipt(Receipt,bReady,TEXT("Actual admitted owning pawn uses the formal player BP, live animation instance and real Escape HUD; not a native empty presentation fixture"));
+	if (bReady && !bServer && Character->GetNetMode()!=NM_DedicatedServer
+		&& FApp::CanEverRender() && !FParse::Param(FCommandLine::Get(),TEXT("NullRHI")))
+	{
+		const FString Preparing=Receipt+TEXT(":Preparing");
+		if (!SentReceipts.Contains(Preparing))
+		{
+			SentReceipts.Add(Preparing);
+			Emit(TEXT("VISUAL_PRESENTATION_PREPARING"),TEXT("Waiting for the actual Heal preload, Niagara VM/GPU compilation and submitted shader jobs; no Cue is played and this does not guarantee first-frame pixels or all PSOs"));
+		}
+		// 只在验收客户端沿已有 tick 等待角色的异步预载，不预播 Cue、不阻塞生产施法路径。
+		if (!UAssetManager::GetStreamableManager().IsAsyncLoadComplete(Rules->HealFeedback.Effect.ToSoftObjectPath())) return false;
+		auto* HealEffect=Rules->HealFeedback.Effect.Get();
+		if (!HealEffect || (!Rules->HealFeedback.Sound.IsNull() && !Rules->HealFeedback.Sound.IsValid())) return false;
+#if WITH_EDITORONLY_DATA
+		const FString CompileRequested=Receipt+TEXT(":HealCompileRequested");
+		if (!SentReceipts.Contains(CompileRequested))
+		{
+			SentReceipts.Add(CompileRequested);
+			HealEffect->RequestCompile(false);
+		}
+		HealEffect->PollForCompilationComplete(false);
+#endif
+#if WITH_EDITOR
+		if (GShaderCompilingManager)
+		{
+			GShaderCompilingManager->ProcessAsyncResults(true,false);
+			if (GShaderCompilingManager->IsCompiling()) return false;
+		}
+#endif
+#if WITH_EDITORONLY_DATA
+		if (HealEffect->HasOutstandingCompilationRequests(true)) return false;
+#endif
+		if (!HealEffect->IsReadyToRun()) return false;
+		if (!HealEffect->IsValid())
+		{
+			SendReceipt(Receipt,false,TEXT("Actual Heal Niagara compilation finished but the system is invalid"));
+			return false;
+		}
+	}
+	SendReceipt(Receipt,bReady,TEXT("Actual admitted owning pawn uses its saved map's formal player/config/HUD and live animation, real costs/cooldowns, Heal feedback and particle-free defense; no CoopSkillDemo or substituted HUD"));
 	return bReady;
 #else
 	return false;
@@ -384,7 +457,7 @@ void UCoopNetTestDriver::EscapeServerTick(UWorld* World)
 			&& EscapeActor<AmultiplayerCombatEncounter>(World, TEXT("Escape_Encounter"))
 			&& EscapeActor<AmultiplayerCoopKey>(World, TEXT("Escape_Key_1"))
 			&& EscapeActor<AmultiplayerCoopKey>(World, TEXT("Escape_Key_4"))
-			&& EscapeActor<AActor>(World,TEXT("Escape_Exit")), TEXT("Actual saved escape map, not spawned substitute objectives"));
+			&& EscapeActor<AActor>(World,TEXT("Escape_Exit")), TEXT("CoopEscape scenario supports only the legacy generated Escape_* objective layout; the restored original map is unsupported by this route. Use controlled Combat VisualAcceptance for skill checks, not as original-map mechanism acceptance"));
 		if (bDone) return;
 		Assert(TEXT("ServerEscapeAdmission"), Primary->IsCombatReady() && Partner->IsCombatReady()
 			&& State->GetObjectiveState().ActivatedKeys == 0 && State->GetObjectiveState().RequiredKeys == 4,

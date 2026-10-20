@@ -133,7 +133,7 @@ namespace
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatShieldSettlementTest, "Multiplayer.Combat.ShieldSettlement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-// 伤害统一经过 Execution 和属性集；先防御减伤，再消耗盾，只有溢出部分扣血。
+// 伤害统一经过 Execution 和属性集；先判断正面格挡，未挡住时消耗盾，只有溢出部分扣血。
 bool FCoopCombatShieldSettlementTest::RunTest(const FString& Parameters)
 {
 	FCombatStatusWorld Fixture;
@@ -155,12 +155,14 @@ bool FCoopCombatShieldSettlementTest::RunTest(const FString& Parameters)
 	GiveShield(Defending, 50.f);
 	Defending->Defend();
 	TestTrue(TEXT("The real defensive ability has granted its effect"), Defending->IsDefending());
+	Defending->SetActorRotation((Source->GetActorLocation() - Defending->GetActorLocation()).Rotation());
 	Source->ApplyCombatDamage(Defending, 40.f);
-	TestEqual(TEXT("Defense reduces forty to twenty before consuming shield"), Defending->GetShield(), 30.f);
+	TestEqual(TEXT("A frontal guard fully blocks forty damage before consuming any shield"), Defending->GetShield(), 50.f);
 	TestEqual(TEXT("The defended shield still protects all health"), Defending->GetHealth(), 100.f);
+	Defending->SetActorRotation(Defending->GetActorRotation() + FRotator(0, 180, 0));
 	Source->ApplyCombatDamage(Defending, 80.f);
-	TestEqual(TEXT("Reduced damage can break the defended shield"), Defending->GetShield(), 0.f);
-	TestEqual(TEXT("Defense is applied once, before the ten-point health overflow"), Defending->GetHealth(), 90.f);
+	TestEqual(TEXT("Rear damage breaks the defended shield normally"), Defending->GetShield(), 0.f);
+	TestEqual(TEXT("All eighty rear damage settles as fifty shield and thirty health"), Defending->GetHealth(), 70.f);
 
 	// 盾变化会同步通知外部；嵌套伤害不能被外层保存的旧生命快照覆盖。
 	auto* Reentrant = Fixture.Character(false, FVector(0, 2000, 100));

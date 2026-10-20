@@ -271,6 +271,9 @@ function Get-VisualRequiredAssertions {
     }
     foreach ($prefix in @('Primary', 'Partner')) { foreach ($stage in $stages) { "${prefix}Visual${stage}" } }
     if ($Mode -eq 'Combat') {
+        'PrimaryDefenseCooldownPoseRollback'
+        'PrimaryDefensePoseActive'
+        'PartnerDefensePoseActive'
         'ServerTargetingHealUncommitted'
         'ServerCombatSelfHealReady'
         'ServerCombatSelfHealSettlement'

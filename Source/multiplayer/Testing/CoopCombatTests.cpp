@@ -221,13 +221,13 @@ bool FCoopCombatRulesTest::RunTest(const FString& Parameters)
 	Player->Defend();
 	TestEqual(TEXT("Defense repeat costs nothing"), Player->GetEnergy(), 55.0f);
 	ApplyTestDamage(Enemy, Player, 20);
-	TestEqual(TEXT("Defense halves damage"), Player->GetHealth(), 90.0f);
+	TestEqual(TEXT("An effect without an incoming direction deals full damage through defense"), Player->GetHealth(), 80.0f);
 	Fixture.Advance(3.2f);
 	TestFalse(TEXT("Defense expires"), ASC->HasMatchingGameplayTag(CombatTags::State_Defending));
 	TestFalse(TEXT("Expired defense query is clear"), Player->IsDefending());
 	TestEqual(TEXT("Expired defense has zero remaining time"), Player->GetDefenseRemaining(), 0.0f);
 	ApplyTestDamage(Enemy, Player, 20);
-	TestEqual(TEXT("Damage returns to normal"), Player->GetHealth(), 70.0f);
+	TestEqual(TEXT("Undirected damage remains normal after defense expires"), Player->GetHealth(), 60.0f);
 
 	// 真实扫掠弹道穿过友军，命中敌人只扣一次；不能用直接效果替代这条验证。
 	Player->Attack();
@@ -317,13 +317,13 @@ bool FCoopCombatAdmissionAndResumeTest::RunTest(const FString& Parameters)
 	Player->Heal();
 	Player->Attack();
 	const FmultiplayerCombatResumeState Saved = Player->CaptureResumeState();
-	TestEqual(TEXT("Snapshot captures actual health"), Saved.Health, 90.0f);
+	TestEqual(TEXT("Snapshot captures actual health"), Saved.Health, 80.0f);
 	TestEqual(TEXT("Snapshot captures actual energy after both costs"), Saved.Energy, 55.0f);
 	AmultiplayerCombatCharacter* Resumed = Fixture.SpawnPlayer(FVector(3000, 3000, 100), false);
 	Resumed->SetCombatSessionReady(false);
 	Resumed->RestoreResumeState(Saved, 1.0f);
 	Resumed->SetCombatSessionReady(true);
-	TestEqual(TEXT("Reconnect does not refill health"), Resumed->GetHealth(), 90.0f);
+	TestEqual(TEXT("Reconnect does not refill health"), Resumed->GetHealth(), 80.0f);
 	TestEqual(TEXT("Reconnect does not refill energy"), Resumed->GetEnergy(), 55.0f);
 	TestTrue(TEXT("Restore uses the saved server position"), Resumed->GetActorLocation().Equals(Saved.Location, 1.0f));
 	TestTrue(TEXT("Defense lifetime decreases during offline time"),

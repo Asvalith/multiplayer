@@ -4,7 +4,6 @@
 
 #include "Combat/multiplayerCombatTags.h"
 #include "Combat/multiplayerCombatCharacter.h"
-#include "Combat/multiplayerCombatConfig.h"
 #include "GameplayEffectExtension.h"
 #include "Net/UnrealNetwork.h"
 
@@ -86,8 +85,10 @@ void UmultiplayerCombatAttributes::PostGameplayEffectExecute(const FGameplayEffe
 	if (Data.EvaluatedData.Attribute == GetIncomingDamageAttribute())
 	{
 		float Damage = GetIncomingDamage();
-		SetIncomingDamage(0.0f);
 		AmultiplayerCombatCharacter* Character = Cast<AmultiplayerCombatCharacter>(Data.Target.GetAvatarActor());
+		// 清空伤害也可能通知外部；先固定本次格挡结果，避免同步回调改写本次方向裁决。
+		const bool bBlockedDirectDamage = Character && Character->ShouldBlockDirectDamage(Data.EffectSpec);
+		SetIncomingDamage(0.0f);
 		// 每次外部属性通知回来都读当前资格；不能沿用通知之前的死亡或接纳快照。
 		const auto CanReceiveDamage = [&Data, Character]
 		{
@@ -99,10 +100,8 @@ void UmultiplayerCombatAttributes::PostGameplayEffectExecute(const FGameplayEffe
 			return;
 		}
 		if (Character) Character->RecordDamageSource(Cast<AmultiplayerCombatCharacter>(Data.EffectSpec.GetContext().GetOriginalInstigator()));
-		if (Data.Target.HasMatchingGameplayTag(CombatTags::State_Defending))
-		{
-			Damage *= Character ? Character->GetCombatConfig().DefenseDamageMultiplier : .5f;
-		}
+		// 正面格挡在消耗护盾前结束结算；其余来向与周期伤害仍沿同一条先盾后血路径处理。
+		if (bBlockedDirectDamage) return;
 		// 先确定本次护盾吸收和溢出，再写盾；补盾或嵌套伤害不会让同一份伤害再次扣盾。
 		const float AbsorbedDamage = FMath::Min(GetShield(), Damage);
 		const float HealthDamage = Damage - AbsorbedDamage;
@@ -189,6 +188,7 @@ UmultiplayerCombatDamageExecution::UmultiplayerCombatDamageExecution()
 	RelevantAttributesToCapture.Add(DamageCaptures().ArmorDef);
 }
 
+// 捕获标签用于 GAS 属性聚合；这里只输出待结算伤害，格挡及盾/血消耗仍由属性集统一提交。
 void UmultiplayerCombatDamageExecution::Execute_Implementation(const FGameplayEffectCustomExecutionParameters& Parameters,
 	FGameplayEffectCustomExecutionOutput& Output) const
 {

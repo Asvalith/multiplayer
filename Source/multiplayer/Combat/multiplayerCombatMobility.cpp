@@ -35,21 +35,10 @@ UmultiplayerDashAbility::UmultiplayerDashAbility()
 	Skill = EMultiplayerCombatSkill::Dash;
 	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Dash));
 	ActivationOwnedTags.AddTag(CombatTags::State_Dashing);
-	ActivationBlockedTags.AddTag(CombatTags::State_Dashing);
-	ActivationBlockedTags.AddTag(CombatTags::State_MovementBlocked);
-	ActivationBlockedTags.AddTag(CombatTags::State_Rooted);
+	// 只拥有本次冲刺标签；禁行/重复激活关系读取角色配置，结束仍由原生任务清位移源。
 	AbilityTriggers.AddDefaulted_GetRef().TriggerTag = CombatTags::Event_Dash;
 	CostGameplayEffectClass = UmultiplayerDashCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerDashCooldownEffect::StaticClass();
-}
-
-bool UmultiplayerDashAbility::CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-	const FGameplayTagContainer* SourceTags, const FGameplayTagContainer* TargetTags,
-	FGameplayTagContainer* OptionalRelevantTags) const
-{
-	const auto* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
-	return Character && Character->GetCharacterMovement()->MovementMode != MOVE_None
-		&& Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags);
 }
 
 void UmultiplayerDashAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,

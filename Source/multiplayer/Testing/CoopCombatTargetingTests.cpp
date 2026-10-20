@@ -4,6 +4,8 @@
 
 #include "Misc/AutomationTest.h"
 #include "AbilitySystemComponent.h"
+#include "AbilitySystemGlobals.h"
+#include "Animation/AnimMontage.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatAttributes.h"
 #include "Combat/multiplayerCombatCharacter.h"
@@ -26,6 +28,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
 #include "GameFramework/PlayerStart.h"
+#include "GameplayCueManager.h"
 #include "GameFramework/WorldSettings.h"
 #include "InputCoreTypes.h"
 #include "NiagaraComponent.h"
@@ -355,30 +358,152 @@ bool FCoopCombatAreaBoundaryPreviewTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatProjectileConvergenceTest, "Multiplayer.Combat.Targeting.NearProjectileConvergence",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatProjectileConvergenceTest, "Multiplayer.Combat.Targeting.PlayerForwardProjectile",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-// 真实第三人称相机斜俯视近身目标，比较显示终点、实际弹道和最终物理命中，而非只比较两个数学函数。
+// 镜头俯仰不决定普攻高度；实际技能转身、发射、Cue和物理命中都采用同一次水平出手方向。
 bool FCoopCombatProjectileConvergenceTest::RunTest(const FString& Parameters)
 {
+	auto* CueManager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+#if WITH_EDITOR
+	CueManager->LoadNotifyForEditorPreview(CombatTags::Cue_Attack);
+#endif
+	for (const float Pitch : { -55.f, -24.f, 0.f, 30.f, 60.f })
+	{
+		FCombatTargetingWorld Fixture(false);
+		auto* Caster = Fixture.Player(FVector(0, 0, 4000), true);
+		Caster->SetActorRotation(FRotator(0, -110, 0));
+		const FRotator Aim(Pitch, 32, 0);
+		Caster->GetController()->SetControlRotation(Aim);
+		const FVector Forward = FRotator(0, Aim.Yaw, 0).Vector();
+		auto* Target = Fixture.Enemy(Caster->GetActorLocation() + Forward * 360.f);
+		const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
+		TestTrue(*FString::Printf(TEXT("Pitch %.0f: preview selects the target in horizontal attack direction"), Pitch), Preview.Target.Get() == Target);
+		TestTrue(TEXT("Preview starts at the same physical muzzle"), Preview.Origin.Equals(Caster->GetCombatMuzzleLocation(&Aim), .01f));
+		TestTrue(TEXT("Preview trajectory remains horizontal even when the camera looks up or down"),
+			(Preview.End - Preview.Origin).GetSafeNormal().Equals(Forward, .001f));
+		int32 AttackCues = 0;
+		FVector CueDirection = FVector::ZeroVector, CueOrigin = FVector::ZeroVector;
+		const auto Listener = CueManager->OnGameplayCueRouted().AddLambda(
+			[&](AActor* Recipient, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters& Feedback, EGameplayCueExecutionOptions)
+			{
+				if (Recipient == Caster && Tag == CombatTags::Cue_Attack && Event == EGameplayCueEvent::Executed)
+				{ ++AttackCues; CueDirection = Feedback.Normal; CueOrigin = Feedback.Location; }
+			});
+		Caster->Attack();
+		CueManager->OnGameplayCueRouted().Remove(Listener);
+		AmultiplayerCombatProjectile* Projectile = nullptr;
+		for (TActorIterator<AmultiplayerCombatProjectile> It(Fixture.World); It; ++It) Projectile = *It;
+		if (!TestNotNull(TEXT("Actual attack ability creates its authoritative projectile"), Projectile)) return false;
+		TestTrue(TEXT("Accepted attack turns the body once to the submitted camera yaw"), Caster->GetActorForwardVector().Equals(Forward, .001f));
+		TestTrue(TEXT("Actual launch follows the current attack body forward, without camera pitch"),
+			FVector(Projectile->GetLaunchState().Velocity).GetSafeNormal().Equals(Caster->GetActorForwardVector(), .001f));
+		TestTrue(TEXT("Actual launch origin equals preview origin"), FVector(Projectile->GetLaunchState().Origin).Equals(Preview.Origin, .1f));
+		TestEqual(TEXT("One actual attack publishes one start Cue"), AttackCues, 1);
+		TestTrue(TEXT("Start particle Cue receives the same horizontal direction and origin as the physical projectile"),
+			CueDirection.Equals(Forward, .001f) && CueOrigin.Equals(Preview.Origin, .1f));
+		Fixture.Advance(.8f);
+		TestEqual(TEXT("Horizontal forward target receives one real swept hit"), Target->GetHealth(), 75.f);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatEnemyProjectilePitchTest, "Multiplayer.Combat.Targeting.EnemyProjectileKeepsVerticalAim",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 水平前射只属于玩家普攻；敌人的显式三维目标方向继续进入原弹道查询。
+bool FCoopCombatEnemyProjectilePitchTest::RunTest(const FString& Parameters)
+{
 	FCombatTargetingWorld Fixture(false);
-	auto* Caster = Fixture.Player(FVector(0, 0, 4000), true);
-	const FRotator Aim(-24, 32, 0);
-	const FVector ViewOrigin = Caster->GetCombatViewOrigin(Aim);
-	auto* Target = Fixture.Enemy(ViewOrigin + Aim.Vector() * 700.f);
-	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
-	TestTrue(TEXT("Near hostile capsule is the reticle target"), Preview.Target.Get() == Target);
-	TestTrue(TEXT("Displayed projectile starts at authoritative muzzle, not camera"), Preview.Origin.Equals(Caster->GetCombatMuzzleLocation(), .01f));
-	TestTrue(TEXT("Muzzle and camera differ in this actual third-person setup"), FVector::Distance(ViewOrigin, Preview.Origin) > 100);
-	if (!TestTrue(TEXT("Production firing creates a real projectile"), Caster->FireProjectile(25, 1600, &Aim))) return false;
+	auto* Source = Fixture.Enemy(FVector(0, 0, 4000));
+	const FRotator Aim(35, 37, 0);
+	const auto Preview = Source->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
+	const FVector Expected = (Preview.End - Preview.Origin).GetSafeNormal();
+	TestTrue(TEXT("Enemy trajectory retains meaningful upward aim"), Expected.Z > .3f);
+	if (!TestTrue(TEXT("Enemy production firing entry still accepts its three-dimensional snapshot"), Source->FireProjectile(25, 1600, &Aim))) return false;
 	AmultiplayerCombatProjectile* Projectile = nullptr;
 	for (TActorIterator<AmultiplayerCombatProjectile> It(Fixture.World); It; ++It) Projectile = *It;
-	if (!TestNotNull(TEXT("Real projectile exists before physics"), Projectile)) return false;
-	const FVector Expected = (Preview.End - Preview.Origin).GetSafeNormal();
-	TestTrue(TEXT("Launch velocity converges to reticle hit, not parallel camera forward"),
+	if (!TestNotNull(TEXT("Enemy real projectile exists"), Projectile)) return false;
+	TestTrue(TEXT("Enemy physical launch still matches its non-horizontal preview"),
 		FVector(Projectile->GetLaunchState().Velocity).GetSafeNormal().Equals(Expected, .001f));
-	Fixture.Advance(.8f);
-	TestEqual(TEXT("Displayed near target is hit exactly once by real projectile sweep"), Target->GetHealth(), 75.f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatProjectileMuzzleSnapshotTest, "Multiplayer.Combat.Targeting.ProjectileMuzzleAimSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 身体、镜头和本轮出手方向故意不同；前移起点只使用同一次瞄准快照，不依赖手部骨骼或异步视角。
+bool FCoopCombatProjectileMuzzleSnapshotTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture(false);
+	auto* Caster = Fixture.Player(FVector(1300, 1400, 4000), true);
+	Caster->SetActorRotation(FRotator(0, -110, 0));
+	Caster->GetController()->SetControlRotation(FRotator(25, 170, 0));
+	const FVector Chest = Caster->GetActorLocation() + FVector(0, 0, 40);
+	const float ForwardDistance = Caster->GetCapsuleComponent()->GetScaledCapsuleRadius() + CombatTargeting::ProjectileRadius + 6.f;
+	for (const float Yaw : { 0.f, 90.f, -73.f, 180.f })
+	{
+		const FRotator Aim(-35, Yaw, 0);
+		const FVector Expected = Chest + FRotator(0, Yaw, 0).Vector() * ForwardDistance;
+		const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
+		TestTrue(*FString::Printf(TEXT("Yaw %.0f: explicit aim places muzzle ahead of capsule, independent of body and camera"), Yaw),
+			Caster->GetCombatMuzzleLocation(&Aim).Equals(Expected, .01f));
+		TestTrue(*FString::Printf(TEXT("Yaw %.0f: trajectory preview uses that exact physical muzzle"), Yaw),
+			Preview.Origin.Equals(Expected, .01f));
+	}
+	UAnimMontage* Montage = LoadObject<UAnimMontage>(nullptr,
+		TEXT("/Game/Combat/Presentation/ARPG/AM_ARPG_Attack.AM_ARPG_Attack"));
+	const auto* MontageProperty = FindFProperty<FObjectPropertyBase>(Caster->GetClass(), TEXT("AttackMontage"));
+	if (!TestNotNull(TEXT("Saved attack montage gives the real GAS attack an observable windup"), Montage)
+		|| !TestNotNull(TEXT("Attack montage configuration exists"), MontageProperty)) return false;
+	MontageProperty->SetObjectPropertyValue_InContainer(Caster, Montage);
+	auto* Config = DuplicateObject<UmultiplayerCombatConfig>(&Caster->GetCombatConfig(), Caster);
+	Config->Attack.Windup = .3f; Config->Attack.Recovery = .2f;
+	const auto* ConfigProperty = FindFProperty<FObjectPropertyBase>(Caster->GetClass(), TEXT("CombatConfig"));
+	if (!TestNotNull(TEXT("Attack configuration exists"), ConfigProperty)) return false;
+	ConfigProperty->SetObjectPropertyValue_InContainer(Caster, Config);
+	const FRotator SubmittedAim(15, 73, 0);
+	Caster->GetController()->SetControlRotation(SubmittedAim);
+	const auto Submitted = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &SubmittedAim);
+	Caster->Attack();
+	if (!TestTrue(TEXT("Actual GAS activation owns the attack-facing state"),
+		Caster->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Attacking))) return false;
+	Caster->GetController()->SetControlRotation(FRotator(-35, -120, 0));
+	TestTrue(TEXT("Turning camera during windup does not move the locked muzzle"),
+		Caster->GetCombatMuzzleLocation().Equals(Submitted.Origin, .01f));
+	TestTrue(TEXT("Implicit active preview keeps the same locked muzzle"),
+		Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack).Origin.Equals(Submitted.Origin, .01f));
+	Fixture.Advance(.32f);
+	AmultiplayerCombatProjectile* Projectile = nullptr;
+	for (TActorIterator<AmultiplayerCombatProjectile> It(Fixture.World); It; ++It) Projectile = *It;
+	if (!TestNotNull(TEXT("Real delayed ability creates its authoritative projectile"), Projectile)) return false;
+	TestTrue(TEXT("Authoritative launch snapshot starts at the submitted preview muzzle"),
+		FVector(Projectile->GetLaunchState().Origin).Equals(Submitted.Origin, .1f));
+	TestTrue(TEXT("Authoritative velocity uses the same submitted preview trajectory"),
+		FVector(Projectile->GetLaunchState().Velocity).GetSafeNormal().Equals((Submitted.End - Submitted.Origin).GetSafeNormal(), .001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatProjectileMuzzleObstructionTest, "Multiplayer.Combat.Targeting.ProjectileMuzzleNearObstruction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 前移只改善空旷处的出手位置；身体前紧贴的墙和敌人仍必须由原始近距离扫掠处理。
+bool FCoopCombatProjectileMuzzleObstructionTest::RunTest(const FString& Parameters)
+{
+	for (const bool bWall : { true, false })
+	{
+		FCombatTargetingWorld Fixture(false);
+		auto* Caster = Fixture.Player(FVector(1000, 500, 4000));
+		const FRotator Aim(0, 45, 0);
+		const FVector Chest = Caster->GetActorLocation() + FVector(0, 0, 40);
+		const FVector Offset = Aim.Vector() * 30.f;
+		if (bWall) Fixture.Box(Chest + Offset, FVector(5, 5, 100));
+		else Fixture.Enemy(Caster->GetActorLocation() + Offset);
+		TestTrue(bWall ? TEXT("Near wall cannot be skipped by a forward muzzle") : TEXT("Overlapping enemy cannot be skipped by a forward muzzle"),
+			Caster->GetCombatMuzzleLocation(&Aim).Equals(Chest, .01f));
+		TestTrue(TEXT("Obstructed muzzle fallback remains identical in targeting preview"),
+			Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim).Origin.Equals(Chest, .01f));
+	}
 	return true;
 }
 
@@ -388,17 +513,21 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatProjectileWallPreviewTest, "Multipla
 // 准星能看见目标也不能让枪口跨过近墙；预览与真实弹体都由同一墙体截停。
 bool FCoopCombatProjectileWallPreviewTest::RunTest(const FString& Parameters)
 {
-	FCombatTargetingWorld Fixture(false);
-	auto* Caster = Fixture.Player(FVector(0, 0, 4000));
-	auto* Target = Fixture.Enemy(FVector(400, 0, 4040));
-	Fixture.Box(FVector(100, 0, 4040), FVector(10, 100, 150));
-	const FRotator Aim = FRotator::ZeroRotator;
-	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
-	TestTrue(TEXT("Displayed trajectory stops at near wall"), Preview.End.X < 115.f);
-	TestTrue(TEXT("Occluded enemy is not highlighted as a hit"), Preview.Target.Get() != Target);
-	Caster->FireProjectile(25, 1600, &Aim);
-	Fixture.Advance(.6f);
-	TestEqual(TEXT("Authoritative projectile cannot damage through the wall"), Target->GetHealth(), 100.f);
+	for (const float Pitch : { -50.f, 0.f, 35.f })
+	{
+		FCombatTargetingWorld Fixture(false);
+		auto* Caster = Fixture.Player(FVector(0, 0, 4000), true);
+		auto* Target = Fixture.Enemy(FVector(400, 0, 4040));
+		Fixture.Box(FVector(100, 0, 4040), FVector(10, 100, 150));
+		const FRotator Aim(Pitch, 0, 0);
+		const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Attack, &Aim);
+		TestTrue(TEXT("Displayed horizontal trajectory stops at near wall regardless of camera pitch"), Preview.End.X < 115.f);
+		TestTrue(TEXT("Occluded enemy is not highlighted as a hit"), Preview.Target.Get() != Target);
+		TestTrue(TEXT("The wall-truncated preview still has no downward or upward component"), FMath::IsNearlyEqual(Preview.Origin.Z, Preview.End.Z, .01f));
+		Caster->FireProjectile(25, 1600, &Aim);
+		Fixture.Advance(.6f);
+		TestEqual(TEXT("Authoritative projectile cannot damage through the wall"), Target->GetHealth(), 100.f);
+	}
 	return true;
 }
 
@@ -434,6 +563,46 @@ bool FCoopCombatHealPreviewTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatReceivedEffectsFacingTest, "Multiplayer.Combat.Targeting.ReceivedEffectsPreserveFacing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 受击、范围控制和队友治疗只改变目标战斗状态，不把施法者或目标的镜头朝向写入目标身体。
+bool FCoopCombatReceivedEffectsFacingTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture;
+	auto* Caster = Fixture.Player();
+	auto* Enemy = Fixture.Enemy(FVector(300, 0, 100));
+	auto* Ally = Fixture.Player(FVector(300, -300, 100));
+	if (!TestNotNull(TEXT("Effect source exists"), Caster) || !TestNotNull(TEXT("Damage receiver exists"), Enemy)
+		|| !TestNotNull(TEXT("Healing receiver exists"), Ally)) return false;
+	Caster->SetActorRotation(FRotator(0, -110, 0));
+	Caster->GetController()->SetControlRotation(FRotator(-20, 73, 0));
+	Enemy->SetActorRotation(FRotator(0, 145, 0));
+	Ally->SetActorRotation(FRotator(0, -133, 0));
+	Ally->GetController()->SetControlRotation(FRotator(15, 27, 0));
+	const FRotator EnemyFacing = Enemy->GetActorRotation();
+	const FRotator AllyFacing = Ally->GetActorRotation();
+	TestTrue(TEXT("Server unified damage entry accepts the hostile"), Caster->ApplyCombatDamage(Enemy, 10.f));
+	TestEqual(TEXT("The real damage GE changes health once"), Enemy->GetHealth(), 90.f);
+	TestTrue(TEXT("Ordinary damage does not redirect the hostile toward the caster camera"),
+		EnemyFacing.Equals(Enemy->GetActorRotation(), .001f));
+	const FVector AreaCenter = Enemy->GetActorLocation() - FVector::UpVector * Enemy->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	Caster->ResolveArea(AreaCenter);
+	TestEqual(TEXT("Real area settlement applies its configured damage"), Enemy->GetHealth(), 90.f - Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Amount);
+	TestTrue(TEXT("The area victim receives actual stun"), Enemy->IsStunned());
+	TestTrue(TEXT("Area damage and control leave the hostile facing unchanged"), EnemyFacing.Equals(Enemy->GetActorRotation(), .001f));
+	TargetingDamage(Ally, 20.f);
+	Caster->Heal();
+	TestEqual(TEXT("Actual healing ability restores the selected injured ally"), Ally->GetHealth(), 100.f);
+	TestTrue(TEXT("Healing does not align its recipient with either free camera"), AllyFacing.Equals(Ally->GetActorRotation(), .001f));
+	Caster->GetController()->SetControlRotation(FRotator(10, -45, 0));
+	Ally->GetController()->SetControlRotation(FRotator(-20, 110, 0));
+	Fixture.Advance(.05f);
+	TestTrue(TEXT("Later camera movement still does not redirect the controlled hostile"), EnemyFacing.Equals(Enemy->GetActorRotation(), .001f));
+	TestTrue(TEXT("Later camera movement still does not redirect the healed ally"), AllyFacing.Equals(Ally->GetActorRotation(), .001f));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDashWallPreviewTest, "Multiplayer.Combat.Targeting.DashCapsuleWallPreview",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -459,20 +628,34 @@ bool FCoopCombatDashWallPreviewTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDefensePreviewFacingTest, "Multiplayer.Combat.Targeting.DefenseDirectionSnapshot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-// 原地转镜头不会先转身体；Q确认后防御身体朝向必须与先前显示的方向一致。
+// Q不把自由镜头方向写回身体；预览和短窗口弹反始终使用角色正面。
 bool FCoopCombatDefensePreviewFacingTest::RunTest(const FString& Parameters)
 {
 	FCombatTargetingWorld Fixture;
 	auto* Caster = Fixture.Player();
 	Caster->SetActorRotation(FRotator(0, -110, 0));
 	Caster->GetController()->SetControlRotation(FRotator(-20, 73, 0));
+	const FRotator BodyBefore = Caster->GetActorRotation();
 	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Defend);
 	const FVector ShownDirection = (Preview.End - Preview.Origin).GetSafeNormal2D();
+	TestTrue(TEXT("Defense preview follows the existing body heading, not the free camera"),
+		ShownDirection.Equals(BodyBefore.Vector(), .001f));
+	Caster->GetController()->SetControlRotation(FRotator(-35, 145, 0));
+	const auto BeforeConfirmation = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Defend);
+	TestTrue(TEXT("Turning the camera during Q preview leaves its direction unchanged"),
+		(BeforeConfirmation.End - BeforeConfirmation.Origin).GetSafeNormal2D().Equals(ShownDirection, .001f));
 	Caster->Defend();
 	TestTrue(TEXT("Defense actually becomes active"), Caster->IsDefending());
-	TestTrue(TEXT("Authoritative defense facing equals displayed direction, not previous body yaw"),
+	TestTrue(TEXT("Accepted Q preserves the existing body rotation"), BodyBefore.Equals(Caster->GetActorRotation(), .001f));
+	TestTrue(TEXT("Authoritative frontal defense equals the displayed body direction"),
 		Caster->GetActorForwardVector().Equals(ShownDirection, .001f));
-	TestEqual(TEXT("Facing change does not apply pitch to character body"), Caster->GetActorRotation().Pitch, 0.0);
+	Caster->GetController()->SetControlRotation(FRotator(20, -40, 0));
+	Fixture.Advance(.05f);
+	const auto AfterLook = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Defend);
+	TestTrue(TEXT("Turning the camera during the parry window does not rotate the body"),
+		BodyBefore.Equals(Caster->GetActorRotation(), .001f));
+	TestTrue(TEXT("Turning the camera after Q does not redirect its frontal preview"),
+		(AfterLook.End - AfterLook.Origin).GetSafeNormal2D().Equals(ShownDirection, .001f));
 	return true;
 }
 
@@ -484,6 +667,8 @@ bool FCoopCombatTargetingConfirmationTest::RunTest(const FString& Parameters)
 {
 	FCombatTargetingWorld Fixture;
 	auto* Caster = Fixture.Player();
+	Caster->SetActorRotation(FRotator(0, -110, 0));
+	const FRotator BodyBefore = Caster->GetActorRotation();
 	Caster->BeginSkillTargeting(EMultiplayerCombatSkill::Area);
 	TestTrue(TEXT("Owned player can enter targeting before committing"), Caster->IsTargetingSkill());
 	TestFalse(TEXT("Preview is not an active casting ability"), Caster->IsCasting());
@@ -497,16 +682,78 @@ bool FCoopCombatTargetingConfirmationTest::RunTest(const FString& Parameters)
 	Caster->ConfirmSkillTargeting();
 	TestFalse(TEXT("Confirmation exits editable preview"), Caster->IsTargetingSkill());
 	TestTrue(TEXT("Confirmation starts the real GAS casting lifecycle"), Caster->IsCasting());
+	TestTrue(TEXT("Accepted R locks the ground target without changing body rotation"),
+		BodyBefore.Equals(Caster->GetActorRotation(), .001f));
 	TestEqual(TEXT("Confirmation commits energy once"), Caster->GetEnergy(), 100.f - Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Cost);
 	Caster->GetController()->SetControlRotation(FRotator(-30, 120, 0));
 	const auto During = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
 	TestTrue(TEXT("Casting circle remains at confirmed center after mouse turns"), During.End.Equals(Before.End, .01f));
+	TestTrue(TEXT("Turning the camera after R does not redirect the body"),
+		BodyBefore.Equals(Caster->GetActorRotation(), .001f));
 	TestEqual(TEXT("Windup has not resolved early damage"), Target->GetHealth(), 100.f);
 	const auto Rule = Caster->GetSkillRule(EMultiplayerCombatSkill::Area);
 	Fixture.Advance(Rule.Windup + Rule.Recovery + .2f);
 	TestEqual(TEXT("Actual release hits the target at shown center, once"), Target->GetHealth(), 100.f - Rule.Amount);
 	TestFalse(TEXT("Completed cast leaves no casting state"), Caster->IsCasting());
+	TestTrue(TEXT("Completed R does not leave a camera-aligned body rotation"),
+		BodyBefore.Equals(Caster->GetActorRotation(), .001f));
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaLethalWindupTest, "Multiplayer.Combat.Targeting.AreaLethalWindupNoRelease",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 只以真实致命伤害中断R起手，不先眩晕、取消或撤销接纳；超过旧释放期限也不得结算伤害或表现。
+bool FCoopCombatAreaLethalWindupTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture;
+	auto* Caster = Fixture.Player();
+	const auto Rule = Caster->GetSkillRule(EMultiplayerCombatSkill::Area);
+	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+	if (!TestTrue(TEXT("Lethal windup fixture has a valid real ground target"), Preview.bValid)) return false;
+	auto* Target = Fixture.Enemy(Preview.End + FVector(0, 0, 100));
+	auto* Killer = Fixture.Enemy(FVector(-1500, 0, 100));
+	if (!TestNotNull(TEXT("Pending R victim exists"), Target) || !TestNotNull(TEXT("Hostile lethal-damage source exists"), Killer)) return false;
+	auto* ASC = Caster->GetAbilitySystemComponent();
+	auto* TargetASC = Target->GetAbilitySystemComponent();
+	int32 DamageTransitions = 0, AreaResults = 0;
+	const auto HealthListener = TargetASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetHealthAttribute())
+		.AddLambda([&DamageTransitions](const FOnAttributeChangeData& Change) { if (Change.NewValue < Change.OldValue) ++DamageTransitions; });
+	auto* CueManager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+	const auto CueListener = CueManager->OnGameplayCueRouted().AddLambda(
+		[&](AActor* Recipient, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters&, EGameplayCueExecutionOptions)
+		{ if (Recipient == Caster && Tag == CombatTags::Cue_Area && Event == EGameplayCueEvent::Executed) ++AreaResults; });
+	Caster->CastArea();
+	TestTrue(TEXT("R genuinely enters its active windup before death"), Caster->IsCasting());
+	TestEqual(TEXT("The initial R activation commits its cost once"), Caster->GetEnergy(), 100.f - Rule.Cost);
+	Fixture.Advance(Rule.Windup * .25f);
+	TestTrue(TEXT("R remains in windup immediately before lethal damage"), Caster->IsCasting());
+	TestEqual(TEXT("The pending target has not taken early damage"), Target->GetHealth(), 100.f);
+	TestTrue(TEXT("Only the production unified damage entry causes the interruption"), Killer->ApplyCombatDamage(Caster, 1000.f));
+	TestEqual(TEXT("The actual lethal damage GE reduces caster health to zero"), Caster->GetHealth(), 0.f);
+	TestFalse(TEXT("Death, not a preliminary stun, ends the caster"), Caster->IsAlive());
+	TestFalse(TEXT("Lethal damage immediately removes the casting state"), Caster->IsCasting());
+	TestFalse(TEXT("Lethal interruption does not depend on stun"), Caster->IsStunned());
+	const auto* AreaSpec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+	TestTrue(TEXT("Death ends the actual active R ability"), AreaSpec && !AreaSpec->IsActive());
+	const float EnergyAfterDeath = Caster->GetEnergy();
+	Fixture.Advance(Rule.Windup + Rule.Recovery + .5f);
+	TestEqual(TEXT("The expired old R task never damages its target after death"), Target->GetHealth(), 100.f);
+	TestEqual(TEXT("No delayed target damage notification survives lethal interruption"), DamageTransitions, 0);
+	TestEqual(TEXT("No resolved-area Cue is emitted by the cancelled old release"), AreaResults, 0);
+	Caster->CastArea(); Caster->Attack(); Caster->Heal(); Caster->Defend();
+	Fixture.Advance(Rule.Windup + Rule.Recovery + .2f);
+	TestEqual(TEXT("Dead retry requests do not spend another skill cost"), Caster->GetEnergy(), EnergyAfterDeath);
+	TestEqual(TEXT("Dead retries and late callbacks still cannot damage the pending target"), Target->GetHealth(), 100.f);
+	TestEqual(TEXT("Dead retries cannot publish an area result"), AreaResults, 0);
+	int32 Projectiles = 0;
+	for (TActorIterator<AmultiplayerCombatProjectile> It(Fixture.World); It; ++It) ++Projectiles;
+	TestEqual(TEXT("Dead retry requests cannot generate a projectile"), Projectiles, 0);
+	TestFalse(TEXT("No late callback restores casting or movement after death"), Caster->IsCasting()
+		|| Caster->GetCharacterMovement()->MovementMode != MOVE_None);
+	CueManager->OnGameplayCueRouted().Remove(CueListener);
+	TargetASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetHealthAttribute()).Remove(HealthListener);
+	return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDashActualEndpointTest, "Multiplayer.Combat.Targeting.DashActualWallEndpoint",

@@ -17,6 +17,12 @@ class MULTIPLAYER_API UmultiplayerCombatAbilitySystem : public UAbilitySystemCom
 {
 	GENERATED_BODY()
 public:
+	// 查询集中关系，不提交资源/目标；所属端预检和权威能力准入共用同一份规则。
+	bool CheckAbilityTagRelationships(const FGameplayTagContainer& AbilityTags, FGameplayTagContainer* Reasons = nullptr) const;
+	// 只扩展 GAS 原生阻断/取消参数；开始和结束的引用计数仍由 Super 成对管理。
+	virtual void ApplyAbilityBlockAndCancelTags(const FGameplayTagContainer& AbilityTags, UGameplayAbility* RequestingAbility,
+		bool bEnableBlockTags, const FGameplayTagContainer& BlockTags, bool bExecuteCancelTags,
+		const FGameplayTagContainer& CancelTags) override;
 	void EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey);
 	// 重连恢复只调整新效果的下一跳时刻，沿用 GE 自己的 TimerHandle 和清理链路。
 	void SetPeriodicEffectDelay(FActiveGameplayEffectHandle Handle, float FirstDelay);
@@ -28,7 +34,8 @@ protected:
 		const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData) override;
 };
 
-// 三个技能共用 GAS 本地预测、连接接纳与死亡限制；最终玩法结果仍由服务器决定。
+// 五个战斗技能共用 GAS 本地预测、连接接纳与死亡限制；最终玩法结果仍由服务器决定。
+// 静态冲突关系在 CombatConfig，GAS 继续管理每次激活的真实生命周期。
 UCLASS(Abstract)
 class MULTIPLAYER_API UmultiplayerCombatAbility : public UGameplayAbility
 {
@@ -42,6 +49,10 @@ public:
 		const FGameplayTagContainer* TargetTags = nullptr, FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
 	virtual bool ShouldAbilityRespondToEvent(const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayEventData* Payload) const override;
+	// 原生按标签筛选/调试查询也必须看到中央关系，不能只在最终激活入口额外判断。
+	virtual bool DoesAbilitySatisfyTagRequirements(const UAbilitySystemComponent& ASC,
+		const FGameplayTagContainer* SourceTags = nullptr, const FGameplayTagContainer* TargetTags = nullptr,
+		FGameplayTagContainer* Reasons = nullptr) const override;
 protected:
 	// 所有技能的资源与冷却从同一份规则读取；效果继续交给 GAS 预测与确认。
 	virtual bool CheckCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
@@ -173,11 +184,11 @@ class MULTIPLAYER_API UmultiplayerDefendingEffect : public UGameplayEffect
 {
 	GENERATED_BODY()
 public:
-	// 三秒内授予防御标签，减伤由属性结算层统一执行。
+	// 三秒内授予防御标签，正面直接攻击的完全格挡由属性结算层统一执行。
 	UmultiplayerDefendingEffect();
 };
 
-// Q 的短弹反窗口独立于较长减伤效果；结束时只移除自己的标签引用。
+// Q 的短弹反窗口独立于较长格挡效果；结束时只移除自己的标签引用。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerParryEffect : public UGameplayEffect
 {
@@ -185,7 +196,7 @@ class MULTIPLAYER_API UmultiplayerParryEffect : public UGameplayEffect
 public: UmultiplayerParryEffect();
 };
 
-// 防御：由限时 GameplayEffect 授予减伤状态，重复施放不会叠加。
+// 防御：由限时 GameplayEffect 授予正面格挡状态，重复施放不会叠加。
 // 客户端先预测消耗、冷却和自身防御；服务器拒绝时由同一个预测键撤销这些效果。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerDefendAbility : public UmultiplayerCombatAbility
@@ -238,9 +249,6 @@ class MULTIPLAYER_API UmultiplayerHealAbility : public UmultiplayerCombatAbility
 
 public:
 	UmultiplayerHealAbility();
-	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
-		const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags = nullptr,
-		const FGameplayTagContainer* TargetTags = nullptr, FGameplayTagContainer* OptionalRelevantTags = nullptr) const override;
 
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle,

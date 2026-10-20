@@ -13,6 +13,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SphereComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Core/multiplayerCoopGameState.h"
 #include "Core/multiplayerGameMode.h"
 #include "Engine/Engine.h"
@@ -321,6 +322,8 @@ bool FCoopCombatSupplyTest::RunTest(const FString&)
 	auto* First = Pawn(FirstPC); auto* Second = Pawn(SecondPC);
 	const FVector Position(0.f, 0.f, 100.f);
 	auto* FullSupply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(Position, FRotator::ZeroRotator);
+	const auto* Label = FullSupply->FindComponentByClass<UTextRenderComponent>();
+	TestTrue(TEXT("Supply label remains present but hidden in game"), Label && Label->bHiddenInGame);
 	First->SetActorLocation(Position);
 	TestFalse(TEXT("A real full-resource overlap does not consume a supply"), FullSupply->IsConsumed());
 	First->SetActorLocation(Position + FVector(-500.f, 0.f, 0.f));

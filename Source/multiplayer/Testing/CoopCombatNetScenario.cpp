@@ -10,6 +10,7 @@
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatProjectile.h"
+#include "Combat/multiplayerCombatPresentation.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -23,6 +24,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
+#include "Misc/ScopeExit.h"
 #include "Animation/AnimInstance.h"
 #include "Player/multiplayerCoopPlayerController.h"
 #include "HAL/PlatformTime.h"
@@ -104,6 +106,82 @@ namespace
 		return true;
 	}
 
+	// 隔离的 AI 权威规则探针，不是玩家网络侧击验收；配置只引用正式资产，Q/资格/伤害均走原生路径。
+	bool CheckSideAndRearGuard(AmultiplayerCombatCharacter* Source, AmultiplayerCombatCharacter* Reference, FString& Details)
+	{
+		Details = FString::Printf(TEXT("stage=validate source=%s reference=%s sourceAuthority=%d;"),
+			*GetNameSafe(Source), *GetNameSafe(Reference), IsValid(Source) && Source->HasAuthority());
+		if (!IsValid(Source) || !IsValid(Reference) || !Source->HasAuthority()) return false;
+		UWorld* World = Source->GetWorld();
+		if (!World || Reference->GetWorld() != World) { Details += TEXT(" invalid or mismatched world;"); return false; }
+		const FTransform Transform(FRotator::ZeroRotator, Reference->GetActorLocation() + FVector(0, 3000, 0));
+		auto* Guard = World->SpawnActorDeferred<AmultiplayerCombatCharacter>(AmultiplayerCombatCharacter::StaticClass(),
+			Transform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (!Guard) { Details += TEXT(" stage=spawn deferred guard failed;"); return false; }
+		AAIController* Controller = nullptr;
+		ON_SCOPE_EXIT
+		{
+			if (IsValid(Guard)) Guard->Destroy();
+			if (IsValid(Controller)) Controller->Destroy();
+		};
+		Guard->SetActorHiddenInGame(true);
+		const auto* ConfigField = FindFProperty<FObjectPropertyBase>(AmultiplayerCombatCharacter::StaticClass(), TEXT("CombatConfig"));
+		if (!ConfigField) { Details += TEXT(" stage=config CombatConfig property is missing;"); return false; }
+		ConfigField->SetObjectPropertyValue_InContainer(Guard, ConfigField->GetObjectPropertyValue_InContainer(Reference));
+		Guard->FinishSpawning(Transform);
+		if (!IsValid(Guard) || !Guard->HasActorBegunPlay()) { Details += TEXT(" stage=finish guard did not begin play;"); return false; }
+		// 先完成 Actor 初始化再改复制；本同步探针在下一次网络发送前创建并清理。
+		Guard->SetReplicates(false);
+		Guard->GetCharacterMovement()->DisableMovement();
+		Controller = World->SpawnActor<AAIController>();
+		if (!Controller) { Details += TEXT(" stage=controller AI controller spawn failed;"); return false; }
+		Controller->SetReplicates(false);
+		Controller->Possess(Guard);
+		// 专服上的 PlayerController 从不本地控制，LocalPredicted Q 会转发给不存在的客户端。
+		// AIController 是正常的本地权威控制器，直接通过同一个 Q 入口结算，不改执行策略或资格标签。
+		auto* GuardASC = Guard->GetAbilitySystemComponent();
+		const float PreviousEnergy = Guard->GetEnergy();
+		Guard->Defend();
+		const float SourceAttack = Source->GetAbilitySystemComponent()->GetNumericAttribute(UmultiplayerCombatAttributes::GetAttackPowerAttribute());
+		const float GuardArmor = GuardASC->GetNumericAttribute(UmultiplayerCombatAttributes::GetArmorAttribute());
+		const bool bConfigMatches = Guard->GetCombatConfigAsset() == Reference->GetCombatConfigAsset();
+		Details += FString::Printf(TEXT(" stage=Q authority=%d AIControlled=%d local=%d ready=%d defending=%d configMatch=%d energy=%.0f->%.0f cost=%.0f cooldown=%.3f attack=%.0f armor=%.0f;"),
+			Guard->HasAuthority(), Guard->GetController() == Controller && !Guard->IsPlayerControlled(), Guard->IsLocallyControlled(),
+			Guard->IsCombatReady(), Guard->IsDefending(), bConfigMatches, PreviousEnergy, Guard->GetEnergy(),
+			Guard->GetCombatConfig().Defend.Cost, Guard->GetDefenseCooldownRemaining(), SourceAttack, GuardArmor);
+		if (!Guard->HasAuthority() || Guard->GetController() != Controller || !Guard->IsLocallyControlled()
+			|| !Guard->IsCombatReady() || !Guard->IsDefending() || !bConfigMatches
+			|| Guard->GetEnergy() != PreviousEnergy - Guard->GetCombatConfig().Defend.Cost
+			|| Guard->GetDefenseCooldownRemaining() <= 0.f || SourceAttack != 0.f || GuardArmor != 0.f) return false;
+		const float SourceYaw = (Source->GetActorLocation() - Guard->GetActorLocation()).Rotation().Yaw;
+		bool bPassed = true;
+		for (float FacingOffset : {90.f, 180.f})
+		{
+			Guard->SetActorRotation(FRotator(0, SourceYaw + FacingOffset, 0));
+			const float PreviousHealth = Guard->GetHealth(), PreviousShield = Guard->GetShield();
+			const bool bApplied = Source->ApplyCombatDamage(Guard, 20.f);
+			const float ExpectedShield = FMath::Max(0.f, PreviousShield - 20.f);
+			const float ExpectedHealth = PreviousHealth - FMath::Max(0.f, 20.f - PreviousShield);
+			bPassed &= bApplied && Guard->IsDefending() && Guard->GetShield() == ExpectedShield && Guard->GetHealth() == ExpectedHealth;
+			Details += FString::Printf(TEXT(" %s HP%.0f->%.0f(expected%.0f) shield%.0f->%.0f(expected%.0f);"),
+				FacingOffset == 90.f ? TEXT("side") : TEXT("rear"), PreviousHealth, Guard->GetHealth(), ExpectedHealth,
+				PreviousShield, Guard->GetShield(), ExpectedShield);
+		}
+		return bPassed;
+	}
+
+	// 正式配置的持续伤害也属于 R 的结果；原生周期为 1 秒、不在施加当帧跳伤害，包含寿命末尾的整周期跳。
+	float ExpectedSettledAreaHealth(const AmultiplayerCombatCharacter* Caster)
+	{
+		const auto& Rules = Caster->GetCombatConfig();
+		const auto* Burn = GetDefault<UmultiplayerBurningEffect>();
+		const float Period = Burn->Period.GetValueAtLevel(1.f);
+		const int32 Ticks = Rules.BurningDamagePerTick > 0.f && Period > 0.f
+			? FMath::FloorToInt(Rules.BurningDuration / Period + KINDA_SMALL_NUMBER)
+				+ (Burn->bExecutePeriodicEffectOnApplication ? 1 : 0) : 0;
+		return 100.f - Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Amount - Ticks * Rules.BurningDamagePerTick;
+	}
+
 	// 在每次网络发送前重置调度，避免后续 GAS/CMC ForceNetUpdate 穿透一次性的延后。
 	bool HoldCombatReplicationForFrame(UWorld* World, AmultiplayerCombatCharacter* Character)
 	{
@@ -152,11 +230,11 @@ namespace
 		const auto Area = Character->GetSkillTargetPreview(EMultiplayerCombatSkill::Area, &Aim);
 		const auto Defend = Character->GetSkillTargetPreview(EMultiplayerCombatSkill::Defend, &Aim);
 		const bool bAttackTarget = Attack.Target.Get() == Enemy;
-		const bool bMuzzle = Attack.Origin.Equals(Character->GetCombatMuzzleLocation(), .1f);
+		const bool bMuzzle = Attack.Origin.Equals(Character->GetCombatMuzzleLocation(&Aim), .1f);
 		const bool bProjectileRadius = FMath::IsNearlyEqual(Attack.Radius, CombatTargeting::ProjectileRadius);
 		const bool bAreaRadius = FMath::IsNearlyEqual(Area.Radius, Character->GetCombatConfig().AreaRadius);
 		const bool bAreaTarget = Area.AffectedTargets.Contains(TWeakObjectPtr<AmultiplayerCombatCharacter>(Enemy));
-		const bool bDefenseDirection = (Defend.End - Defend.Origin).GetSafeNormal2D().Equals(FRotator(0, Aim.Yaw, 0).Vector(), .01f);
+		const bool bDefenseDirection = (Defend.End - Defend.Origin).GetSafeNormal2D().Equals(Character->GetActorForwardVector().GetSafeNormal2D(), .01f);
 		if (Details)
 		{
 			FString Targets;
@@ -563,13 +641,27 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		if (bDefending && !SentReceipts.Contains(TEXT("ServerDefenseDamage")))
 		{
 			SentReceipts.Add(TEXT("ServerDefenseDamage"));
-			if (!ApplyCombatTestDamage(CombatEnemy.Get(), CombatPrimary.Get(), 20.0f))
-			{
-				Finish(false, TEXT("Could not apply defended damage"));
-				return;
-			}
+			CombatPrimary->SetActorRotation((CombatEnemy->GetActorLocation() - CombatPrimary->GetActorLocation()).Rotation());
+			const float PreviousHealth = CombatPrimary->GetHealth(), PreviousShield = CombatPrimary->GetShield();
+			Assert(TEXT("ServerCombatFrontalGuard"), PreviousHealth == 100.f
+				&& CombatEnemy->ApplyCombatDamage(CombatPrimary.Get(), 20.f)
+				&& CombatPrimary->GetHealth() == PreviousHealth && CombatPrimary->GetShield() == PreviousShield,
+				TEXT("The actual admitted player's Q fully blocks a real body-front direct attack without losing health or shield"));
+			if (bDone) return;
+			FString DirectionDetails;
+			const bool bDirectionsCorrect = CheckSideAndRearGuard(CombatEnemy.Get(), CombatPrimary.Get(), DirectionDetails);
+			Assert(TEXT("ServerCombatSideRearGuard"), bDirectionsCorrect,
+				TEXT("Isolated AI-controlled authority rule probe, not player network side/rear acceptance; real Q and unchanged formal config:") + DirectionDetails);
+			if (bDone) return;
+			// 格挡本身不能当成受伤基线；以真实无方向伤害耗完当前盾并只扣十血，供后续 E90->100。
+			// 此准备点只用无 Cue 的真实 GE helper，不让前置命中特效污染 Q 截图；正面攻击验收保持原路径。
+			Assert(TEXT("ServerCombatHealDamageBaseline"), ApplyCombatTestDamage(CombatEnemy.Get(), CombatPrimary.Get(), PreviousShield + 10.f)
+				&& CombatPrimary->GetHealth() == 90.f && CombatPrimary->GetShield() == 0.f && CombatPrimary->IsDefending(),
+				TEXT("Actual undirected shield+10 damage after the proven frontal block establishes health90/shield0 without rewriting health or config"));
+			if (bDone) return;
 		}
 		if (!BothObserved(TEXT("Defense")) || !Receipts.Contains(TEXT("PartnerDefenseResourcesHidden"))) return;
+		if (bVisualAcceptance && !BothObserved(TEXT("DefensePoseActive"))) return;
 		if (!Receipts.Contains(TEXT("PrimaryDefensePredicted")) || !Receipts.Contains(TEXT("PrimaryDefenseConfirmed"))) return;
 		FGameplayAbilitySpec* DefenseSpec = CombatPrimary->GetAbilitySystemComponent()->FindAbilitySpecFromClass(
 			UmultiplayerDefendAbility::StaticClass());
@@ -578,8 +670,9 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 			? DefenseInstance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
 		Assert(TEXT("ServerCombatDefense"), CombatPrimary.IsValid()
 			&& FMath::IsNearlyEqual(CombatPrimary->GetHealth(), 90.0f)
+			&& CombatPrimary->GetShield() == 0.f
 			&& FMath::IsNearlyEqual(CombatPrimary->GetEnergy(), 80.0f) && ServerKey.IsValidKey() && ServerKey.WasReceived(),
-			FString::Printf(TEXT("Defense consumed energy once and reduced 20 damage to 10; received PredictionKey=%d"), ServerKey.Current));
+			FString::Printf(TEXT("Q consumed energy once; frontal damage preserved health/shield, side/rear stayed normal, then actual undirected shield+10 damage prepared health90; received PredictionKey=%d"), ServerKey.Current));
 		if (bDone) return;
 		if (!ApplyCombatTestDamage(CombatEnemy.Get(), CombatPartner.Get(), 60.0f))
 		{
@@ -917,16 +1010,49 @@ bool UCoopNetTestDriver::CombatPredictionServerTick(UWorld* World)
 			&& !SentReceipts.Contains(TEXT("Damage:") + Name))
 		{
 			SentReceipts.Add(TEXT("Damage:") + Name);
-			ApplyCombatTestDamage(CombatEnemy.Get(), CombatPrimary.Get(), 20.0f);
+			CombatPrimary->SetActorRotation((CombatEnemy->GetActorLocation() - CombatPrimary->GetActorLocation()).Rotation());
+			const float PreviousHealth = CombatPrimary->GetHealth(), PreviousShield = CombatPrimary->GetShield();
+			Assert(TEXT("Server") + Name + TEXT("FrontalGuard"), PreviousHealth == 90.f
+				&& CombatEnemy->ApplyCombatDamage(CombatPrimary.Get(), 20.f)
+				&& CombatPrimary->GetHealth() == PreviousHealth && CombatPrimary->GetShield() == PreviousShield,
+				TEXT("Accepted predicted Q retry blocks the actual body-front direct attack without consuming health or shield"));
+			if (bDone) return true;
+			// 重试的回血基线同样只结算真实无方向 GE，不额外播放 Impact Cue 遮住防御姿态。
+			Assert(TEXT("Server") + Name + TEXT("UndirectedDamage"), ApplyCombatTestDamage(CombatEnemy.Get(), CombatPrimary.Get(), PreviousShield + 10.f)
+				&& CombatPrimary->GetHealth() == 80.f && CombatPrimary->GetShield() == 0.f,
+				TEXT("Only the subsequent real undirected shield+10 damage changes the strict retry result from health90 to80"));
+			if (bDone) return true;
+		}
+		if (Skill == TEXT("Area"))
+		{
+			// 先看到本次真实权威接纳与扣费，不能在客户端尚未发起 R 的阶段首帧误判已结算。
+			if (!HasReceivedPredictionKey(CombatPrimary.Get(), Skill)
+				|| CombatPrimary->GetEnergy() != 100.f - PredictionSkill(Skill).EnergyCost
+				|| CombatPrimary->IsCasting() || CombatEnemy->IsBurning()) return true;
+			const FString Settled = TEXT("AreaSettled:") + Name;
+			if (!SentReceipts.Contains(Settled))
+			{
+				SentReceipts.Add(Settled);
+				const auto* Burn = GetDefault<UmultiplayerBurningEffect>();
+				Assert(TEXT("Server") + Name + TEXT("PeriodicContract"), Burn->Period.GetValueAtLevel(1.f) == 1.f
+					&& !Burn->bExecutePeriodicEffectOnApplication
+					&& ASC->GetNumericAttribute(UmultiplayerCombatAttributes::GetAttackPowerAttribute()) == 0.f
+					&& CombatEnemy->GetAbilitySystemComponent()->GetNumericAttribute(UmultiplayerCombatAttributes::GetArmorAttribute()) == 0.f,
+					TEXT("The actual fixture retains native one-second/no-application burn ticks and zero attack/armor bonuses; formal config is unchanged"));
+				if (bDone) return true;
+				Assert(TEXT("Server") + Name + TEXT("SettledAreaDamage"), CombatEnemy->GetHealth() == ExpectedSettledAreaHealth(CombatPrimary.Get()),
+					TEXT("Recovery and real burn expiration completed; health equals one area hit plus every full native periodic tick, with no health rewrite"));
+				if (bDone) return true;
+			}
 		}
 		if (!BothObserved(TEXT("RetryOutcome")) || !Receipts.Contains(TEXT("Primary") + Name + TEXT("RetryConfirmed"))) return true;
 		const float ExpectedEnergy = 100.0f - PredictionSkill(Skill).EnergyCost;
 		Assert(TEXT("Server") + Name + TEXT("Retry"), HasReceivedPredictionKey(CombatPrimary.Get(), Skill)
 			&& CombatPrimary->GetEnergy() == ExpectedEnergy
 			&& (Skill != TEXT("Attack") || CombatEnemy->GetHealth() == 75.0f)
-			&& (Skill != TEXT("Area") || (!CombatPrimary->IsCasting()
-				&& CombatEnemy->GetHealth() == 100.0f - CombatPrimary->GetCombatConfig().Area.Amount))
-			&& (Skill != TEXT("Defense") || CombatPrimary->GetHealth() == 80.0f)
+			&& (Skill != TEXT("Area") || (!CombatPrimary->IsCasting() && !CombatEnemy->IsBurning()
+				&& CombatEnemy->GetHealth() == ExpectedSettledAreaHealth(CombatPrimary.Get())))
+			&& (Skill != TEXT("Defense") || (CombatPrimary->GetHealth() == 80.0f && CombatPrimary->GetShield() == 0.f))
 			&& (Skill != TEXT("Heal") || CombatPartner->GetHealth() == 70.0f),
 			TEXT("A fresh predicted double-click retry was accepted once by the server; previous rejection did not leave a stuck cost/cooldown"));
 		if (bDone) return true;
@@ -1003,6 +1129,16 @@ bool UCoopNetTestDriver::CombatPredictionClientTick(UWorld* World)
 		}
 		const bool bMissingAim = FString(Case->Rejection) == TEXT("MissingAim");
 		UAnimInstance* Anim = Local->GetMesh()->GetAnimInstance();
+		if (bVisualAcceptance && Name == TEXT("DefenseCooldown") && !bPredictedEffectSurvived)
+		{
+			// 拒绝收包可能早于本帧动画更新；固定等下一次测试 Tick，不轮询姿态直到成功。
+			const FString Settled = TEXT("VisualPoseRollbackTick:") + Name;
+			if (!SentReceipts.Contains(Settled)) { SentReceipts.Add(Settled); return true; }
+			const auto* CombatAnim = Cast<UmultiplayerCombatAnimInstance>(Anim);
+			SendReceipt(TEXT("PrimaryDefenseCooldownPoseRollback"), CombatAnim && !CombatAnim->CombatIsDefending && !Local->IsDefending(),
+				TEXT("Actual owning animation update exited predicted guard after engine rejection; no manual animation update or fake tag removal"));
+			if (bDone) return true;
+		}
 		if (!bPredictedEffectSurvived && (!bMissingAim || !Anim
 			|| !Anim->Montage_IsPlaying(Local->GetActionMontage(EMultiplayerCombatAnimation::Attack))))
 			SendReceipt(TEXT("Primary") + Name + TEXT("Rollback"), true,
@@ -1015,13 +1151,13 @@ bool UCoopNetTestDriver::CombatPredictionClientTick(UWorld* World)
 			SendReceipt(TEXT("Primary") + KeyCase + TEXT("Confirmed"), true,
 				TEXT("Retry key caught up and authoritative energy matches a single consumption"));
 		const bool bOutcome = (Skill == TEXT("Attack") && CombatEnemy->GetHealth() == 75.0f)
-			|| (Skill == TEXT("Area") && !Primary->IsCasting()
-				&& CombatEnemy->GetHealth() == 100.0f - Primary->GetCombatConfig().Area.Amount)
-			|| (Skill == TEXT("Defense") && Primary->GetHealth() == 80.0f && Primary->IsDefending())
+			|| (Skill == TEXT("Area") && !Primary->IsCasting() && !CombatEnemy->IsBurning()
+				&& CombatEnemy->GetHealth() == ExpectedSettledAreaHealth(Primary))
+			|| (Skill == TEXT("Defense") && Primary->GetHealth() == 80.0f && Primary->GetShield() == 0.f && Primary->IsDefending())
 			|| (Skill == TEXT("Heal") && Partner->GetHealth() == 70.0f);
 		if (bOutcome && (bPartner || Local->GetEnergy() == ExpectedEnergy))
 			SendReceipt(Prefix + Name + TEXT("RetryOutcome"), true,
-				TEXT("Observed the authoritative single skill result on this independent connection; Area also completed recovery"));
+				TEXT("Observed the exact authoritative skill result on this independent connection; Area completed recovery and all configured burn ticks before final health was accepted"));
 	}
 #endif
 	return true;
@@ -1398,12 +1534,22 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 			SendReceipt(Prefix + TEXT("Attack"), true, TEXT("Observed one attack result: enemy health 55"));
 		else if (Phase == TEXT("CombatDefense") && Subject->GetCombatTeam() == EMultiplayerCombatTeam::Players
 			&& FMath::IsNearlyEqual(Subject->GetHealth(), 90.0f)
+			&& Subject->GetShield() == 0.f
 			&& (bPartner || FMath::IsNearlyEqual(Subject->GetEnergy(), 80.0f))
 			&& Subject->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Defending))
 		{
+			if (bVisualAcceptance)
+			{
+				const FString Seen = Prefix + TEXT("VisualDefenseFirstSeen");
+				if (!SentReceipts.Contains(Seen)) { SentReceipts.Add(Seen); return; }
+				const auto* CombatAnim = Cast<UmultiplayerCombatAnimInstance>(Subject->GetMesh()->GetAnimInstance());
+				SendReceipt(Prefix + TEXT("DefensePoseActive"), CombatAnim && CombatAnim->CombatIsDefending,
+					TEXT("Actual owner/remote AnimInstance entered guard after a natural animation update with the replicated defense state"));
+				if (bDone) return;
+			}
 			if (CaptureSkillView(TEXT("BasicDefense"),Subject)) SendReceipt(Prefix + TEXT("Defense"), true, bPartner
-				? TEXT("Observed reduced damage and replicated defense tag; remote resources remain private")
-				: TEXT("Observed reduced damage, own energy80 and replicated defense tag"));
+				? TEXT("Observed health90/shield0 after the server-verified frontal block and explicit undirected damage baseline; defense replicated and remote resources remain private")
+				: TEXT("Observed health90/shield0 after the server-verified frontal block and explicit undirected damage baseline, own energy80 and replicated defense tag"));
 			if (bPartner)
 				SendReceipt(TEXT("PartnerDefenseResourcesHidden"), Subject != LocalCharacter
 					&& FMath::IsNearlyEqual(Subject->GetEnergy(), 100.0f)

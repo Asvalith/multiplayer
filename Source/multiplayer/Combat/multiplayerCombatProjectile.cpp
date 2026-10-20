@@ -282,7 +282,7 @@ void AmultiplayerCombatProjectile::HandleOverlap(UPrimitiveComponent* Overlapped
 	}
 }
 
-// 弹反是服务器对当前来向的裁决，不读取客户端命中，也不把 Q 的减伤持续时间当成弹反窗口。
+// 弹反是服务器对当前来向的裁决，不读取客户端命中，也不把 Q 的格挡持续时间当成弹反窗口。
 bool AmultiplayerCombatProjectile::TryReflectFrom(AmultiplayerCombatCharacter* Defender, const FHitResult& Hit)
 {
 	AmultiplayerCombatCharacter* PreviousSource = SourceCharacter.Get();
@@ -311,6 +311,7 @@ bool AmultiplayerCombatProjectile::TryReflectFrom(AmultiplayerCombatCharacter* D
 	++ReflectionCount;
 	LaunchState.Origin = FRepMovement::RebaseOntoZeroOrigin(Origin, this);
 	LaunchState.Velocity = ReflectedVelocity;
+	// 弹反只开始新的飞行段，保留原 ServerExpiryTime，连续反射不能延长弹体寿命。
 	LaunchState.ServerLaunchTime = GetWorld()->GetTimeSeconds();
 	++LaunchState.Revision;
 	// Deactivate 已清空速度；新值留在本次快照中，下一 Tick 从相同位置和方向继续真实扫掠。
@@ -351,12 +352,14 @@ void AmultiplayerCombatProjectile::ResolveImpact(AActor* OtherActor, const FHitR
 	if (IsValid(Target) && TryReflectFrom(Target, Hit)) return;
 
 	// 先终止碰撞与移动，再通知伤害监听者；同步回调不能重复结算这颗投射物。
+	// StopMovement 会清零速度；提前保存真实来向，供本次权威正面格挡判定使用。
+	const FVector IncomingDirection = ProjectileMovement->Velocity;
 	bHitResolved = true;
 	CollisionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ProjectileMovement->StopMovementImmediately();
 	if (IsValid(Source) && IsValid(Target) && Target->IsAlive())
 	{
-		Source->ApplyCombatDamage(Target, DamageAmount, &Hit);
+		Source->ApplyCombatDamage(Target, DamageAmount, &Hit, &IncomingDirection);
 	}
 	Destroy();
 }

@@ -39,6 +39,8 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "Particles/ParticleSystem.h"
@@ -49,6 +51,31 @@
 namespace
 {
 	constexpr float CombatTransientEffectLifetime = 2.f;
+
+	// 只为联机验收区分“Cue未抵达”与“抵达后资源/粒子异常”，不改变正式传输或结算。
+	void TraceCombatHealCue(const TCHAR* Stage, AActor* Target, const FGameplayTag& Tag,
+		const FmultiplayerCombatFeedback* Feedback, const FVector& Location, const USceneComponent* Component = nullptr)
+	{
+#if !UE_BUILD_SHIPPING
+		static const bool bEnabled = []
+		{
+			FString Mode;
+			FParse::Value(FCommandLine::Get(), TEXT("CoopNetTest="), Mode);
+			return Mode == TEXT("Combat") || Mode == TEXT("CombatLifecycle");
+		}();
+		if (!bEnabled || Tag != CombatTags::Cue_Heal) return;
+		const UWorld* World = Target ? Target->GetWorld() : nullptr;
+		const APawn* Pawn = Cast<APawn>(Target);
+		UE_LOG(LogTemp, Display,
+			TEXT("COOP_CUE_DIAG cue=Heal stage=%s target=%s role=%d netmode=%d local=%d world=%.3f real=%.3f frame=%llu cascade=%s cascadeLoaded=%d niagara=%s niagaraLoaded=%d location=%s component=%s active=%d registered=%d"),
+			Stage, *GetNameSafe(Target), Target ? int32(Target->GetLocalRole()) : -1, World ? int32(World->GetNetMode()) : -1,
+			Pawn && Pawn->IsLocallyControlled(), World ? World->GetTimeSeconds() : -1.f, World ? World->GetRealTimeSeconds() : -1.f,
+			static_cast<unsigned long long>(GFrameCounter), Feedback ? *Feedback->CascadeEffect.ToSoftObjectPath().ToString() : TEXT("None"),
+			Feedback && Feedback->CascadeEffect.IsValid(), Feedback ? *Feedback->Effect.ToSoftObjectPath().ToString() : TEXT("None"),
+			Feedback && Feedback->Effect.IsValid(), *Location.ToString(), *GetNameSafe(Component),
+			Component && Component->IsActive(), Component && Component->IsRegistered());
+#endif
+	}
 
 	bool UsesEnemyMelee(const AmultiplayerCombatCharacter* Character)
 	{
@@ -109,13 +136,20 @@ const FmultiplayerCombatFeedback* AmultiplayerCombatCue::GetFeedback(AActor* Tar
 	return &Rules.FailureFeedback;
 }
 
+// 补载只恢复本次 Cue 的音画；沿用已选表现快照，不能重新治疗、扣费或重复发成功提示。
 bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGameplayCueParameters& Parameters)
 {
+	TraceCombatHealCue(bExecutionLoadAttempted ? TEXT("received-after-load") : TEXT("received"), Target, GameplayCueTag,
+		bHasExecutionFeedback ? &ExecutionFeedback : GetFeedback(Target, &Parameters), Parameters.Location);
 	if (GetNetMode() == NM_DedicatedServer) return false;
 	if (!bHasExecutionFeedback)
 	{
 		const auto* SelectedFeedback = GetFeedback(Target, &Parameters);
-		if (!SelectedFeedback) return false;
+		if (!SelectedFeedback)
+		{
+			TraceCombatHealCue(TEXT("assetmissing"), Target, GameplayCueTag, nullptr, Parameters.Location);
+			return false;
+		}
 		ExecutionFeedback = *SelectedFeedback;
 		bHasExecutionFeedback = true;
 	}
@@ -146,6 +180,7 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 	if (!Feedback->Sound.IsNull() && !Feedback->Sound.IsValid()) PendingAssets.Add(Feedback->Sound.ToSoftObjectPath());
 	if (!bExecutionLoadAttempted && !PendingAssets.IsEmpty())
 	{
+		TraceCombatHealCue(TEXT("loading"), Target, GameplayCueTag, Feedback, Parameters.Location);
 		// 正常由角色预载；初次相关漏过预载时只补一次异步请求，失败也不会循环加载。
 		bExecutionLoadAttempted = true;
 		LoadingAssets = UAssetManager::GetStreamableManager().RequestAsyncLoad(PendingAssets,
@@ -169,16 +204,20 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 	}
 	else if (GameplayCueTag == CombatTags::Cue_Heal)
 		Location.Z -= Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	if (bUseCascade ? !Feedback->CascadeEffect.IsValid() : !Feedback->Effect.IsValid())
+		TraceCombatHealCue(TEXT("assetmissing"), Target, GameplayCueTag, Feedback, Location);
 	// 投射物尾迹由弹体持有；这里的 AttackFeedback 只能配置一次性起手效果。
 	if (bUseCascade)
 	{
 		if (auto* System = Feedback->CascadeEffect.Get())
 			if (auto* Component = UGameplayStatics::SpawnEmitterAtLocation(this, System, Location, Rotation))
 			{
+				TraceCombatHealCue(TEXT("spawned-Cascade"), Target, GameplayCueTag, Feedback, Location, Component);
 				FTimerHandle Cleanup;
 				GetWorldTimerManager().SetTimer(Cleanup, FTimerDelegate::CreateWeakLambda(Component,
 					[Component] { Component->DestroyComponent(); }), 5.f, false);
 			}
+			else TraceCombatHealCue(TEXT("spawnfailed-Cascade"), Target, GameplayCueTag, Feedback, Location);
 	}
 	else if (auto* System = Feedback->Effect.Get())
 	{
@@ -186,15 +225,23 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 			FVector::OneVector, true, false);
 		if (Component)
 		{
-			Component->SetVariableFloat(TEXT("User.Duration"), bGround ? .6f : .3f);
+			Component->SetVariableFloat(TEXT("User.Duration"), bGround ? .6f : GameplayCueTag == CombatTags::Cue_Heal ? .8f : .3f);
 			if (bGround) Component->SetVariableFloat(TEXT("User.Scale_All"),
 				Parameters.RawMagnitude / Character->GetCombatConfig().AreaEffectReferenceRadius);
+			if (GameplayCueTag == CombatTags::Cue_Heal)
+			{
+				// 护体治疗跟随受治疗者，脚底偏移只计算一次；角色缩放不放大粒子。
+				Component->SetAbsolute(false, false, true);
+				Component->AttachToComponent(Target->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+			}
 			Component->Activate(true);
+			TraceCombatHealCue(TEXT("spawned-Niagara"), Target, GameplayCueTag, Feedback, Location, Component);
 			// 素材后续即使被误设为循环，瞬时命中特效也不能无限遗留在场景中。
 			FTimerHandle Cleanup;
 			GetWorldTimerManager().SetTimer(Cleanup, FTimerDelegate::CreateWeakLambda(Component,
 				[Component] { Component->DestroyComponent(); }), CombatTransientEffectLifetime, false);
 		}
+		else TraceCombatHealCue(TEXT("spawnfailed-Niagara"), Target, GameplayCueTag, Feedback, Location);
 	}
 	if (auto* Sound = Feedback->Sound.Get()) UGameplayStatics::PlaySoundAtLocation(this, Sound, Location);
 	// 瞬时 Cue 自身无需存活；生成的粒子由 Niagara 自动回收。
@@ -321,6 +368,7 @@ void AmultiplayerCombatCue::EndPlay(const EEndPlayReason::Type Reason)
 	StopPresentation();
 	Super::EndPlay(Reason);
 }
+// 移除、回收和 EndPlay 共用清理入口；撤销补载并释放持续组件，避免旧 Cue 在异步完成后复活。
 void AmultiplayerCombatCue::StopPresentation()
 {
 	bLoopRequested = false;
@@ -541,6 +589,7 @@ void UmultiplayerCombatWidget::RefreshTimers()
 		const float Remaining = CombatSkillCooldown(Current, Skill);
 		const auto Rule = Current ? Current->GetSkillRule(Skill) : Config.GetSkill(Skill);
 		const bool bCoolingDown = Remaining > 0;
+		// 图标仅概括资源与自身状态，不承诺本次目标合法；目标资格由瞄准预览和确认时实时查询。
 		const bool bAvailable = bReady && !bStunned && !bCasting && !bCoolingDown
 			&& CachedEnergy >= Rule.Cost && (!Progression || Progression->GetSkillLevel(Skill) > 0);
 		bHasActiveTimer |= bCoolingDown;
@@ -973,10 +1022,10 @@ void AmultiplayerCombatHUD::BeginPlay()
 	Super::BeginPlay();
 	if (GetOwningPlayerController() && GetOwningPlayerController()->IsLocalController() && CombatWidgetClass)
 	{
-		CombatWidget = CreateWidget<UUserWidget>(GetOwningPlayerController(), CombatWidgetClass);
-		if (CombatWidget)
+		NativeCombatWidget = CreateWidget<UUserWidget>(GetOwningPlayerController(), CombatWidgetClass);
+		if (NativeCombatWidget)
 		{
-			CombatWidget->AddToViewport();
+			NativeCombatWidget->AddToViewport();
 			// 正常地图入口结束连接菜单的 UIOnly 捕获；禁行状态仍由角色/GAS管理，不清除其输入锁。
 			auto* Controller = GetOwningPlayerController();
 			FInputModeGameOnly InputMode;
@@ -1098,66 +1147,34 @@ void AmultiplayerCombatHUD::DrawTargetPreview(const FmultiplayerCombatTargetPrev
 	switch (Preview.Skill)
 	{
 	case EMultiplayerCombatSkill::Attack:
-	{
-		DrawWorldSegment(Preview.Origin, Preview.End, Color.CopyWithNewOpacity(.35f), 1.f);
-		FVector2D End;
-		if (ProjectTargetPoint(Preview.End, End) && IsRangePointVisible(Preview.End))
-		{
-			DrawLine(End.X - 4.f, End.Y, End.X + 4.f, End.Y, Color, 2.f);
-			DrawLine(End.X, End.Y - 4.f, End.X, End.Y + 4.f, Color, 2.f);
-		}
-		if (Preview.Target.IsValid()) DrawTargetMarker(Preview.Target.Get(), Color, TEXT("弹道目标"));
-		break;
-	}
 	case EMultiplayerCombatSkill::Defend:
-	{
-		const FVector Feet = Preview.Origin - FVector::UpVector * (HalfHeight - 3.f);
-		DrawWorldRing(Feet, FVector::UpVector, Character->GetCapsuleComponent()->GetScaledCapsuleRadius() + 12.f, Color);
-		const FVector Forward = (Preview.End - Preview.Origin).GetSafeNormal2D();
-		const float HalfAngle = FMath::Acos(FMath::Clamp(Character->GetCombatConfig().ParryFrontDot, -1.f, 1.f));
-		constexpr float FanRadius = 110.f; // 只表达弹反方向，不冒充减伤或碰撞范围。
-		FVector Previous = Feet + Forward.RotateAngleAxis(FMath::RadiansToDegrees(-HalfAngle), FVector::UpVector) * FanRadius;
-		DrawWorldSegment(Feet, Previous, Color);
-		for (int32 Index = 1; Index <= 24; ++Index)
-		{
-			const float Angle = FMath::Lerp(-HalfAngle, HalfAngle, float(Index) / 24.f);
-			const FVector Next = Feet + Forward.RotateAngleAxis(FMath::RadiansToDegrees(Angle), FVector::UpVector) * FanRadius;
-			DrawWorldSegment(Previous, Next, Color);
-			Previous = Next;
-		}
-		DrawWorldSegment(Feet, Previous, Color);
-		DrawWorldSegment(Feet, Feet + Forward * FanRadius, Color.CopyWithNewOpacity(.5f));
+		// 普攻和自身防御使用原界面的准星、技能提示及实际动作，不叠加调试式射线和扇区。
 		break;
-	}
 	case EMultiplayerCombatSkill::Heal:
-		// 治疗按三维距离选人；三个大圆明确表示球形范围，不画成无限高度地面圆柱。
-		DrawWorldRing(Preview.Origin, FVector::UpVector, Preview.Radius, Color.CopyWithNewOpacity(.65f));
-		DrawWorldRing(Preview.Origin, FVector::ForwardVector, Preview.Radius, Color.CopyWithNewOpacity(.35f));
-		DrawWorldRing(Preview.Origin, FVector::RightVector, Preview.Radius, Color.CopyWithNewOpacity(.35f));
 		if (auto* Target = Preview.Target.Get())
 		{
-			DrawWorldSegment(Preview.Origin, Target->GetActorLocation(), Color, 2.f);
-			DrawTargetMarker(Target, Color, TEXT("本次治疗"));
+			// 只标记本次治疗对象，不把整个三维搜索球画满屏幕；真实选人规则仍由同源查询决定。
+			const auto* Capsule = Target->GetCapsuleComponent();
+			const FVector Feet = Target->GetActorLocation() - FVector::UpVector * (Capsule->GetScaledCapsuleHalfHeight() - 3.f);
+			DrawWorldRing(Feet, FVector::UpVector, Capsule->GetScaledCapsuleRadius(), Color);
 		}
 		break;
 	case EMultiplayerCombatSkill::Area:
+	{
+		// 只保留落点的伤害边界，删除角色外围的最大射程圈与连接线。
 		// 判定是有限高度的水平圆柱；斜坡法线只供粒子贴地，不能旋转真实半径边界。
 		DrawWorldRing(Preview.End + FVector::UpVector * 2.f, FVector::UpVector, Preview.Radius, Color);
 		DrawWorldSegment(Preview.End - FVector(14.f, 0.f, 0.f), Preview.End + FVector(14.f, 0.f, 0.f), Color);
 		DrawWorldSegment(Preview.End - FVector(0.f, 14.f, 0.f), Preview.End + FVector(0.f, 14.f, 0.f), Color);
-		for (const auto& Target : Preview.AffectedTargets) DrawTargetMarker(Target.Get(), Color, TEXT("范围内目标"));
 		break;
+	}
 	case EMultiplayerCombatSkill::Dash:
 	{
 		const FVector Offset = FVector::UpVector * (3.f - HalfHeight);
 		const FVector Start = Preview.Origin + Offset, End = Preview.End + Offset;
 		const FVector Forward = (End - Start).GetSafeNormal2D();
 		const FVector Side = FVector::CrossProduct(Forward, FVector::UpVector) * Preview.Radius;
-		DrawWorldRing(Start, FVector::UpVector, Preview.Radius, Color.CopyWithNewOpacity(.4f));
 		DrawWorldRing(End, FVector::UpVector, Preview.Radius, Color);
-		DrawWorldSegment(Start + Side, End + Side, Color);
-		DrawWorldSegment(Start - Side, End - Side, Color);
-		DrawWorldSegment(Start, End, Color.CopyWithNewOpacity(.65f));
 		DrawWorldSegment(End, End - Forward * 45.f + Side * .65f, Color, 2.f);
 		DrawWorldSegment(End, End - Forward * 45.f - Side * .65f, Color, 2.f);
 		break;
@@ -1230,21 +1247,13 @@ void AmultiplayerCombatHUD::DrawHUD()
 	const bool bAreaCasting = Character->IsCasting();
 	const auto Skill = bTargeting ? Character->GetTargetingSkill()
 		: bAreaCasting ? EMultiplayerCombatSkill::Area : EMultiplayerCombatSkill::Attack;
-	const auto Preview = Character->GetSkillTargetPreview(Skill);
-	const FText Failure = Character->GetSkillFailureReason(Skill);
+	const auto Preview = bTargeting || bAreaCasting ? Character->GetSkillTargetPreview(Skill) : FmultiplayerCombatTargetPreview();
+	const FText Failure = bTargeting || bAreaCasting ? Character->GetSkillFailureReason(Skill) : FText::GetEmpty();
 	const bool bAvailable = Preview.bValid && Failure.IsEmpty();
-	DrawTargetPreview(Preview, bAreaCasting ? FLinearColor(1.f, .75f, .18f) : bAvailable ? Ready : Blocked);
-	// 准星保持镜头中心；小十字另示实际扫掠终点，贴墙时能看见被截断的弹道。
-	if (!bTargeting && !bAreaCasting)
-	{
-		const float X = Canvas->ClipX * .5f, Y = Canvas->ClipY * .5f;
-		for (float Sign : {-1.f, 1.f})
-		{
-			DrawLine(X + Sign * 5.f, Y, X + Sign * 11.f, Y, Hint, 1.5f);
-			DrawLine(X, Y + Sign * 5.f, X, Y + Sign * 11.f, Hint, 1.5f);
-		}
-	}
+	if (bTargeting) ResolvedAreaUntil = 0;
 	const bool bShowingResolvedArea = ResolvedAreaUntil > GetWorld()->GetTimeSeconds();
+	if (bTargeting || (bAreaCasting && !bShowingResolvedArea))
+		DrawTargetPreview(Preview, bAreaCasting ? FLinearColor(1.f, .75f, .18f) : bAvailable ? Ready : Blocked);
 	if (bShowingResolvedArea)
 		DrawWorldRing(ResolvedAreaCenter + FVector::UpVector * 2.f, FVector::UpVector, ResolvedAreaRadius, FLinearColor(1.f, .65f, .1f));
 	DrawEnemyTelegraphs(Character);
@@ -1271,9 +1280,11 @@ void AmultiplayerCombatHUD::DrawHUD()
 			: Skill == EMultiplayerCombatSkill::Heal ? CombatTags::Failure_NoHealTarget
 			: Skill == EMultiplayerCombatSkill::Dash ? CombatTags::Failure_DashBlocked : CombatTags::Failure_MuzzleBlocked).ToString();
 		else if (Skill == EMultiplayerCombatSkill::Defend)
-			Detail = FString::Printf(TEXT("全向减伤 · 扇区仅代表前 %.1f 秒的正面投射物弹反"), Character->GetCombatConfig().ParryWindow);
+			Detail = FString::Printf(TEXT("正面格挡 · 前 %.1f 秒可弹反正面投射物"), Character->GetCombatConfig().ParryWindow);
 		else if (Skill == EMultiplayerCombatSkill::Area)
-			Detail = FString::Printf(TEXT("半径 %.1f m · 可命中 %d 个敌人 · 隔墙/跨层无效，结算时复核"), Preview.Radius / 100.f, Preview.AffectedTargets.Num());
+			Detail = FString::Printf(TEXT("射程 %.1f m · 落点 %.1f m · 伤害半径 %.1f m · %d 个目标"),
+				Character->GetSkillRule(Skill).Range / 100.f, FVector::Dist2D(Preview.Origin, Preview.End) / 100.f,
+				Preview.Radius / 100.f, Preview.AffectedTargets.Num());
 		else if (Skill == EMultiplayerCombatSkill::Dash)
 			Detail = FString::Printf(TEXT("预计水平距离 %.1f m · 静态障碍截断；落差/动态障碍可能改变落点"),
 				FVector::Dist2D(Preview.Origin, Preview.End) / 100.f);
@@ -1281,14 +1292,14 @@ void AmultiplayerCombatHUD::DrawHUD()
 	}
 	else if (bAreaCasting) DrawCenteredPrompt(TEXT("施法中 · 右键打断（已提交消耗不返还）"), PromptY, Hint);
 	if (bShowingResolvedArea)
-		DrawCenteredPrompt(TEXT("黄色圈为已结算范围，粒子消散不代表持续伤害"), Canvas->ClipY * .62f, FLinearColor(1.f, .75f, .18f));
+		DrawCenteredPrompt(TEXT("黄色圈为已结算范围，粒子消散不代表持续伤害"), PromptY + 24.f, FLinearColor(1.f, .75f, .18f));
 	else if (!bTargeting && !bAreaCasting)
-		DrawCenteredPrompt(TEXT("Q / E / R / Shift 按住预览、松开释放 · 右键取消 · 左键普攻"), Canvas->ClipY * .62f, Hint.CopyWithNewOpacity(.8f));
+		DrawCenteredPrompt(TEXT("Q / E / R / Shift 按住预览、松开释放 · 右键取消 · 左键普攻"), PromptY, Hint.CopyWithNewOpacity(.8f));
 }
 
 void AmultiplayerCombatHUD::EndPlay(EEndPlayReason::Type Reason)
 {
-	if (CombatWidget) { CombatWidget->RemoveFromParent(); CombatWidget = nullptr; }
+	if (NativeCombatWidget) { NativeCombatWidget->RemoveFromParent(); NativeCombatWidget = nullptr; }
 	Super::EndPlay(Reason);
 }
 
@@ -1306,4 +1317,8 @@ void UmultiplayerCombatAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	CombatShouldMove = CombatMoveSpeed > 3.f;
 	const ACharacter* Character = Cast<ACharacter>(Pawn);
 	CombatIsFalling = Character && Character->GetCharacterMovement()->IsFalling();
+	const auto* CombatCharacter = Cast<AmultiplayerCombatCharacter>(Pawn);
+	// 姿态不持有 Montage、不设超时，也不回写标签；高优先级技能与死亡仍由原有动作槽接管。
+	CombatIsDefending = CombatCharacter && CombatCharacter->IsCombatReady()
+		&& CombatCharacter->IsDefending() && !CombatCharacter->IsStunned();
 }

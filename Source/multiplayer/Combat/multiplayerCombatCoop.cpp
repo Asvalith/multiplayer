@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "Combat/multiplayerCombatCoop.h"
+#include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatAttributes.h"
 #include "Combat/multiplayerCombatConfig.h"
@@ -188,22 +189,33 @@ UmultiplayerRescueAbility::UmultiplayerRescueAbility()
 {
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
+	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Rescue));
 	ActivationOwnedTags.AddTag(CombatTags::State_Rescuing);
-	for (FGameplayTag Tag : {CombatTags::State_Dead.GetTag(), CombatTags::State_Downed.GetTag(), CombatTags::State_Stunned.GetTag(),
-		CombatTags::State_Casting.GetTag(), CombatTags::State_Dashing.GetTag(), CombatTags::State_MovementBlocked.GetTag()}) ActivationBlockedTags.AddTag(Tag);
 }
 bool UmultiplayerRescueAbility::CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* Info,
 	const FGameplayTagContainer* Source, const FGameplayTagContainer* Target, FGameplayTagContainer* Reasons) const
 {
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(Info->AvatarActor.Get());
-	return Character && Character->GetCoopComponent()->CanStartRescue() && Super::CanActivateAbility(Handle, Info, Source, Target, Reasons);
+	return !bEndingRescue && Character && Character->GetCoopComponent()->CanStartRescue()
+		&& Super::CanActivateAbility(Handle, Info, Source, Target, Reasons);
+}
+// 救援不继承战斗消耗基类，但使用相同关系查询；其倒地目标/占用校验仍由合作组件负责。
+bool UmultiplayerRescueAbility::DoesAbilitySatisfyTagRequirements(const UAbilitySystemComponent& ASC,
+	const FGameplayTagContainer* Source, const FGameplayTagContainer* Target, FGameplayTagContainer* Reasons) const
+{
+	const auto* CombatASC = Cast<UmultiplayerCombatAbilitySystem>(&ASC);
+	return (!CombatASC || CombatASC->CheckAbilityTagRelationships(GetAssetTags(), Reasons))
+		&& Super::DoesAbilitySatisfyTagRequirements(ASC, Source, Target, Reasons);
 }
 void UmultiplayerRescueAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* Info,
 	FGameplayAbilityActivationInfo Activation, const FGameplayEventData* Event)
 {
+	// 替换普攻或占用通知都可能同步取消救援；取消后不能再创建引导任务。
+	if (!IsActive()) return;
 	auto* Character = Cast<AmultiplayerCombatCharacter>(Info->AvatarActor.Get());
 	if (!Character || !Info->IsNetAuthority() || !Character->GetCoopComponent()->BeginRescue())
 	{ EndAbility(Handle, Info, Activation, true, true); return; }
+	if (!IsActive()) return;
 	auto* Delay = UAbilityTask_WaitDelay::WaitDelay(this, Character->GetCombatConfig().RescueDuration);
 	Delay->OnFinish.AddDynamic(this, &ThisClass::FinishRescue);
 	GetWorld()->GetTimerManager().SetTimer(ValidationTimer, this, &ThisClass::CheckRescue, .1f, true);
@@ -224,7 +236,15 @@ void UmultiplayerRescueAbility::FinishRescue()
 void UmultiplayerRescueAbility::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* Info,
 	FGameplayAbilityActivationInfo Activation, bool bReplicate, bool bCancelled)
 {
-	if (!IsActive()) return;
+	if (bEndingRescue || !IsEndAbilityValid(Handle, Info)) return;
+	if (ScopeLockCount > 0)
+	{
+		WaitingToExecute.Add(FPostLockDelegate::CreateUObject(this, &ThisClass::EndAbility,
+			Handle, Info, Activation, bReplicate, bCancelled));
+		return;
+	}
+	// 释放占用会同步通知 HUD/移动/外部监听；重入取消不能重复收尾，也不能激活半清理的实例。
+	TGuardValue<bool> EndingGuard(bEndingRescue, true);
 	GetWorld()->GetTimerManager().ClearTimer(ValidationTimer);
 	if (auto* Character = Cast<AmultiplayerCombatCharacter>(Info->AvatarActor.Get())) Character->GetCoopComponent()->EndRescue();
 	Super::EndAbility(Handle, Info, Activation, bReplicate, bCancelled);

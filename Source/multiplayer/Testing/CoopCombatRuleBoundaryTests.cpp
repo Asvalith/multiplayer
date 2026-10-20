@@ -501,7 +501,7 @@ bool FCoopCombatTriggerOcclusionBoundaryTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDamageAttributeBoundaryTest, "Multiplayer.Combat.DamageAttributeBoundary",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-// 伤害经过来源捕获、目标护甲与属性集减伤；防御不能在 Execution 和属性集各算一遍。
+// 伤害经过来源捕获、目标护甲与属性集格挡；防御不能在 Execution 和属性集各算一遍。
 bool FCoopCombatDamageAttributeBoundaryTest::RunTest(const FString& Parameters)
 {
 	FCombatRuleBoundaryWorld Fixture;
@@ -514,7 +514,10 @@ bool FCoopCombatDamageAttributeBoundaryTest::RunTest(const FString& Parameters)
 	Target->Defend();
 	TestTrue(TEXT("Defense effect is active before the second hit"), Target->IsDefending());
 	Source->ApplyCombatDamage(Target, 25.0f);
-	TestEqual(TEXT("Defense halves the evaluated thirty damage exactly once"), Target->GetHealth(), 55.0f);
+	TestEqual(TEXT("Rear damage keeps the evaluated thirty damage while defense is active"), Target->GetHealth(), 40.0f);
+	Target->SetActorRotation(FRotator(0, 180, 0));
+	Source->ApplyCombatDamage(Target, 25.0f);
+	TestEqual(TEXT("Turning the body toward the source fully blocks that same evaluated attack"), Target->GetHealth(), 40.0f);
 	return true;
 }
 

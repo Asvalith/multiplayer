@@ -22,6 +22,7 @@ class UmultiplayerCombatAttributes;
 struct FOnAttributeChangeData;
 struct FGameplayTag;
 struct FGameplayTagContainer;
+struct FGameplayEffectSpec;
 
 /** 白名单持续效果的服务器快照；Spec 保留原来源，周期额外保存距下一跳的真实时间。 */
 struct FmultiplayerCombatResumeEffect
@@ -140,7 +141,7 @@ public:
 	EMultiplayerCombatSkill GetTargetingSkill() const { return TargetingSkill; }
 	FmultiplayerCombatTargetPreview GetSkillTargetPreview(EMultiplayerCombatSkill Skill, const FRotator* Aim = nullptr) const;
 	virtual FVector GetCombatViewOrigin(const FRotator& Aim) const;
-	FVector GetCombatMuzzleLocation() const;
+	FVector GetCombatMuzzleLocation(const FRotator* AimSnapshot = nullptr) const;
 	AmultiplayerCombatCharacter* GetHealTarget() const;
 	bool CheckSkillAvailable(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons = nullptr) const;
 	FText GetSkillFailureReason(EMultiplayerCombatSkill Skill) const;
@@ -180,7 +181,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Combat") void LoadProgress();
 	virtual void Jump() override;
 	// 不接受客户端伤害/眩晕数值；这些入口只由权威技能与真实碰撞调用。
-	bool ApplyCombatDamage(AmultiplayerCombatCharacter* Target, float Amount, const FHitResult* Hit = nullptr);
+	// 直接攻击默认快照来源位置；弹体传真实来向，显式零向量表示范围等无方向伤害。
+	bool ApplyCombatDamage(AmultiplayerCombatCharacter* Target, float Amount, const FHitResult* Hit = nullptr,
+		const FVector* IncomingDirection = nullptr);
+	// 伤害结算和命中反馈共用同一份正面格挡查询；不消费资源或改变本次效果。
+	bool ShouldBlockDirectDamage(const FGameplayEffectSpec& Spec) const;
 	void ApplyStun(float Duration);
 	// 业务效果只由服务器提交；返回自己的效果句柄，调用方结束时不能按标签移除其他来源。
 	FActiveGameplayEffectHandle ApplyRoot(float Duration);

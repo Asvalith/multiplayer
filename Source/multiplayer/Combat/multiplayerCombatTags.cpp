@@ -1,10 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Combat/multiplayerCombatTags.h"
+#include "Combat/multiplayerCombatConfig.h"
 
 // 原生标签随模块注册，无需额外维护配置文件中的同名条目。
 namespace CombatTags
 {
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Combat, "Ability.Combat", "战斗能力的共用关系分类，不代表正在执行");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Rescue, "Ability.Combat.Rescue", "服务器引导救援");
+	UE_DEFINE_GAMEPLAY_TAG(Failure_Requirements, "Failure.Combat.Requirements");
+	UE_DEFINE_GAMEPLAY_TAG(Failure_Conflict, "Failure.Combat.Conflict");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Failure_MuzzleBlocked, "Failure.Combat.MuzzleBlocked", "实际发射点被场景遮挡");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Attack, "Ability.Combat.Attack", "普通远程攻击");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Defend, "Ability.Combat.Defend", "限时防御");
@@ -26,7 +31,7 @@ namespace CombatTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Rooted, "State.Combat.Rooted", "禁锢只阻止移动，不禁止原地施法");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Burning, "State.Combat.Burning", "服务器周期结算的燃烧，同来源刷新、不同来源独立");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dead, "State.Combat.Dead", "死亡，禁止继续施放技能");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Defending, "State.Combat.Defending", "防御期间受到一半伤害");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Defending, "State.Combat.Defending", "限时正面完全格挡直接攻击，不保护侧后或持续伤害");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Attack, "Cooldown.Combat.Attack", "普通攻击冷却");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Defend, "Cooldown.Combat.Defend", "防御技能冷却");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Heal, "Cooldown.Combat.Heal", "治疗技能冷却");
@@ -61,4 +66,16 @@ namespace CombatTags
 	UE_DEFINE_GAMEPLAY_TAG(Cue_Area, "GameplayCue.Combat.Area");
 	UE_DEFINE_GAMEPLAY_TAG(Cue_Stun, "GameplayCue.Combat.Stun");
 	UE_DEFINE_GAMEPLAY_TAG(Cue_Failure, "GameplayCue.Combat.Failure");
+
+	const FmultiplayerCombatSkillTags& GetSkillTags(EMultiplayerCombatSkill Skill)
+	{
+		static const TArray<FmultiplayerCombatSkillTags> Tags = {
+			{Ability_Attack, Event_Attack, Cooldown_Attack},
+			{Ability_Defend, Event_Defend, Cooldown_Defend},
+			{Ability_Heal, {}, Cooldown_Heal},
+			{Ability_Area, Event_Area, Cooldown_Area},
+			{Ability_Dash, Event_Dash, Cooldown_Dash}};
+		static const FmultiplayerCombatSkillTags Invalid;
+		return Tags.IsValidIndex(int32(Skill)) ? Tags[int32(Skill)] : Invalid;
+	}
 }

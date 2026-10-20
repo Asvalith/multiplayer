@@ -56,6 +56,9 @@ public:
 	virtual bool CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* Info,
 		const FGameplayTagContainer* Source=nullptr, const FGameplayTagContainer* Target=nullptr,
 		FGameplayTagContainer* Reasons=nullptr) const override;
+	virtual bool DoesAbilitySatisfyTagRequirements(const UAbilitySystemComponent& ASC,
+		const FGameplayTagContainer* Source=nullptr, const FGameplayTagContainer* Target=nullptr,
+		FGameplayTagContainer* Reasons=nullptr) const override;
 protected:
 	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* Info,
 		FGameplayAbilityActivationInfo Activation, const FGameplayEventData* Event) override;
@@ -65,4 +68,5 @@ private:
 	UFUNCTION() void FinishRescue();
 	void CheckRescue();
 	FTimerHandle ValidationTimer;
+	bool bEndingRescue = false;
 };

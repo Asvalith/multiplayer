@@ -14,6 +14,7 @@
 #include "Camera/CameraComponent.h"
 #include "Camera/CameraTypes.h"
 #include "Combat/multiplayerCombatAbility.h"
+#include "Combat/multiplayerCombatAttributes.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatEnemy.h"
@@ -47,13 +48,16 @@
 #include "GameplayCueManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/OutputDeviceRedirector.h"
+#include "Misc/ScopeExit.h"
 #include "NiagaraComponent.h"
+#include "NiagaraParameterStore.h"
 #include "NiagaraSystem.h"
 #include "Particles/ParticleSystem.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Player/multiplayerCharacter.h"
 #include "Slate/SObjectWidget.h"
+#include "Sound/SoundBase.h"
 #include "TimerManager.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectIterator.h"
@@ -131,6 +135,107 @@ namespace
 			return Actor;
 		}
 	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatGuardImpactPresentationTest, "Multiplayer.Combat.Guard.BlockedHitPresentation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 真实正式蓝图、ASC Cue 路由和受击蒙太奇；无损正面格挡不能触发伤害粒子或受击动作。
+bool FCoopCombatGuardImpactPresentationTest::RunTest(const FString& Parameters)
+{
+	UGameplayCueManager* Manager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+	if (!TestNotNull(TEXT("Actual gameplay cue manager exists"), Manager)) return false;
+#if WITH_EDITOR
+	Manager->LoadNotifyForEditorPreview(CombatTags::Cue_Impact);
+#endif
+	for (const TCHAR* Path : { TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"),
+		TEXT("/Game/Combat/Escape/BP_EscapePlayerVariant.BP_EscapePlayerVariant_C") })
+	{
+		UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr, Path);
+		if (!TestNotNull(TEXT("Saved formal player blueprint exists"), PlayerClass)) return false;
+		for (int32 Case = 0; Case < 3; ++Case)
+		{
+			FCombatPresentationWorld Fixture;
+			auto* Player = Fixture.Character(PlayerClass, FVector(0, 0, 100));
+			const FVector SourceLocation = Case == 0 ? FVector(500, 0, 100)
+				: Case == 1 ? FVector(0, 500, 100) : FVector(-500, 0, 100);
+			auto* Source = Fixture.Character(AmultiplayerCombatEnemy::StaticClass(), SourceLocation);
+			if (!TestNotNull(TEXT("Formal guard player spawned"), Player) || !TestNotNull(TEXT("Real hostile source spawned"), Source)) return false;
+			Player->GetMesh()->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+			Player->GetMesh()->bEnableUpdateRateOptimizations = false;
+			auto* Animation = Cast<UmultiplayerCombatAnimInstance>(Player->GetMesh()->GetAnimInstance());
+			const auto* HitField = FindFProperty<FObjectPropertyBase>(Player->GetClass(), TEXT("HitMontage"));
+			auto* Hit = HitField ? Cast<UAnimMontage>(HitField->GetObjectPropertyValue_InContainer(Player)) : nullptr;
+			if (!TestNotNull(TEXT("Formal animation blueprint is initialized"), Animation)
+				|| !TestNotNull(TEXT("Formal player retains a real hit montage as the failure control"), Hit)) return false;
+			const auto& Feedback = Player->GetCombatConfig().ImpactFeedback;
+			UParticleSystem* Cascade = Feedback.CascadeEffect.IsNull() ? nullptr : Feedback.CascadeEffect.LoadSynchronous();
+			UNiagaraSystem* Niagara = Cascade || Feedback.Effect.IsNull() ? nullptr : Feedback.Effect.LoadSynchronous();
+			Feedback.Sound.LoadSynchronous();
+			if (!TestTrue(TEXT("The real configured impact particle loads"), Cascade || Niagara)) return false;
+			const auto ImpactComponents = [&]()
+			{
+				int32 Count = 0;
+				if (Cascade)
+					for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+						if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->Template == Cascade) ++Count;
+				if (Niagara)
+					for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+						if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->GetAsset() == Niagara) ++Count;
+				return Count;
+			};
+			Player->Defend();
+			Fixture.Advance();
+			if (!TestTrue(TEXT("Real Q reaches its persistent guard pose without a hit montage"), Player->IsDefending()
+				&& Animation->CombatIsDefending && !Animation->IsAnyMontagePlaying())) return false;
+			const float PreviousHealth = Player->GetHealth(), PreviousShield = Player->GetShield();
+			const float Damage = FMath::Max(50.f, PreviousShield + 10.f);
+			const int32 PreviousParticles = ImpactComponents(), PreviousMontages = Animation->MontageInstances.Num();
+			int32 ImpactRoutes = 0;
+			const FDelegateHandle Route = Manager->OnGameplayCueRouted().AddLambda(
+				[&](AActor* Target, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters&, EGameplayCueExecutionOptions)
+				{
+					if (Target == Player && Tag == CombatTags::Cue_Impact && Event == EGameplayCueEvent::Executed) ++ImpactRoutes;
+				});
+			auto* ASC = Player->GetAbilitySystemComponent();
+			FDelegateHandle TurnOnDamage;
+			if (Case == 2)
+				TurnOnDamage = ASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetHealthAttribute()).AddLambda(
+					[Player, Source](const FOnAttributeChangeData& Change)
+					{
+						// 已经吃到背击后同步转身，不能让提交后的新朝向追溯取消本次受击反馈。
+						if (Change.NewValue < Change.OldValue)
+							Player->SetActorRotation((Source->GetActorLocation() - Player->GetActorLocation()).Rotation());
+					});
+			ON_SCOPE_EXIT
+			{
+				Manager->OnGameplayCueRouted().Remove(Route);
+				if (TurnOnDamage.IsValid()) ASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetHealthAttribute()).Remove(TurnOnDamage);
+			};
+			const FString Label = FString::Printf(TEXT("%s %s"), *PlayerClass->GetName(),
+				Case == 0 ? TEXT("front") : Case == 1 ? TEXT("side") : TEXT("rear-turn-callback"));
+			TestTrue(*(Label + TEXT(" accepts the real authoritative damage request")), Source->ApplyCombatDamage(Player, Damage));
+			const bool bBlocked = Case == 0;
+			TestEqual(*(Label + TEXT(" retains the exact health settlement")), Player->GetHealth(),
+				bBlocked ? PreviousHealth : PreviousHealth - FMath::Max(0.f, Damage - PreviousShield));
+			TestEqual(*(Label + TEXT(" retains the exact shield settlement")), Player->GetShield(),
+				bBlocked ? PreviousShield : FMath::Max(0.f, PreviousShield - Damage));
+			TestEqual(*(Label + TEXT(" publishes zero blocked or one unblocked damage cue")), ImpactRoutes, bBlocked ? 0 : 1);
+			TestEqual(*(Label + TEXT(" spawns no blocked-hit particle and one actual unblocked impact")),
+				ImpactComponents(), PreviousParticles + (bBlocked ? 0 : 1));
+			TestEqual(*(Label + TEXT(" only an unblocked hit starts the connected hit montage")), Animation->Montage_IsPlaying(Hit), !bBlocked);
+			if (bBlocked)
+			{
+				TestEqual(TEXT("Blocked hit allocates no montage instance"), Animation->MontageInstances.Num(), PreviousMontages);
+				Fixture.Advance();
+				TestTrue(TEXT("The actual guard pose remains after the blocked hit"), Animation->CombatIsDefending && !Animation->Montage_IsPlaying(Hit));
+			}
+			else if (Case == 2)
+				TestTrue(TEXT("Rear-hit health notification really turned the body to the guarded front before cue publication"),
+					FVector::DotProduct(Player->GetActorForwardVector(), (Source->GetActorLocation() - Player->GetActorLocation()).GetSafeNormal()) > .99f);
+		}
+	}
+	return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatCameraObstructionTest, "Multiplayer.Combat.CameraObstruction",
@@ -391,13 +496,14 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Idle casting panel is collapsed"), CastingPanel->GetVisibility() == ESlateVisibility::Collapsed);
 	TestTrue(TEXT("Idle state text is collapsed"), StateText->GetVisibility() == ESlateVisibility::Collapsed);
 	TestFalse(TEXT("Idle HUD has no bound timer"), HasWidgetTimer());
-	for (int32 Index = 0; Index < 4; ++Index) TestTrue(TEXT("Learned skills start at full icon brightness"), Icons[Index]->GetColorAndOpacity().Equals(FLinearColor::White));
+	for (int32 Index = 0; Index < 4; ++Index) TestTrue(TEXT("Learned skills with ready resources start at full icon brightness"), Icons[Index]->GetColorAndOpacity().Equals(FLinearColor::White));
 	TestTrue(TEXT("The visible fifth slot clearly dims the unlearned dash"), Icons[4]->GetColorAndOpacity().Equals(Unavailable));
 	CheckSkillPresentation(TEXT("Idle"));
 
 	Damage(Player, 40);
 	TestEqual(TEXT("Real damage updates health text synchronously through its event"), HealthText->GetText().ToString(), FString(TEXT("60 / 100")));
 	TestTrue(TEXT("Real damage updates the health bar"), FMath::IsNearlyEqual(HealthBar->GetPercent(), .6f));
+	TestTrue(TEXT("Injury retains the resource-ready healing icon"), Icons[2]->GetColorAndOpacity().Equals(FLinearColor::White));
 	TestFalse(TEXT("Attribute updates do not start HUD polling"), HasWidgetTimer());
 	Player->Defend();
 	TestTrue(TEXT("Defense appears immediately without advancing a display timer"), StateText->GetText().ToString().Contains(TEXT("防御")));
@@ -500,6 +606,103 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("NativeDestruct unbinds state events"), StateText->GetText().ToString(), DetachedState);
 	TestTrue(TEXT("NativeDestruct unbinds feedback events"), FeedbackText->GetText().IsEmpty());
 	TestFalse(TEXT("Late events cannot restart a detached HUD timer"), HasWidgetTimer());
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatEscapeHUDHealFailureTest, "Multiplayer.Combat.EscapeHUDHealFailure",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 使用正式撤离角色和 HUD 副本走治疗确认；拒绝原因必须可见，不能提交资源与冷却。
+bool FCoopCombatEscapeHUDHealFailureTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("Slate is initialized for the saved Escape HUD"), FSlateApplication::IsInitialized())) return false;
+	UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
+		TEXT("/Game/Combat/Escape/BP_EscapePlayerVariant.BP_EscapePlayerVariant_C"));
+	UClass* WidgetClass = LoadClass<UUserWidget>(nullptr,
+		TEXT("/Game/Combat/Escape/WBP_EscapeHUD.WBP_EscapeHUD_C"));
+	if (!TestNotNull(TEXT("Formal Escape player loads"), PlayerClass)
+		|| !TestNotNull(TEXT("Formal Escape HUD loads"), WidgetClass)) return false;
+	FCombatPresentationWorld Fixture;
+	auto* Player = Fixture.Character(PlayerClass, FVector(0, 0, 100));
+	auto* Controller = Fixture.World->SpawnActor<APlayerController>();
+	if (!TestNotNull(TEXT("Formal Escape player spawned"), Player)
+		|| !TestNotNull(TEXT("Local failure-feedback controller exists"), Controller)) return false;
+	Controller->Possess(Player);
+	if (!TestTrue(TEXT("Failure comes from a genuinely locally controlled player"), Player->IsLocallyControlled())) return false;
+	TestEqual(TEXT("Formal player retains its separate Escape rules"), Player->GetCombatConfig().GetPathName(),
+		FString(TEXT("/Game/Combat/Escape/DA_EscapeCombat.DA_EscapeCombat")));
+	auto* Outer = CreateWidget<UUserWidget>(Fixture.World, WidgetClass);
+	if (!TestNotNull(TEXT("Saved Escape HUD is constructed"), Outer)) return false;
+	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Outer->TakeWidget());
+	if (!TestTrue(TEXT("Normal Slate construction owns the saved Escape HUD"), Slate->GetWidgetObject() == Outer)) return false;
+	auto* Widget = Cast<UmultiplayerCombatWidget>(Outer->GetWidgetFromName(TEXT("ARPGCombatVisuals")));
+	if (!TestNotNull(TEXT("Actual Escape HUD owns its combat visuals"), Widget)) return false;
+	TestEqual(TEXT("Failure feedback uses the Escape visual copy"), Widget->GetClass()->GetPathName(),
+		FString(TEXT("/Game/Combat/Escape/WBP_EscapeCombatVisuals.WBP_EscapeCombatVisuals_C")));
+	UFunction* BindFunction = Widget->FindFunction(TEXT("BindPawn"));
+	if (!TestNotNull(TEXT("Formal HUD retains its normal pawn binding"), BindFunction)) return false;
+	struct FBindPawnParameters { APawn* PreviousPawn; APawn* NewPawn; } Bind{ nullptr, Player };
+	Widget->ProcessEvent(BindFunction, &Bind);
+	auto* Icon = Cast<UImage>(Widget->GetWidgetFromName(TEXT("HealIcon")));
+	auto* Feedback = Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("FeedbackText")));
+	auto* Panel = Cast<UBorder>(Widget->GetWidgetFromName(TEXT("FeedbackPanel")));
+	if (!TestNotNull(TEXT("Formal healing icon exists"), Icon)
+		|| !TestNotNull(TEXT("Formal failure message exists"), Feedback)
+		|| !TestNotNull(TEXT("Formal failure panel exists"), Panel)) return false;
+	auto* ASC = Player->GetAbilitySystemComponent();
+	ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), Player->GetMaxHealth());
+	ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetEnergyAttribute(), 100.f);
+	const auto HasHUDTimer = [&]()
+	{
+		GLog->FlushThreadedLogs();
+		FStringOutputDevice Output;
+		GLog->AddOutputDevice(&Output);
+		Fixture.World->GetTimerManager().ListTimers();
+		GLog->FlushThreadedLogs();
+		GLog->RemoveOutputDevice(&Output);
+		return Output.Contains(Widget->GetPathName(), ESearchCase::CaseSensitive);
+	};
+	TestTrue(TEXT("Healing icon reflects ready resources without promising a target"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	TestFalse(TEXT("Idle formal HUD has no refresh or feedback timer"), HasHUDTimer());
+	const FVector OutsideRange(Player->GetSkillRule(EMultiplayerCombatSkill::Heal).Range + 200.f, 0, 100);
+	auto* Teammate = Fixture.Character(PlayerClass, OutsideRange);
+	if (!TestNotNull(TEXT("Independent teammate exists for idle target changes"), Teammate)) return false;
+	Teammate->GetAbilitySystemComponent()->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), Teammate->GetMaxHealth() - 30.f);
+	TestFalse(TEXT("An injured teammate outside range does not qualify healing"), Player->CheckSkillAvailable(EMultiplayerCombatSkill::Heal));
+	Teammate->SetActorLocation(FVector(180, 0, 100));
+	TestTrue(TEXT("A teammate entering range immediately qualifies the production target query"),
+		Player->GetHealTarget() == Teammate && Player->CheckSkillAvailable(EMultiplayerCombatSkill::Heal));
+	TestTrue(TEXT("Without an owner event or cooldown timer healing cannot remain falsely dimmed"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	TestFalse(TEXT("Teammate movement does not introduce HUD polling"), HasHUDTimer());
+	Teammate->SetActorLocation(OutsideRange);
+	TestFalse(TEXT("A teammate leaving range immediately loses healing qualification"), Player->CheckSkillAvailable(EMultiplayerCombatSkill::Heal));
+	TestTrue(TEXT("Resource-only icon brightness does not cache obsolete target eligibility"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	TestEqual(TEXT("Idle target changes never create a healing cooldown"), Player->GetHealCooldownRemaining(), 0.f);
+	TestEqual(TEXT("Idle target changes never charge energy"), Player->GetEnergy(), 100.f);
+	TestFalse(TEXT("Target changes leave the event-driven HUD idle"), HasHUDTimer());
+	Player->BeginSlotTargeting(2);
+	Player->ConfirmSkillTargeting();
+	TestTrue(TEXT("Rejected full-health E explains both full health and the missing injured teammate"),
+		Feedback->GetText().ToString().Contains(TEXT("生命已满")) && Feedback->GetText().ToString().Contains(TEXT("受伤队友")));
+	TestTrue(TEXT("Rejected E displays the actual feedback panel"), Panel->GetVisibility() == ESlateVisibility::HitTestInvisible);
+	for (const UWidget* Parent = Panel; Parent; Parent = Parent->GetParent())
+		TestTrue(TEXT("Formal feedback is not under a hidden or collapsed parent"),
+			Parent->GetVisibility() != ESlateVisibility::Hidden && Parent->GetVisibility() != ESlateVisibility::Collapsed);
+	TestEqual(TEXT("No-target E does not charge energy"), Player->GetEnergy(), 100.f);
+	TestEqual(TEXT("No-target E does not start a cooldown"), Player->GetHealCooldownRemaining(), 0.f);
+	ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), Player->GetMaxHealth() - 10.f);
+	TestTrue(TEXT("Injury keeps the resource-ready healing icon bright"), Icon->GetColorAndOpacity().Equals(FLinearColor::White));
+	TestFalse(TEXT("A missing-target reason on an injured client does not claim full health"),
+		Player->GetSkillFailureText(EMultiplayerCombatSkill::Heal, CombatTags::Failure_NoHealTarget).ToString().Contains(TEXT("生命已满")));
+	const float InsufficientEnergy = Player->GetCombatConfig().Heal.Cost - 1.f;
+	ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetEnergyAttribute(), InsufficientEnergy);
+	TestTrue(TEXT("Insufficient energy still dims healing through its owner attribute event"), Icon->GetColorAndOpacity().Equals(FLinearColor(.4f, .4f, .4f, 1.f)));
+	Player->BeginSlotTargeting(2);
+	Player->ConfirmSkillTargeting();
+	TestTrue(TEXT("A different E refusal shows its resource reason"), Feedback->GetText().ToString().Contains(TEXT("能量不足")));
+	TestEqual(TEXT("Rejected resource E leaves the balance unchanged"), Player->GetEnergy(), InsufficientEnergy);
+	TestEqual(TEXT("Rejected resource E leaves health unchanged"), Player->GetHealth(), Player->GetMaxHealth() - 10.f);
+	TestEqual(TEXT("Rejected resource E leaves cooldown at zero"), Player->GetHealCooldownRemaining(), 0.f);
 	return !HasAnyErrors();
 }
 
@@ -763,62 +966,80 @@ bool FCoopCombatGroundMarkerTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDefenseFeetTest, "Multiplayer.Combat.DefenseFeet",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatHealRecipientFeetAndFollowTest, "Multiplayer.Combat.HealRecipientFeetAndFollow",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 
-// Q 素材已经自带向上偏移，组件原点必须放在脚底；实际 Niagara 在移动和缩放后也不能重复抬高。
-bool FCoopCombatDefenseFeetTest::RunTest(const FString& Parameters)
+// 治疗素材已经自带向上偏移，组件原点必须放在受治疗者脚底；实际 Niagara 在移动和缩放后也不能重复抬高。
+bool FCoopCombatHealRecipientFeetAndFollowTest::RunTest(const FString& Parameters)
 {
 	UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
 		TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
-	if (!TestNotNull(TEXT("Actual defense player blueprint exists"), PlayerClass)) return false;
+	if (!TestNotNull(TEXT("Actual healing player blueprint exists"), PlayerClass)) return false;
 	FCombatPresentationWorld Fixture;
-	auto* Player = Fixture.Character(PlayerClass, FVector(1000, 2000, 300));
-	if (!TestNotNull(TEXT("Defense origin probe uses the actual player"), Player)) return false;
-	UNiagaraSystem* Shield = Player->GetCombatConfig().DefenseFeedback.Effect.LoadSynchronous();
-	if (!TestNotNull(TEXT("Actual Q Niagara shield is loaded"), Shield)) return false;
-	TestTrue(TEXT("Defense uses the imported water shield"), Shield->GetName() == TEXT("NS_Water_Magic_Shield"));
-	TestTrue(TEXT("Actual Q does not replace Niagara with a Cascade fallback"), Player->GetCombatConfig().DefenseFeedback.CascadeEffect.IsNull());
+	auto* Caster = Fixture.Character(PlayerClass, FVector(1000, 2000, 300));
+	auto* Recipient = Fixture.Character(PlayerClass, FVector(1300, 2000, 300));
+	if (!TestNotNull(TEXT("Healing caster uses the actual player"), Caster)
+		|| !TestNotNull(TEXT("Healing origin probe uses a different actual recipient"), Recipient)) return false;
+	const auto& Config = Caster->GetCombatConfig();
+	UNiagaraSystem* Shield = Config.HealFeedback.Effect.LoadSynchronous();
+	if (!TestNotNull(TEXT("Actual E Niagara shield is loaded"), Shield)) return false;
+	Config.HealFeedback.Sound.LoadSynchronous();
+	TestEqual(TEXT("Healing uses the calibrated project shield without unrelated ground waves"), Shield->GetPathName(),
+		FString(TEXT("/Game/Combat/Presentation/Effects/NS_CombatDefenseShield.NS_CombatDefenseShield")));
+	TestTrue(TEXT("Actual E does not replace Niagara with a Cascade fallback"), Config.HealFeedback.CascadeEffect.IsNull());
+	TestTrue(TEXT("Actual Q has no Niagara particle"), Config.DefenseFeedback.Effect.IsNull());
+	TestTrue(TEXT("Actual Q has no Cascade particle"), Config.DefenseFeedback.CascadeEffect.IsNull());
+	UGameplayCueManager* Manager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+	if (!TestNotNull(TEXT("Real gameplay cue manager exists"), Manager)) return false;
+#if WITH_EDITOR
+	Manager->LoadNotifyForEditorPreview(CombatTags::Cue_Heal);
+#endif
+	const auto Shields = [&]()
+	{
+		TArray<UNiagaraComponent*> Result;
+		for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+			if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->GetAsset() == Shield) Result.Add(*It);
+		return Result;
+	};
 	for (const float Scale : { .75f, 1.5f })
 	{
-		Player->SetActorScale3D(FVector(Scale));
-		auto* Cue = Fixture.World->SpawnActor<AmultiplayerCombatCue>();
-		if (!TestNotNull(TEXT("Defense cue spawned"), Cue)) return false;
-		Cue->GameplayCueTag = CombatTags::Cue_Defense;
-		FGameplayCueParameters CueParameters;
-		Cue->OnActive_Implementation(Player, CueParameters);
-		const auto* Property = FindFProperty<FObjectPropertyBase>(Cue->GetClass(), TEXT("LoopEffect"));
-		const auto Loop = [&]() -> UNiagaraComponent*
+		Recipient->SetActorLocation(FVector(1300, 2000, 300));
+		Recipient->SetActorScale3D(FVector(Scale));
+		Recipient->GetAbilitySystemComponent()->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), 40.f);
+		auto* ASC = Caster->GetAbilitySystemComponent();
+		ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetEnergyAttribute(), 100.f);
+		ASC->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(CombatTags::Cooldown_Heal));
+		if (!TestTrue(TEXT("Authority selects the injured recipient"), Caster->GetHealTarget() == Recipient)) return false;
+		int32 HealRoutes = 0;
+		const FDelegateHandle Route = Manager->OnGameplayCueRouted().AddLambda(
+			[&](AActor* Target, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters&, EGameplayCueExecutionOptions)
 		{
-			return Property ? Cast<UNiagaraComponent>(Property->GetObjectPropertyValue_InContainer(Cue)) : nullptr;
-		};
-		UNiagaraComponent* First = Loop();
-		if (!TestNotNull(TEXT("Actual defense cue creates its Niagara component"), First)) return false;
-		const FVector Feet = Player->GetActorLocation() - Player->GetActorUpVector()
-			* Player->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-		TestTrue(TEXT("Q uses the actual configured Niagara system"), First->GetAsset() == Shield);
-		TestTrue(TEXT("Q origin is at scaled capsule feet, not capsule center"), First->GetComponentLocation().Equals(Feet, .1f));
-		TestTrue(TEXT("Q remains attached to the character root"), First->GetAttachParent() == Player->GetRootComponent());
-		TestTrue(TEXT("Keep-world attachment does not multiply character scale into the authored shield"), First->GetComponentScale().Equals(FVector::OneVector, .001f));
+			if (Target == Recipient && Tag == CombatTags::Cue_Heal && Event == EGameplayCueEvent::Executed) ++HealRoutes;
+		});
+		Caster->Heal();
+		Manager->OnGameplayCueRouted().Remove(Route);
+		TestEqual(TEXT("Real healing dispatches exactly one recipient result cue"), HealRoutes, 1);
+		TestEqual(TEXT("Real healing settles on the recipient"), Recipient->GetHealth(), FMath::Min(40.f + Config.Heal.Amount, Recipient->GetMaxHealth()));
+		const auto Active = Shields();
+		if (!TestEqual(TEXT("Real heal creates exactly one actual shield"), Active.Num(), 1)) return false;
+		UNiagaraComponent* First = Active[0];
+		const FVector Feet = Recipient->GetActorLocation() - Recipient->GetActorUpVector()
+			* Recipient->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		TestTrue(TEXT("E uses the actual configured Niagara system"), First->GetAsset() == Shield);
+		TestTrue(TEXT("E origin is at scaled recipient feet without repeating the authored upward offset"), First->GetComponentLocation().Equals(Feet, .1f));
+		TestTrue(TEXT("E remains attached to the recipient root"), First->GetAttachParent() == Recipient->GetRootComponent());
+		TestTrue(TEXT("Healing attachment preserves absolute authored scale"), First->IsUsingAbsoluteScale());
+		TestTrue(TEXT("Recipient scale does not multiply the authored shield"), First->GetComponentScale().Equals(FVector::OneVector, .001f));
+		TestTrue(TEXT("Healing uses the short shield duration"), FMath::IsNearlyEqual(First->GetOverrideParameters().GetParameterValue<float>(
+			FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("User.Duration"))), .8f));
 		const FVector Delta(260, -130, 50);
-		Player->SetActorLocation(Player->GetActorLocation() + Delta);
-		TestTrue(TEXT("Moving the player immediately moves the shield feet origin"), First->GetComponentLocation().Equals(Feet + Delta, .1f));
-		Cue->WhileActive_Implementation(Player, CueParameters);
-		TestTrue(TEXT("Repeated Q state recovery does not create another shield"), Loop() == First);
-		Cue->OnRemove_Implementation(Player, CueParameters);
-		TestNull(TEXT("Defense removal clears the Niagara reference"), Loop());
-		TestFalse(TEXT("Defense removal unregisters the previous Niagara component"), First->IsRegistered());
-		Cue->WhileActive_Implementation(Player, CueParameters);
-		UNiagaraComponent* Restored = Loop();
-		if (!TestNotNull(TEXT("Late relevance restores the defense presentation"), Restored)) return false;
-		Cue->Recycle();
-		TestNull(TEXT("Cue recycle clears the restored defense reference"), Loop());
-		TestFalse(TEXT("Cue recycle unregisters the restored defense"), Restored->IsRegistered());
-		Cue->WhileActive_Implementation(Player, CueParameters);
-		UNiagaraComponent* Ending = Loop();
-		if (!TestNotNull(TEXT("World-exit probe has an active defense"), Ending)) return false;
-		Cue->RouteEndPlay(EEndPlayReason::RemovedFromWorld);
-		TestFalse(TEXT("World exit cleans the defense even without an explicit remove event"), Ending->IsRegistered());
+		Recipient->SetActorLocation(Recipient->GetActorLocation() + Delta);
+		TestTrue(TEXT("Moving the recipient immediately moves the shield feet origin"), First->GetComponentLocation().Equals(Feet + Delta, .1f));
+		TestTrue(TEXT("Following the recipient retains world scale one"), First->GetComponentScale().Equals(FVector::OneVector, .001f));
+		TWeakObjectPtr<UNiagaraComponent> Expiring = First;
+		for (int32 Step = 0; Step < 55; ++Step) Fixture.Advance();
+		TestTrue(TEXT("Transient heal expiry unregisters its Niagara component"), !Expiring.IsValid() || !Expiring->IsRegistered());
+		TestEqual(TEXT("Heal expiry leaves no shield particle behind"), Shields().Num(), 0);
 	}
 	return !HasAnyErrors();
 }

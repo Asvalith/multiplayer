@@ -9,5 +9,6 @@ class UCoopEscapeBuildCommandlet : public UCommandlet
 	GENERATED_BODY()
 public:
 	UCoopEscapeBuildCommandlet();
+	UFUNCTION(BlueprintCallable, Category = "CombatAssets")
 	virtual int32 Main(const FString& Params) override;
 };

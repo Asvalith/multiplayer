@@ -234,7 +234,8 @@ private:
 	float LastDisplayedMaxHealth = -1.f;
 };
 
-// HUD 只创建/释放本地控件；布局和资产由派生蓝图选择，专服不会创建 UI。
+// HUD 管理本地控件并投影瞄准/敌人预警；布局和资产由派生蓝图选择，专服不会创建 UI。
+// 预览只读取当前状态，不代替服务器的技能接纳、目标复核或伤害结算。
 UCLASS(Blueprintable)
 class MULTIPLAYER_API AmultiplayerCombatHUD : public AHUD
 {
@@ -256,7 +257,7 @@ private:
 	void DrawTargetMarker(const AmultiplayerCombatCharacter* Target, const FLinearColor& Color, const FString& Label);
 	void DrawEnemyTelegraphs(const AmultiplayerCombatCharacter* LocalCharacter);
 	void DrawCenteredPrompt(const FString& Text, float Y, const FLinearColor& Color);
-	UPROPERTY(Transient) TObjectPtr<UUserWidget> CombatWidget;
+	UPROPERTY(Transient) TObjectPtr<UUserWidget> NativeCombatWidget;
 	FVector ResolvedAreaCenter = FVector::ZeroVector;
 	float ResolvedAreaRadius = 0.f;
 	double ResolvedAreaUntil = 0.0;
@@ -264,7 +265,7 @@ private:
 	TMap<FVector, bool> RangeVisibilityCache;
 };
 
-// 动画只读取 CMC 的实际运动；技能状态、伤害和网络裁决仍由 GAS 维护。
+// 动画只读取 CMC 的实际运动与 GAS 防御状态；技能状态、伤害和网络裁决仍由 GAS 维护。
 UCLASS(Transient, Blueprintable)
 class MULTIPLAYER_API UmultiplayerCombatAnimInstance : public UAnimInstance
 {
@@ -275,4 +276,6 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Combat Animation") float CombatMoveDirection = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "Combat Animation") bool CombatShouldMove = false;
 	UPROPERTY(BlueprintReadOnly, Category = "Combat Animation") bool CombatIsFalling = false;
+	// 防御是持续效果而不是持续激活的 Ability；预测接管、拒绝和到期都读取同一标签快照。
+	UPROPERTY(BlueprintReadOnly, Category = "Combat Animation") bool CombatIsDefending = false;
 };

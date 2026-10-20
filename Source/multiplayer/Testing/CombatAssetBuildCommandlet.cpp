@@ -66,6 +66,8 @@
 #include "EdGraphSchema_K2.h"
 #include "EdGraphSchema_BehaviorTree.h"
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/InputKeyDelegateBinding.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
@@ -77,6 +79,7 @@
 #include "Factories/AnimMontageFactory.h"
 #include "Factories/AnimBlueprintFactory.h"
 #include "IAssetTools.h"
+#include "InputCoreTypes.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -84,12 +87,30 @@
 #include "K2Node_VariableSet.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_InputKey.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "Serialization/ArchiveReplaceObjectRef.h"
 #include "Materials/MaterialInterface.h"
 #include "NiagaraSystem.h"
+#include "Distributions/DistributionFloatUniform.h"
+#include "Distributions/DistributionFloatConstant.h"
+#include "Distributions/DistributionVectorConstant.h"
+#include "Distributions/DistributionVectorUniform.h"
+#include "Particles/Acceleration/ParticleModuleAccelerationConstant.h"
+#include "Particles/Lifetime/ParticleModuleLifetime.h"
+#include "Particles/Location/ParticleModuleLocation.h"
+#include "Particles/Location/ParticleModuleLocationPrimitiveSphere.h"
+#include "Particles/ParticleEmitter.h"
+#include "Particles/ParticleLODLevel.h"
+#include "Particles/ParticleModuleRequired.h"
 #include "Particles/ParticleSystem.h"
+#include "Particles/Size/ParticleModuleSize.h"
+#include "Particles/Size/ParticleModuleSizeMultiplyLife.h"
+#include "Particles/Size/ParticleModuleSizeScale.h"
+#include "Particles/Velocity/ParticleModuleVelocity.h"
 #include "Sound/SoundBase.h"
 #include "RetargetEditor/IKRetargetBatchOperation.h"
 #include "RetargetEditor/IKRetargeterController.h"
@@ -389,6 +410,9 @@ bool HasCombatUpperBodyLayer(const UAnimGraphNode_LayeredBoneBlend* Layer)
 	const UAnimGraphNode_Slot* Upper = ActionInput && ActionInput->LinkedTo.Num() == 1
 		? Cast<UAnimGraphNode_Slot>(ActionInput->LinkedTo[0]->GetOwningNode()) : nullptr;
 	const UEdGraphPin* UpperSource = Upper ? Upper->FindPin(TEXT("Source"), EGPD_Input) : nullptr;
+	const UAnimGraphNode_BlendListByBool* Guard = UpperSource && UpperSource->LinkedTo.Num() == 1
+		? Cast<UAnimGraphNode_BlendListByBool>(UpperSource->LinkedTo[0]->GetOwningNode()) : nullptr;
+	if (Guard) UpperSource = Guard->FindPin(TEXT("BlendPose_1"), EGPD_Input);
 	const UAnimGraphNode_UseCachedPose* Action = UpperSource && UpperSource->LinkedTo.Num() == 1
 		? Cast<UAnimGraphNode_UseCachedPose>(UpperSource->LinkedTo[0]->GetOwningNode()) : nullptr;
 	const UEdGraphPin* CachedSource = Base && Base->SaveCachedPoseNode.IsValid()
@@ -509,6 +533,252 @@ bool InsertSlot(UAnimBlueprint* Blueprint)
 		&& OutputGraph->GetSchema()->TryCreateConnection(Layer->FindPin(TEXT("Pose"), EGPD_Output), FullBodyInput);
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ANIMATION_LAYER blueprint=%s upperBody=1 fullBody=1 connected=%d reused=0"), *Blueprint->GetPathName(), bLinked);
 	return bLinked && HasCombatUpperBodyLayer(Layer);
+}
+
+// 防御只作为上半身动作槽的基础姿态；原有技能 Montage、移动缓存和全身死亡输出保持不变。
+bool InsertDefensePose(UAnimBlueprint* Blueprint)
+{
+	UAnimSequence* Sequence = Load<UAnimSequence>(AnimFolder / TEXT("AS_Defend"));
+	FProperty* State = FindFProperty<FProperty>(UmultiplayerCombatAnimInstance::StaticClass(), TEXT("CombatIsDefending"));
+	if (!Blueprint || !Sequence || !State || Sequence->GetSkeleton() != Blueprint->TargetSkeleton
+		|| Sequence->bEnableRootMotion || !Blueprint->ParentClass->IsChildOf(UmultiplayerCombatAnimInstance::StaticClass())) return false;
+	TArray<UEdGraph*> Graphs; Blueprint->GetAllGraphs(Graphs);
+	UAnimGraphNode_Slot* Upper = nullptr;
+	for (UEdGraph* Graph : Graphs)
+		for (UEdGraphNode* Node : Graph->Nodes)
+			if (auto* Candidate = Cast<UAnimGraphNode_Slot>(Node); Candidate && Candidate->Node.SlotName == TEXT("UpperBody"))
+			{
+				if (Upper) return false;
+				Upper = Candidate;
+			}
+	UEdGraphPin* Input = Upper ? Upper->FindPin(TEXT("Source"), EGPD_Input) : nullptr;
+	if (!Input || Input->LinkedTo.Num() != 1) return false;
+	if (const auto* Existing = Cast<UAnimGraphNode_BlendListByBool>(Input->LinkedTo[0]->GetOwningNode()))
+	{
+		const UEdGraphPin* True = Existing->FindPin(TEXT("BlendPose_0"), EGPD_Input);
+		const UEdGraphPin* Value = Existing->FindPin(TEXT("bActiveValue"), EGPD_Input);
+		const auto* Player = True && True->LinkedTo.Num() == 1 ? Cast<UAnimGraphNode_SequencePlayer>(True->LinkedTo[0]->GetOwningNode()) : nullptr;
+		const auto* Getter = Value && Value->LinkedTo.Num() == 1 ? Cast<UK2Node_VariableGet>(Value->LinkedTo[0]->GetOwningNode()) : nullptr;
+		return Player && Player->GetAnimationAsset() == Sequence && Getter && Getter->GetVarName() == TEXT("CombatIsDefending");
+	}
+	if (!Cast<UAnimGraphNode_UseCachedPose>(Input->LinkedTo[0]->GetOwningNode())) return false;
+	Blueprint->Modify();
+	UEdGraph* Graph = Upper->GetGraph();
+	UEdGraphPin* Original = Input->LinkedTo[0];
+	FGraphNodeCreator<UAnimGraphNode_SequencePlayer> SequenceCreator(*Graph);
+	auto* Guard = SequenceCreator.CreateNode(false);
+	Guard->SetAnimationAsset(Sequence);
+	Guard->Node.SetLoopAnimation(true);
+	Guard->NodePosX = Upper->NodePosX - 600; Guard->NodePosY = Upper->NodePosY - 180;
+	SequenceCreator.Finalize();
+	FGraphNodeCreator<UK2Node_VariableGet> StateCreator(*Graph);
+	auto* Getter = StateCreator.CreateNode(false);
+	Getter->SetFromProperty(State, true, UmultiplayerCombatAnimInstance::StaticClass());
+	Getter->NodePosX = Upper->NodePosX - 600; Getter->NodePosY = Upper->NodePosY + 180;
+	StateCreator.Finalize();
+	FGraphNodeCreator<UAnimGraphNode_BlendListByBool> BlendCreator(*Graph);
+	auto* Blend = BlendCreator.CreateNode(false);
+	Blend->NodePosX = Upper->NodePosX - 300; Blend->NodePosY = Upper->NodePosY;
+	Blend->NodeComment = TEXT("Combat: effect-owned upper-body guard; actions override without stopping new montages");
+	BlendCreator.Finalize();
+	Graph->GetSchema()->BreakPinLinks(*Input, true);
+	const bool bConnected = Graph->GetSchema()->TryCreateConnection(Original, Blend->FindPin(TEXT("BlendPose_1"), EGPD_Input))
+		&& Graph->GetSchema()->TryCreateConnection(Guard->FindPin(TEXT("Pose"), EGPD_Output), Blend->FindPin(TEXT("BlendPose_0"), EGPD_Input))
+		&& Graph->GetSchema()->TryCreateConnection(Getter->FindPin(TEXT("CombatIsDefending"), EGPD_Output), Blend->FindPin(TEXT("bActiveValue"), EGPD_Input))
+		&& Graph->GetSchema()->TryCreateConnection(Blend->FindPin(TEXT("Pose"), EGPD_Output), Input);
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_DEFENSE_POSE asset=%s sequence=%s connected=%d"), *Blueprint->GetPathName(), *Sequence->GetPathName(), bConnected);
+	return bConnected;
+}
+
+bool SetAsset(UObject* Owner, FName Field, UObject* Asset, bool bRequired);
+
+// 只校准本项目副本：原火焰素材的长网格尾焰不等于弹道，不能靠转轴掩盖数米长的后掠。
+bool RepairCombatVfx()
+{
+	const FString Effects = Folder / TEXT("Effects");
+	const FString Fire = TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/DemoAssets/IggyVFX/Particles/Primary/");
+	IAssetTools& Assets = FAssetToolsModule::GetModule().Get();
+	auto Copy = [&](const FString& Name, const FString& Source) -> UObject*
+	{
+		if (auto* Existing = Keep(LoadObject<UObject>(nullptr, *ObjectPath(Effects / Name)))) return Existing;
+		UObject* Original = Load<UObject>(Source);
+		return Original ? Keep(Assets.DuplicateAsset(Name, Effects, Original)) : nullptr;
+	};
+	auto* Projectile = Cast<UParticleSystem>(Copy(TEXT("P_CombatFireProjectile"), Fire + TEXT("P_IggyScorch_Projectile_Trail")));
+	auto* Attack = Cast<UParticleSystem>(Copy(TEXT("P_CombatFireCast"), Fire + TEXT("P_Fireball_Projectile_Cast")));
+	auto* Shield = Cast<UNiagaraSystem>(Copy(TEXT("NS_CombatDefenseShield"),
+		TEXT("/Game/Pack_Effects_2/Water_Magic/VFX_Niagara/NS_Water_Magic_Shield")));
+	auto* Config = Load<UmultiplayerCombatConfig>(ConfigPackage);
+	if (!Projectile || !Attack || !Shield || !Config) return false;
+	auto Vector = [](UObject* Owner, FRawDistributionVector& Raw, const FVector& Value)
+	{
+		auto* Constant = NewObject<UDistributionVectorConstant>(Owner);
+		Constant->Constant = Value; Constant->bIsDirty = true;
+		Raw.Distribution = Constant; Raw.Initialize();
+	};
+	auto Float = [](UObject* Owner, FRawDistributionFloat& Raw, float Value)
+	{
+		auto* Constant = NewObject<UDistributionFloatConstant>(Owner);
+		Constant->Constant = Value; Constant->bIsDirty = true;
+		Raw.Distribution = Constant; Raw.Initialize();
+	};
+	auto Calibrate = [&](UParticleSystem* System, bool bProjectile)
+	{
+		System->Modify();
+		// PostEditChange 会从 RequiredModule 重建 LOD 启用标记；真正移除副本中的长尾发射器，避免冷加载恢复它们。
+		System->Emitters.RemoveAll([&](const TObjectPtr<UParticleEmitter>& Emitter)
+		{
+			if (!Emitter) return true;
+			const FName Name = Emitter->EmitterName;
+			return !(bProjectile
+				? Name == TEXT("LittleFlareSoft") || Name == TEXT("Flame_Smoke") || Name == TEXT("detail_fires")
+				: Name == TEXT("Flare") || Name == TEXT("Spit") || Name == TEXT("Spit_Spray") || Name == TEXT("impacts"));
+		});
+		if (System->Emitters.Num() != (bProjectile ? 3 : 4)) return false;
+		int32 VisibleLODs = 0;
+		for (const auto& Emitter : System->Emitters)
+		{
+			const FName Name = Emitter->EmitterName;
+			for (const auto& LOD : Emitter->LODLevels)
+			{
+				if (!LOD || !LOD->RequiredModule) continue;
+				LOD->bEnabled = LOD->RequiredModule->bEnabled;
+				VisibleLODs += LOD->bEnabled;
+				LOD->RequiredModule->EmitterOrigin = FVector::ZeroVector;
+				LOD->RequiredModule->EmitterRotation = FRotator::ZeroRotator;
+				for (const auto& Module : LOD->Modules)
+				{
+					if (auto* Lifetime = Cast<UParticleModuleLifetime>(Module))
+					{
+						auto* Range = NewObject<UDistributionFloatUniform>(Lifetime);
+						Range->Min = bProjectile ? .04f : .06f; Range->Max = bProjectile ? .06f : .10f;
+						Range->bIsDirty = true; Lifetime->Lifetime.Distribution = Range; Lifetime->Lifetime.Initialize();
+					}
+					if (auto* Size = Cast<UParticleModuleSize>(Module))
+						Vector(Size, Size->StartSize, FVector(bProjectile ? (Name == TEXT("LittleFlareSoft") ? 36.f : 20.f) : 40.f));
+					if (auto* Growth = Cast<UParticleModuleSizeMultiplyLife>(Module)) Vector(Growth, Growth->LifeMultiplier, FVector::OneVector);
+					if (auto* Scale = Cast<UParticleModuleSizeScale>(Module)) Vector(Scale, Scale->SizeScale, FVector::OneVector);
+					if (!bProjectile)
+					{
+						// 原始施法素材带向下初速、世界重力和宽散射；这里只修项目副本，使短喷发沿组件 +X。
+						if (auto* Velocity = Cast<UParticleModuleVelocity>(Module))
+						{
+							auto* Cone = NewObject<UDistributionVectorUniform>(Velocity);
+							Cone->Min = FVector(350, -18, -18); Cone->Max = FVector(550, 18, 18);
+							Cone->bIsDirty = true; Velocity->StartVelocity.Distribution = Cone; Velocity->StartVelocity.Initialize();
+							Velocity->bInWorldSpace = false;
+							Float(Velocity, Velocity->StartVelocityRadial, 0.f);
+						}
+						if (auto* Sphere = Cast<UParticleModuleLocationPrimitiveSphere>(Module))
+						{
+							Vector(Sphere, Sphere->StartLocation, FVector::ZeroVector);
+							Float(Sphere, Sphere->StartRadius, 4.f);
+							Sphere->Velocity = false;
+						}
+					}
+					// 尾焰仍由真实投射物生成，取消源素材离发射点 50cm 的内部偏移；不改投射物碰撞或速度。
+					if (auto* Location = Cast<UParticleModuleLocation>(Module)) Vector(Location, Location->StartLocation, FVector::ZeroVector);
+					if (auto* Acceleration = Cast<UParticleModuleAccelerationConstant>(Module)) Acceleration->Acceleration = FVector::ZeroVector;
+				}
+				LOD->UpdateModuleLists();
+			}
+		}
+		// GPU 编译数据和分布查找表跟随源模块重建，不能只改编辑器可见数值。
+		System->UpdateAllModuleLists();
+		System->bUseFixedRelativeBoundingBox = true;
+		System->FixedRelativeBoundingBox = FBox(FVector(-180, -80, -80), FVector(180, 80, 80));
+		System->PostEditChange();
+		UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_VFX_CALIBRATION asset=%s enabledLODs=%d maxLifetime=%.2f originalSources=readonly"),
+			*System->GetPathName(), VisibleLODs, bProjectile ? .06f : .10f);
+		return VisibleLODs > 0 && Save(System);
+	};
+	if (!Calibrate(Projectile, true) || !Calibrate(Attack, false)) return false;
+	Shield->Modify();
+	for (const TCHAR* Name : { TEXT("User.Scale_Wave1"), TEXT("User.Scale_Wave2"), TEXT("User.Scale_Bubble1"), TEXT("User.Scale_Sparks1") })
+		if (!Shield->GetExposedParameters().SetParameterValue(0.f, FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), Name))) return false;
+	if (!Shield->GetExposedParameters().SetParameterValue(FVector3f(0, 0, 90),
+		FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("User.Offset_Shield")))) return false;
+	Shield->PostEditChange();
+	if (!Save(Shield)) return false;
+	Config->Modify();
+	Config->ProjectileCascadeEffect = Projectile; Config->ProjectileEffect.Reset();
+	Config->AttackFeedback.CascadeEffect = Attack; Config->AttackFeedback.Effect.Reset();
+	// 护体粒子改作治疗反馈；防御保留姿态与音效，不再重复显示同一套粒子。
+	Config->HealFeedback.Effect = Shield; Config->HealFeedback.CascadeEffect.Reset();
+	Config->DefenseFeedback.Effect.Reset(); Config->DefenseFeedback.CascadeEffect.Reset();
+	return Save(Config);
+}
+
+// 窄修复只接正式 HUD 与玩家当前动画，不重建地图或重新导入第三方素材。
+bool RepairSkillPresentation(const FString& Params)
+{
+	UBlueprint* Player = Load<UBlueprint>(Folder / TEXT("BP_CombatPlayer"));
+	UBlueprint* HUD = Load<UBlueprint>(TEXT("/Game/Combat/UI/BP_CombatHUD"));
+	auto* CDO = Player && Player->GeneratedClass ? Cast<AmultiplayerCombatCharacter>(Player->GeneratedClass->GetDefaultObject()) : nullptr;
+	UClass* AnimClass = CDO ? CDO->GetMesh()->GetAnimClass() : nullptr;
+	auto* Animation = AnimClass ? Keep(Cast<UAnimBlueprint>(AnimClass->ClassGeneratedBy)) : nullptr;
+	if (!HUD || !HUD->ParentClass || !HUD->ParentClass->IsChildOf(AHUD::StaticClass()) || !Animation
+		|| !Animation->GetPackage()->GetName().StartsWith(Folder + TEXT("/"))) return false;
+	TArray<FString> Bindings;
+	const auto SupersededKey = [](const FKey& Key)
+	{
+		return Key == EKeys::Q || Key == EKeys::E || Key == EKeys::R || Key == EKeys::LeftShift || Key == EKeys::RightShift
+			|| Key == EKeys::LeftMouseButton || Key == EKeys::RightMouseButton;
+	};
+	int32 LegacyBindings = 0;
+	auto* PlayerGenerated = Player ? Cast<UBlueprintGeneratedClass>(Player->GeneratedClass) : nullptr;
+	if (!PlayerGenerated) return false;
+	for (const auto& Object : PlayerGenerated->DynamicBindingObjects)
+		if (const auto* Binding = Cast<UInputKeyDelegateBinding>(Object))
+			for (const auto& Entry : Binding->InputKeyDelegateBindings)
+			{
+				const FString Line = FString::Printf(TEXT("key=%s event=%d function=%s consume=%d overrideParent=%d"),
+					*Entry.InputChord.Key.ToString(), int32(Entry.InputKeyEvent), *Entry.FunctionNameToBind.ToString(), Entry.bConsumeInput, Entry.bOverrideParentBinding);
+				Bindings.Add(Line); UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_SKILL_INPUT_BEFORE %s"), *Line);
+				LegacyBindings += SupersededKey(Entry.InputChord.Key);
+			}
+	FString AuditPath;
+	if (FParse::Value(*Params, TEXT("RepairAuditPath="), AuditPath)
+		&& !FFileHelper::SaveStringArrayToFile(Bindings, *AuditPath, FFileHelper::EEncodingOptions::ForceUTF8)) return false;
+	// 编译会重新生成 DynamicBindingObjects，因此只移除这几个已由原生输入接管的 Key 事件节点。
+	// 后续函数图、WASD/轴绑定与其他按键保持原样；没有旧绑定就不保存角色蓝图。
+	if (LegacyBindings > 0)
+	{
+		Player->Modify();
+		TArray<UEdGraph*> Graphs; Player->GetAllGraphs(Graphs);
+		int32 Removed = 0;
+		for (UEdGraph* Graph : Graphs)
+		{
+			const auto Nodes = Graph->Nodes;
+			for (UEdGraphNode* Node : Nodes)
+				if (auto* Key = Cast<UK2Node_InputKey>(Node); Key && SupersededKey(Key->InputKey))
+				{
+					FBlueprintEditorUtils::RemoveNode(Player, Key, true); ++Removed;
+				}
+		}
+		if (Removed == 0 || !Compile(Player)) return false;
+		PlayerGenerated = Cast<UBlueprintGeneratedClass>(Player->GeneratedClass);
+		if (!PlayerGenerated) return false;
+		for (const auto& Object : PlayerGenerated->DynamicBindingObjects)
+			if (const auto* Binding = Cast<UInputKeyDelegateBinding>(Object))
+				for (const auto& Entry : Binding->InputKeyDelegateBindings)
+					if (SupersededKey(Entry.InputChord.Key)) return false;
+		if (!Save(Player)) return false;
+		UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_SKILL_INPUT_REPAIR removedKeyNodes=%d preservedOtherBindings=1"), Removed);
+	}
+	if (!InsertDefensePose(Animation) || !Compile(Animation) || !Save(Animation)) return false;
+	HUD->Modify();
+	HUD->ParentClass = AmultiplayerCombatHUD::StaticClass();
+	FBlueprintEditorUtils::RefreshAllNodes(HUD);
+	if (!Compile(HUD) || !SetAsset(HUD->GeneratedClass->GetDefaultObject(), TEXT("CombatWidgetClass"), nullptr, true)) return false;
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone; SaveArgs.SaveFlags = SAVE_NoError;
+	const FString HUDPackage = TEXT("/Game/Combat/UI/BP_CombatHUD");
+	const bool bSaved = UPackage::SavePackage(HUD->GetPackage(), HUD,
+		*FPackageName::LongPackageNameToFilename(HUDPackage, FPackageName::GetAssetPackageExtension()), SaveArgs);
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_SKILL_PRESENTATION_REPAIR hud=%s originalGraphs=preserved nativeWidget=disabled animation=%s legacyInputs=%d saved=%d visualPreview=NOT_RUN"),
+		*HUD->GetPathName(), *Animation->GetPathName(), LegacyBindings, bSaved);
+	return bSaved && RepairCombatVfx();
 }
 
 // 只设置已有受保护表现字段，不给运行时战斗增加工具专用接口。
@@ -859,10 +1129,11 @@ bool ConnectARPGHUD()
 		UHorizontalBoxSlot* TileSlot = Row->AddChildToHorizontalBox(Tile);
 		TileSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); TileSlot->SetPadding(FMargin(0, 0, Index < UE_ARRAY_COUNT(Slots) - 1 ? 10 * Scale : 0, 0));
 		UVerticalBox* Lines = Tree->ConstructWidget<UVerticalBox>(); Tile->SetContent(Lines);
-		UHorizontalBox* Heading = Tree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(Heading);
-		Heading->AddChildToHorizontalBox(Text(*(FString(TEXT("SkillLabel")) + FString::FromInt(Index)), Labels[Index], 10, White))
-			->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-		Heading->AddChildToHorizontalBox(Text(*(FString(TEXT("SkillKey")) + FString::FromInt(Index)), Keys[Index], 10, Gold));
+		UHorizontalBox* Heading = Tree->ConstructWidget<UHorizontalBox>();
+		Lines->AddChildToVerticalBox(Heading)->SetHorizontalAlignment(HAlign_Center);
+		Heading->AddChildToHorizontalBox(Text(*(FString(TEXT("SkillLabel")) + FString::FromInt(Index)), Labels[Index], 10, White));
+		Heading->AddChildToHorizontalBox(Text(*(FString(TEXT("SkillKey")) + FString::FromInt(Index)),
+			*(FString(TEXT(" / ")) + Keys[Index]), 10, Gold));
 		UOverlay* IconLayer = Tree->ConstructWidget<UOverlay>();
 		UImage* Icon = Tree->ConstructWidget<UImage>(UImage::StaticClass(), FName(IconNames[Index]));
 		Icon->bIsVariable = true; Icon->SetBrushFromTexture(SkillIcons[Index]);
@@ -908,6 +1179,53 @@ bool ConnectARPGHUD()
 		if (!Compile(Original) || !Save(Original)) return false;
 	}
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ARPG_HUD_CONNECTED original=%s child=%s originalGraphsPreserved=1 HUDClassChanged=0"), *OriginalPath, *VisualPath);
+	return true;
+}
+
+// 只修改两个项目表现子控件的现有技能标题，不重建 WidgetTree 或保存原 HUD。
+bool UpdateSkillHeadings()
+{
+	const TCHAR* Paths[] = { TEXT("/Game/Combat/Presentation/UI/WBP_ARPGCombatVisuals"),
+		TEXT("/Game/Combat/Escape/WBP_EscapeCombatVisuals") };
+	UWidgetBlueprint* Visuals[UE_ARRAY_COUNT(Paths)] = {};
+	struct FHeading
+	{
+		UTextBlock* Key;
+		UHorizontalBoxSlot* NameSlot;
+		UVerticalBoxSlot* HeadingSlot;
+		FString Binding;
+	};
+	TArray<FHeading> Headings;
+	for (int32 AssetIndex = 0; AssetIndex < UE_ARRAY_COUNT(Paths); ++AssetIndex)
+	{
+		UWidgetBlueprint* Visual = Visuals[AssetIndex] = Load<UWidgetBlueprint>(Paths[AssetIndex]);
+		if (!Visual || !Visual->WidgetTree) return false;
+		for (int32 Index = 0; Index < 5; ++Index)
+		{
+			UTextBlock* Name = Cast<UTextBlock>(Visual->WidgetTree->FindWidget(FName(*(FString(TEXT("SkillLabel")) + FString::FromInt(Index)))));
+			UTextBlock* Key = Cast<UTextBlock>(Visual->WidgetTree->FindWidget(FName(*(FString(TEXT("SkillKey")) + FString::FromInt(Index)))));
+			UHorizontalBox* Heading = Name ? Cast<UHorizontalBox>(Name->GetParent()) : nullptr;
+			UHorizontalBoxSlot* NameSlot = Name ? Cast<UHorizontalBoxSlot>(Name->Slot) : nullptr;
+			UVerticalBoxSlot* HeadingSlot = Heading ? Cast<UVerticalBoxSlot>(Heading->Slot) : nullptr;
+			if (!Key || !Heading || Key->GetParent() != Heading || Heading->GetChildrenCount() != 2
+				|| !NameSlot || !HeadingSlot) return false;
+			FString Binding = Key->GetText().ToString().TrimStartAndEnd();
+			Binding.RemoveFromStart(TEXT("/")); Binding.TrimStartAndEndInline();
+			if (Binding.IsEmpty()) return false;
+			Headings.Add({ Key, NameSlot, HeadingSlot, Binding });
+		}
+	}
+	for (UWidgetBlueprint* Visual : Visuals) Visual->Modify();
+	for (const FHeading& Heading : Headings)
+	{
+		Heading.NameSlot->Modify(); Heading.HeadingSlot->Modify(); Heading.Key->Modify();
+		Heading.NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		Heading.HeadingSlot->SetHorizontalAlignment(HAlign_Center);
+		Heading.Key->SetText(FText::FromString(FString(TEXT(" / ")) + Heading.Binding));
+	}
+	for (UWidgetBlueprint* Visual : Visuals) if (!Compile(Visual)) return false;
+	for (UWidgetBlueprint* Visual : Visuals) if (!Save(Visual)) return false;
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_SKILL_HEADINGS_UPDATED widgets=2 headings=10 centered=1 originalHUD=preserved treeRebuilt=0"));
 	return true;
 }
 
@@ -1386,7 +1704,7 @@ bool ConnectARPGAnimations()
 			}
 		}
 		if (IdleCount == 0 || JumpCount == 0 || FallCount == 0 || BlendCount == 0
-			|| MoveConditionCount == 0 || FallingConditionCount == 0 || !InsertSlot(Result)
+			|| MoveConditionCount == 0 || FallingConditionCount == 0 || !InsertSlot(Result) || !InsertDefensePose(Result)
 			|| !Compile(Result) || !Save(Result)) return nullptr;
 		UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ANIMATION_GRAPH asset=%s idle=%d jump=%d fall=%d blend=%d moveConditions=%d fallingConditions=%d removedBasicFootIK=%d direction=X speed=Y"),
 			*Result->GetPathName(), IdleCount, JumpCount, FallCount, BlendCount, MoveConditionCount, FallingConditionCount, RemovedBasicFootIK);
@@ -2033,7 +2351,8 @@ bool Validate()
 			System->RequestCompile(false); System->WaitForCompilationComplete(false, false);
 			if (!System->IsValid() || !System->IsReadyToRun()) return false;
 		}
-		else if (Feedback != &Config->FailureFeedback) return false;
+		// 防御只保留姿态和音效，允许没有粒子；治疗等其他技能仍必须配置实际效果。
+		else if (Feedback != &Config->FailureFeedback && Feedback != &Config->DefenseFeedback) return false;
 	}
 	for (const TCHAR* Name : { TEXT("Attack"), TEXT("Impact"), TEXT("Heal"), TEXT("Defense"), TEXT("Casting"), TEXT("Area"), TEXT("Stun"), TEXT("Failure") })
 	{
@@ -2069,10 +2388,13 @@ int32 UCombatAssetBuildCommandlet::Main(const FString& Params)
 	const bool bCreate = FParse::Param(*Params, TEXT("Create"));
 	const bool bValidate = FParse::Param(*Params, TEXT("Validate"));
 	const bool bUpdateUI = FParse::Param(*Params, TEXT("UpdateUI"));
+	const bool bUpdateSkillHeadings = FParse::Param(*Params, TEXT("UpdateSkillHeadings"));
 	const bool bUpdateAnimations = FParse::Param(*Params, TEXT("UpdateAnimations"));
 	const bool bConnectARPG = FParse::Param(*Params, TEXT("ConnectARPGAnimations"));
 	const bool bConnectARPGHUD = FParse::Param(*Params, TEXT("ConnectARPGHUD"));
 	const bool bRefreshCombatFeedback = FParse::Param(*Params, TEXT("RefreshCombatFeedbackAndHUD"));
+	const bool bRepairSkillPresentation = FParse::Param(*Params, TEXT("RepairSkillPresentation"));
+	const bool bRepairCombatVfx = FParse::Param(*Params, TEXT("RepairCombatVfx"));
 	const bool bConnectARPGEnemyHealth = FParse::Param(*Params, TEXT("ConnectARPGEnemyHealth"));
 	const bool bUpdateEnemyWorldHealth = FParse::Param(*Params, TEXT("UpdateEnemyWorldHealth"));
 	const bool bConnectARPGEnemySource = FParse::Param(*Params, TEXT("ConnectARPGEnemySource"));
@@ -2080,15 +2402,15 @@ int32 UCombatAssetBuildCommandlet::Main(const FString& Params)
 	const bool bFixCombatInput = FParse::Param(*Params, TEXT("FixCombatInput"));
 	const bool bUpdateCombatAI = FParse::Param(*Params, TEXT("UpdateCombatAI"));
 	const bool bValidateCombatAI = FParse::Param(*Params, TEXT("ValidateCombatAI"));
-	if (int32(bCreate) + int32(bValidate) + int32(bUpdateUI) + int32(bUpdateAnimations) + int32(bConnectARPG) + int32(bConnectARPGHUD) + int32(bRefreshCombatFeedback) + int32(bConnectARPGEnemyHealth) + int32(bUpdateEnemyWorldHealth) + int32(bConnectARPGEnemySource) + int32(bAuditARPGEnemySource) + int32(bFixCombatInput) + int32(bUpdateCombatAI) + int32(bValidateCombatAI) != 1) return 1;
-	const bool bSuccess = bUpdateCombatAI || bValidateCombatAI ? CombatAssets::UpdateCombatAI(bValidateCombatAI)
+	if (int32(bCreate) + int32(bValidate) + int32(bUpdateUI) + int32(bUpdateSkillHeadings) + int32(bUpdateAnimations) + int32(bConnectARPG) + int32(bConnectARPGHUD) + int32(bRefreshCombatFeedback) + int32(bRepairSkillPresentation) + int32(bRepairCombatVfx) + int32(bConnectARPGEnemyHealth) + int32(bUpdateEnemyWorldHealth) + int32(bConnectARPGEnemySource) + int32(bAuditARPGEnemySource) + int32(bFixCombatInput) + int32(bUpdateCombatAI) + int32(bValidateCombatAI) != 1) return 1;
+	const bool bSuccess = bUpdateSkillHeadings ? CombatAssets::UpdateSkillHeadings() : bRepairCombatVfx ? CombatAssets::RepairCombatVfx() : bRepairSkillPresentation ? CombatAssets::RepairSkillPresentation(Params) : bUpdateCombatAI || bValidateCombatAI ? CombatAssets::UpdateCombatAI(bValidateCombatAI)
 		: bAuditARPGEnemySource ? CombatAssets::ConnectARPGEnemySource(true) : bFixCombatInput ? CombatAssets::FixCombatInput() : bConnectARPGEnemySource ? CombatAssets::ConnectARPGEnemySource() : bConnectARPG ? CombatAssets::ConnectARPGAnimations()
 		: bUpdateEnemyWorldHealth ? CombatAssets::UpdateEnemyWorldHealth() : bRefreshCombatFeedback ? CombatAssets::RefreshCombatFeedbackAndHUD() : bConnectARPGHUD ? CombatAssets::ConnectARPGHUD() : bConnectARPGEnemyHealth ? CombatAssets::ConnectARPGEnemyHealth() : bUpdateAnimations ? CombatAssets::UpdateAnimations()
 		: bUpdateUI ? CombatAssets::CreateUI(true) : bCreate ? CombatAssets::Create() : CombatAssets::Validate();
 	// 离线操作结束即释放临时强引用，不让工具对象滞留到编辑器模块销毁阶段。
 	CombatAssets::References.Reset();
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_BUILD mode=%s success=%d"),
-		bUpdateCombatAI ? TEXT("UpdateCombatAI") : bValidateCombatAI ? TEXT("ValidateCombatAI") : bAuditARPGEnemySource ? TEXT("AuditARPGEnemySource") : bFixCombatInput ? TEXT("FixCombatInput") : bConnectARPGEnemySource ? TEXT("ConnectARPGEnemySource") : bConnectARPG ? TEXT("ConnectARPGAnimations") : bUpdateEnemyWorldHealth ? TEXT("UpdateEnemyWorldHealth") : bRefreshCombatFeedback ? TEXT("RefreshCombatFeedbackAndHUD") : bConnectARPGHUD ? TEXT("ConnectARPGHUD") : bConnectARPGEnemyHealth ? TEXT("ConnectARPGEnemyHealth") : bUpdateAnimations ? TEXT("UpdateAnimations") : bUpdateUI ? TEXT("UpdateUI") : bCreate ? TEXT("Create") : TEXT("Validate"), bSuccess);
+		bUpdateSkillHeadings ? TEXT("UpdateSkillHeadings") : bRepairCombatVfx ? TEXT("RepairCombatVfx") : bRepairSkillPresentation ? TEXT("RepairSkillPresentation") : bUpdateCombatAI ? TEXT("UpdateCombatAI") : bValidateCombatAI ? TEXT("ValidateCombatAI") : bAuditARPGEnemySource ? TEXT("AuditARPGEnemySource") : bFixCombatInput ? TEXT("FixCombatInput") : bConnectARPGEnemySource ? TEXT("ConnectARPGEnemySource") : bConnectARPG ? TEXT("ConnectARPGAnimations") : bUpdateEnemyWorldHealth ? TEXT("UpdateEnemyWorldHealth") : bRefreshCombatFeedback ? TEXT("RefreshCombatFeedbackAndHUD") : bConnectARPGHUD ? TEXT("ConnectARPGHUD") : bConnectARPGEnemyHealth ? TEXT("ConnectARPGEnemyHealth") : bUpdateAnimations ? TEXT("UpdateAnimations") : bUpdateUI ? TEXT("UpdateUI") : bCreate ? TEXT("Create") : TEXT("Validate"), bSuccess);
 	return bSuccess ? 0 : 1;
 #else
 	return 1;

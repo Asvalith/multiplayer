@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "GameplayTagContainer.h"
 #include "multiplayerCombatConfig.generated.h"
 
 class UNiagaraSystem;
@@ -43,12 +44,37 @@ struct FmultiplayerCombatFeedback
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<USoundBase> Sound;
 };
 
-// 四个技能共用一份资产；服务器和预测端读取相同规则，伤害数值仍只由服务器提交。
+// 借鉴 Lyra 的关系映射：静态资格、阻断和替换集中配置，任务与效果仍由各能力自己收尾。
+USTRUCT(BlueprintType)
+struct FmultiplayerAbilityTagRelationship
+{
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FGameplayTag AbilityTag;
+	// 准入时拥有者必须具备全部标签；不是从目标身上取状态。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FGameplayTagContainer ActivationRequiredTags;
+	// 只禁止新的激活；是否中断已经在途的技能由状态事件另行处理。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FGameplayTagContainer ActivationBlockedTags;
+	// 本能力活动期间的能力阻断，结束时只减去自己的引用。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FGameplayTagContainer AbilityTagsToBlock;
+	// 开始时替换的能力分类；被取消者仍通过自身 EndAbility 清理任务与表现。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FGameplayTagContainer AbilityTagsToCancel;
+};
+
+// 五个技能共用一份资产；服务器和预测端读取相同规则，伤害数值仍只由服务器提交。
+// 救援只复用下方冲突关系，不共用资源数值。
 UCLASS(BlueprintType)
 class MULTIPLAYER_API UmultiplayerCombatConfig : public UDataAsset
 {
 	GENERATED_BODY()
 public:
+	UmultiplayerCombatConfig();
+	// 配置在角色生命周期中只读；不能在活动能力持有阻断计数时替换关系表。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Ability Relationships")
+	TArray<FmultiplayerAbilityTagRelationship> AbilityRelationships;
+	void GetAbilityActivationTagRequirements(const FGameplayTagContainer& AbilityTags,
+		FGameplayTagContainer& OutRequired, FGameplayTagContainer& OutBlocked) const;
+	void GetAbilityBlockAndCancelTags(const FGameplayTagContainer& AbilityTags,
+		FGameplayTagContainer& OutBlock, FGameplayTagContainer& OutCancel) const;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Attack{0, .5f, 25, 0};
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Defend{20, 8, 0, 0, 3};
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Heal{25, 6, 30, 600};
@@ -70,6 +96,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100")) float ProjectileSpeed = 1600;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UNiagaraSystem> ProjectileEffect;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UParticleSystem> ProjectileCascadeEffect;
+	// 保留旧资产字段兼容；正面完全格挡及无方向伤害已不再使用全向减伤倍率。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", ClampMax = "1")) float DefenseDamageMultiplier = .5f;
 	// 新规则可按角色配置启用，默认保留原关卡的技能数值；剩余盾和效果时长不写回配置。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float DefenseShieldAmount = 0;

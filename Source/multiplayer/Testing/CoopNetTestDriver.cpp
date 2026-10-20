@@ -1,5 +1,6 @@
 #include "Testing/CoopNetTestDriver.h"
 #include "Testing/CoopPlatformRideProbe.h"
+#include "Testing/CoopSkillPresentationReview.h"
 
 #include "Core/multiplayerCoopGameState.h"
 #include "Combat/multiplayerCombatCharacter.h"
@@ -56,6 +57,7 @@ void ACoopNetTestProbe::ServerReceipt_Implementation(const FString& Name, bool b
 
 void StartCoopNetTests()
 {
+    StartCoopSkillPresentationReview();
 #if !UE_BUILD_SHIPPING
 	FString RequestedMode;
 	if (!Driver && FParse::Value(FCommandLine::Get(), TEXT("CoopNetTest="), RequestedMode))
@@ -69,6 +71,7 @@ void StartCoopNetTests()
 
 void StopCoopNetTests()
 {
+    StopCoopSkillPresentationReview();
 #if !UE_BUILD_SHIPPING
 	if (Driver)
 	{

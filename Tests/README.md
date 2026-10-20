@@ -2,10 +2,62 @@
 
 网络入口支持 RideMotion、Combat、CombatLifecycle、CombatReconnect、CombatExpansion、CombatTraffic 和 CoopEscape：一个 DS 和两个独立客户端。Partner 先连接并确认角色与共享状态就绪，Client 执行受测动作；服务器和两个客户端分别记录结果。
 
+当前恢复原埃及地图后的规则与验收入口见下文“原埃及图恢复后的正式技能验收（2026-10-20）”。旧 `CoopEscape` 全流程依赖原型的 `Escape_*` 机关布局，不适用于恢复后的原图；本文此前各日期的通过记录只对应当时的布局、规则和构建。
+
+## 集中能力冲突关系（2026-10-20）
+
+本轮参考 [Lyra 5.5 的 Ability Tag Relationship Mapping](https://dev.epicgames.com/documentation/en-us/unreal-engine/abilities-in-lyra-in-unreal-engine?application_version=5.5)，把静态关系嵌入现有 `UmultiplayerCombatConfig::AbilityRelationships`，不引入完整 Lyra、Experience 或一套重复的状态机。玩家五技能和救援均使用实际配置；现有配置资产未存储新字段时继承原生构造默认，不改变数值和素材引用。
+
+每条关系由能力分类匹配，父分类和多个匹配行追加生效：
+
+- `ActivationRequiredTags`：拥有者必须全部具备的状态。
+- `ActivationBlockedTags`：拥有者具备任一状态就不能开始。
+- `AbilityTagsToBlock`：活动期间阻止哪些能力分类，由 GAS 原生引用计数成对增减。
+- `AbilityTagsToCancel`：开始时取消哪些在途能力；不等于清除它们留下的独立持续 GE，也不自动退还已提交资源。
+
+| 默认关系 | 行为 |
+| --- | --- |
+| `Ability.Combat` 父分类 | 死亡、倒地、眩晕、施法、救援中阻断新的战斗请求 |
+| Q | 已防御时不能叠加；不取消在途普攻 |
+| E / R | 替换在途普攻，旧任务取消后不能迟到发弹；Q 的持续 GE 不被移除 |
+| Dash | 禁锢、禁行、已有冲刺时不能起手；不新增“所有技能互斥” |
+| Rescue | 额外禁止冲刺/禁行/禁锢时起手；开始时替换普攻，引导期间阻断 `Ability.Combat`；取消/完成后按原生计数解除自己的阻断 |
+
+关系查询同时接入项目 `CanActivateAbility` 与原生 `DoesAbilitySatisfyTagRequirements`，按标签筛选、输入预检与实际准入不能使用相互矛盾的规则。ASC 只扩展传给 `Super::ApplyAbilityBlockAndCancelTags` 的集合，不覆盖原有能力/蓝图条件、不维护第二份活动能力或 bool 锁。任务、蒙太奇、预测键、GE 句柄、CMC 根运动仍在各能力 `EndAbility` 收尾。
+
+本轮同时删除公开激活分发层和治疗派生 `CanActivate` 的相邻重复查询；未授予 Spec 的入口仍明确提示失败。客户端预览、服务器准入和提交后实时复核属于不同边界，保留其必要校验。救援释放占用时支持同步再次取消，清理完成前不重新激活同一实例。
+
+边界说明：
+
+- 角色存活/连接接纳和治疗目标、视线、范围、地面/胶囊扫掠不是单靠 Tag 能表达的条件，原有实时业务检查继续保留。
+- 新增控制状态是否立即中断在途技能，仍须在统一状态事件中明确执行；仅把标签放进激活阻断列表不会自动取消已启动技能。现有 Stun→取消活动能力、Root/禁行→取消 Dash 保留，不擅自把 Root 提升为禁止所有原地施法。
+- 活动能力期间不替换或编辑关系表，否则开始和结束计算的阻断集合可能不同；角色配置在运行期只读。
+- 没有把输入改成 InputTag，也没有实现全局世界/攻防双向 RuleResolver。裸 `UGameplayAbility` 若不继承项目战斗基类或救援实现，仍须显式接入本查询，不能声称任意能力都已接管。
+- 保留现有救援中途 Root 的策略，不新增 PreActivate 尚未完成阶段的取消意图状态机；这些不能用当前通过项代替未实现能力。
+
+新增自动化组为 `Multiplayer.Combat.Relationships`，用真实角色蓝图、实际 GAS 能力/任务和克隆配置验证父子规则、正式配置默认值、阻断引用计数、E/R/救援替换普攻、Guard/Root 共存、缺 Spec 提示和救援同步取消。另删除 Dash 派生类提前拒绝 `MOVE_None` 的重复检查，保留统一的 `Failure_MovementBlocked` 原因，并用实际授予的 Dash 验证移动锁解除前后的准入。
+
+本轮报告根目录为 `C:/UEBuild/CoopLyraConflict_20261020`：
+
+| 检查 | 本轮结果与记录 |
+| --- | --- |
+| Editor 编译 | 首轮局部变量与 `Dash` 配置成员同名，改为 `DashRelationship` 后重编译通过；`Build.log`、`BuildRetry.log` 均保留 |
+| 新增冲突用例 | `Relationships/index.json`：7 成功、0 警告、0 失败，使用 NullRHI |
+| 完整战斗回归 | `Regression/index.json`：147 成功、0 警告、0 失败，含上述 7 项；DX12 离屏运行 |
+| Combat | `CombatNormalHarsh/report.json`：Normal／Harsh 各 1 轮通过；恢复后的 `CoopEscape` 地图、渲染客户端与受控输入夹具 |
+| CombatLifecycle | `LifecycleNormalHarsh/report.json`：Normal／Harsh 各 1 轮通过 |
+| CombatExpansion | `ExpansionNormalHarsh/report.json`：Normal／Harsh 各 1 轮通过，含冲刺取消／拒绝、弹反和救援 |
+| CombatReconnect | `ReconnectNormalHarsh/report.json`：Normal／Harsh 各 1 轮通过，含存活／死亡后的真实断线恢复 |
+
+四组网络报告共 8 轮，磁盘项目模块 SHA256 均为 `d02fe1c3c36b0887a4a7a46aac77b7cb626e7f3d3610565f7b60e55dad505181`，受测源清单指纹均为 `caeabae8853bf73dae84444d703ad043c8739d3d843cb480564f85898fd0b5d3`。报告保留 `loadedByRuntimeVerified=false`，不把磁盘指纹说成额外的运行时加载证明。验收后只更新本文和启动脚本的说明注释，不修改受测运行代码或资产。
+
+这些结果属于本机 Editor DS＋两个独立客户端的状态／数值回归；后三组使用 NullRHI。渲染夹具的通过也不等于全技能首帧粒子、完整原图通关、连续录像、公网或 Shipping 验收。原图恢复后的旧 `Escape_*` 全流程入口限制及首次冷加载特效未覆盖项仍保留在下文。
+
 ## 运行
 
 ~~~powershell
 .\Scripts\RunMultiplayerNetworkTests.ps1 -SelfTest
+# 旧 Escape_* 原型布局专用；恢复原埃及图后不使用此全流程入口。
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Scenario CoopEscape -Profiles Normal -Repeat 1 -Map /Game/Combat/Maps/CoopEscape -Offscreen -TimeoutSeconds 600
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Normal,Moderate,Harsh -Repeat 1
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -Repeat 3
@@ -20,7 +72,7 @@
 
 运行前编译 multiplayerEditor。默认采用 UE 5.5.4 Editor Server；-EditorPath 可覆盖引擎路径。默认 NullRHI；-Offscreen 使用客户端 DX12 离屏渲染，-Visible 显示客户端窗口，供人工验收 UI 与表现，DS 始终无画面。打包测试须同时提供 GameExecutablePath 与独立 ServerExecutablePath。
 
-RunLocalDedicatedServer 不带 -Play 时执行一次指定网络档位的完整合作撤离验证；-Play 只启动可操作的 DS 和两个客户端，-FromMenu 显示原地址连接菜单，不生成自动通过结论。平台实验使用 RunMultiplayerNetworkTests 的 RideMotion 入口。两种入口均支持 -PlanOnly；端口为 0 时自动选择。
+RunLocalDedicatedServer 不带 -Play 时调用旧 `Escape_*` 原型布局的自动撤离验证，不适用于恢复后的原埃及地图。当前原图请使用 -Play：只启动可操作的 DS 和两个客户端；-FromMenu 显示原地址连接菜单，不生成自动通过结论。技能回归使用上述 Combat 系列入口，平台实验使用 RunMultiplayerNetworkTests 的 RideMotion 入口。两种脚本均支持 -PlanOnly；端口为 0 时自动选择。
 
 ## 保留的检查
 
@@ -474,6 +526,91 @@ Harsh 为模拟器参数 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不�
 实际逐图检查确认五槽与生命能量分离，R 双端结果粒子出现在落点、施法者黄圈清楚。首轮发现默认操作说明盖住技能栏，最终将两种说明由视口高度 84% 上移至 62%；后续 Lifecycle 双端图确认不再重叠。Client SelfHeal 图可见脚底到身体的治疗粒子；Partner SelfHeal PNG 未清楚显示短粒子，虽然该端正式组件位置／活跃断言已通过，不把这张图宣称为清晰的治疗画面。BasicAttack PNG 是命中后画面，起手方向的证据来自真实 Cascade／Niagara 组件快照测试，不能替代多角度连续操作录像。
 
 版本边界：Combat 的磁盘模块为 `e37a08001f4d966aaeb0c2c85e3fc020feb917623d150d2697ceec6a2682d9cd`，Lifecycle 为 `9ac52d88889c4155404424ea0ecd6ba88baba94af569f88c2a4c9d76c4e36d53`；两报告源清单比较仅 `multiplayerCombatPresentation.cpp` 不同，对应两处提示 Y 坐标调整，技能规则、网络代码、测试及资产不变。报告仍标明 `loadedByRuntimeVerified=false`，不将磁盘哈希说成运行时模块证明。原 HUD 与埃及原地图哈希保持原值，专项四资产均有校验过的原稿备份；所有首次失败记录保留。
+
+## 正式 HUD、技能特效与朝向修复（2026-10-19，冻结验收）
+
+本轮只修现有 GAS 技能与表现，不增加另一套架构。排查正式资产发现 `/Game/Combat/UI/BP_CombatHUD` 仍继承普通 `AHUD`，因此原生范围绘制根本没有运行；此前专项夹具替换了 HUD，夹具通过不能证明正式游戏通过。现将同一个 BP 的父类改为 `AmultiplayerCombatHUD`，保留原图表和 UMG 创建流程，原生控件字段改名 `NativeCombatWidget`，避免与原蓝图变量同名。原 `WBP_CombatHUD` 和埃及原地图哈希仍分别为 `6c264e7dd2646cfd1599e57ad3ce2157f937efd64a0ea86cfa7c070b1619ef79`、`e2d04e4905867717252f9552af9cc43a3ea5bcfecd3dabb0a681901af321cd6d`。
+
+特效只校准 `Combat/Presentation/Effects` 下的三个项目副本：`P_CombatFireProjectile`、`P_CombatFireCast`、`NS_CombatDefenseShield`。投射物去掉长网格尾焰和大烟雾，保留紧凑火焰；护盾去掉无关地面水浪。原三个第三方素材前后哈希一致，逐包备份和校验位于 `Saved/CombatAssetImport/BeforeSkillPresentationRepair-*`。不是靠转 90° 掩盖素材轴向，也没有改动原包。普攻起手、瞄准几何与真实投射物共用身体前方发射点；胸前到前移点先做同半径扫掠，不能跳过贴墙或贴身目标。
+
+Q／R 不再把施法者强行转到镜头方向，受击目标也不随施法者镜头转向；已接纳的普攻仍按本次瞄准快照转身。Q 的防御姿态由实际 GE／标签驱动上半身基础层，不用瞬时 Ability 的结束冒充防御结束，也不强停其他动作。R 界面同时说明当前配置的 **6.5 米最大选点射程、当前落点距离、2.2 米伤害半径**；它们读取与原生判定相同的配置。默认操作提示移到上方，避开人物成长文字，不能把装饰粒子边缘当成伤害边界。
+
+正式无 AI 双客户端录制与网络夹具分开。`Round2Demo` 首轮 Observer 朝天且被自身遮挡，判为取景失败，原帧保留；`Round2DemoRetry` 先经真实 S／D 输入分开玩家，再使用稳定观察朝向，两端各录约 40 秒、366 帧，目标采集频率 10Hz，视频按真实帧请求时间编码。逐图可见远端向前发射的紧凑火焰、Q 防御姿态与身体护盾、E 脚底反馈、R 贴地结果圈及取消后的清理。Owner 私人预览本就不向 Observer 复制。该录制用于表现检查，不是 10FPS 性能结论、无 AI 命中准确性证明或完整敌人战斗验收；采集完成标记不自动等于视觉通过。
+
+报告根目录为 `Saved/SkillPresentationRepair_20261019`。冻结模块的 `FrozenRegression/index.json` 为 **131 项成功、0 警告、0 失败**，包含正式 HUD 接线、项目副本冷读取、防御姿态生命周期、Q／R 朝向与 R 真实致死后不再播放 Area 结果 Cue 等检查。`FrozenCombat/report.json` 的 Normal／Harsh 和 `FrozenCombatModerate/report.json` 的 Moderate 均为 **288 项必需门禁通过**，含两端真实 AnimInstance 防御姿态及拥有者预测拒绝后姿态撤销；`FrozenLifecycle/report.json` 的三档均为 **106 项通过**。六组 Server／Client／Partner 均 exitCode 0、`stoppedByRunner=false`。上述网络报告与最终录像的磁盘模块 SHA256 均为 `692768833dd31ff4ac97c71226d732616968d3a61398d50f8291ac0962a0a84c`；没有测量进程内已加载模块哈希，不把磁盘指纹扩写为运行时证明。
+
+最终第三段录制为 `FrozenDemo`，采用 Harsh、正式地图与原 HUD、无 AI、仅本进程免消耗／冷却；Owner／Observer 各约 40 秒、361 张原帧。`FrozenDemo/Owner/Review.mp4`、`FrozenDemo/Observer/Review.mp4`、动作清单、UTC／帧时间及启动参数均保留，录像前后模块哈希一致，三进程已按本轮身份核对后关闭。取证仍约 10Hz、无音轨，不作为运行帧率或音效验收。正式规则测试没有使用这些试玩开关。
+
+最终关键帧检查可见：Owner 的 Q／E／R／Shift 预览、Q→E 切换后仅剩 E 范围、R 取消后的无圈状态，以及 Q 内镜头转 90°但角色 yaw 差值为 0；Observer 可见紧凑前向火焰、Q 防御动作与身体盾、E 脚腿反馈、R 贴地圈内粒子。观察端第 030／037／263 帧支持前向火焰，第 053／233 帧支持防御，第 090／163 帧支持治疗，第 117／212 帧支持范围结果。首次普攻的粒子未取得清楚画面，不声称每发视觉都已证明；Harsh 起手取消在 Owner 约 15.104 秒发送，Observer 约 15.854 秒收完表现，不能称远端瞬时退出。机器生成的 `visual_passed=false` 不改写成自动通过，另存 `VisualInspection.json` 区分图像检查、执行结果及未覆盖项。
+
+失败结果不覆盖：`Regression/index.json` 留有 **127 成功、2 失败**，分别暴露副本发射器在重建后被重新启用和旧素材名称断言；修复后再冷读取，而非放宽门禁。早期 `Combat` 的 Harsh 自疗粒子观察遗漏也保留。后续通过不能推导原生瞬时治疗 Cue 在丢包下必达；该不可靠表现事件的传输保证没有改变。R 致死收尾本轮有原生回归，但尚无独立的双客户端 R 致死网络专项。所有弱网参数都是本机模拟，不是公网或性能压测结果。
+
+复查使用新输出目录，保留旧证据；下面的技能录像使用正式 `CombatTest`／HUD、无 AI、临时免资源和冷却，不保存试玩开关。网络 `Combat` 仍是独立受控夹具，不能用它代替正式录像：
+
+```powershell
+./Scripts/RunSkillPresentationReview.ps1 -OutputDirectory 'E:/ueprojrct/multiplayer/Saved/SkillPresentationRepair_20261019/RecheckDemo'
+./Scripts/RunMultiplayerNetworkTests.ps1 -Scenario Combat -Profiles Normal,Harsh -Repeat 1 -Map /Game/Combat/Maps/CombatTest -TimeoutSeconds 480 -Offscreen -VisualAcceptance -OutputDirectory 'E:/ueprojrct/multiplayer/Saved/SkillPresentationRepair_20261019/RecheckCombat'
+```
+
+### 去除外围辅助线与普攻水平前射（2026-10-19，17:09 用户录像后）
+
+根据实机反馈删除普攻常驻射线、重复准星、防御预览扇区、治疗搜索球、R 最大射程外圈及连接线、冲刺走廊边线；保留原 UMG、失败文案、治疗对象小标记、冲刺终点和 R 实际落点伤害圈。R 生效后不再把预告圈和结果圈重复描边。空闲时不做已经不再展示的普攻预览扫掠。敌人近战危险预告不在本轮删除范围内。
+
+玩家普攻改为本轮出手快照的水平前射：保留激活时按相机 yaw 转身一次，但相机 pitch 不再把弹体导向脚下。预览查询、真实弹体和起手 Cue 仍共用同一次起点／方向；贴身目标、近墙扫掠和敌人原有三维瞄准不变。项目起手粒子副本改为局部 +X 的紧凑喷发，清除世界重力、径向散射及内部位置偏移；未以粒子转轴掩盖真实弹道差异。
+
+专项报告在 `C:/UEBuild/CoopForwardFix_20261019`：`Targeting/index.json` 为 **20 成功、0 警告、0 失败**；随后 `RegressionRendered/index.json` 为 **133 成功、0 警告、0 失败**。包含五种相机 pitch 下实际能力产生的水平弹体、同源起手 Cue、前方真实命中、不同 pitch 的近墙阻挡，以及敌人保留高度差瞄准。`CastForwardBurst` 冷读项目副本验证前喷分布和零重力，不将其当作渲染结论。`-VfxOnly` 资产修复的备份报告在 `Saved/CombatAssetImport/BeforeSkillPresentationRepair-20261019-174201-508285`：非特效规则、原 HUD、当前动画、地图和第三方原素材均未变。
+
+`DemoNormal` 与 `DemoHarsh` 使用同一磁盘模块 `07c158114531a22302854ab669dffac70f2fbe980711b22995ba6089b934be35`，正式 CombatTest／HUD、DS 加两客户端、无 AI、临时免消耗冷却，分别留下 Owner／Observer 约 40 秒、350／352 与 357／358 帧。两个 `ReviewReport.json` 执行检查通过；自动 `visual_passed=false` 保持原义，不伪造自动美术验收。原始 PNG、按实际时间编码的录像和输入清单均保留。
+
+实际画面抽查：Normal Observer 8–10 帧显示前向飞行的空中火焰，Owner 28／65／86 帧分别显示无大扇区的 Q、仅目标小圈的 E、无外围射程圈的 R；Observer 240 帧支持转向后的前射。Harsh Observer 27–29 帧同样可见前向飞行，Owner 89 帧保留单个 R 落点圈、122 帧取消后无旧圈。Harsh 早期画面出现着色器准备提示，不据此声称冷启动每发粒子均清楚可见。两档均为本机模拟，不证明公网、每发瞬时 Cue 必达或敌人战斗完整验收；方向／真实命中的依据另有上述原生测试。
+
+玩家前射策略改变后，旧 `CombatTraffic` 的 pitch=90 朝天负载不再等价，后续性能对照须重建水平空旷走廊基线，不能直接复用旧数字。
+
+### 治疗表现复用与紧凑技能标题（2026-10-19，后续专项）
+
+按用户要求把原 Q 护体粒子配置给 E 治疗，Q 保留实际防御标签驱动的动作和音效，不再显示该粒子；治疗不再播放 HealMontage，但保留原消耗、冷却、目标选择和权威治疗。治疗粒子从实际受治疗者脚底生成并跟随其根组件，保持世界缩放，使用 0.8 秒表现时长及原有瞬时组件清理。没有改变瞬时 GameplayCue 的不可靠传输保证。
+
+五个技能标题调整为技能名与按键紧凑同行，例如“治疗 / E”，居中位于原图标上方。两种正式视觉控件只改标题排列，不重建控件树，不改图标、冷却条、透明背景及事件订阅。`UpdateSkillHeadingsInEditor.py` 通过专用原生命令更新两份控件，逐包备份与哈希保护记录在 `Saved/CombatAssetImport/BeforeSkillHeadingUpdate-20261019-192503-426326/SkillHeadingUpdateReport.json`；原 HUD、地图和其他 Combat 资产未被该操作改动。前两次 Python WidgetTree 属性读取失败发生在保存前，原日志保留，没有将失败重写为成功。
+
+本轮报告根目录为 `C:/UEBuild/CoopHealHUD_20261019`。最终 `RegressionFinal/index.json` 为 **134 成功、0 警告、0 失败**，使用实际渲染而非 NullRHI，新增测试明确验证可播放的治疗蒙太奇不再被能力启动，以及实际受治疗者的粒子位置、跟随、缩放与结束清理。`DemoNormal` 使用正式 CombatTest／HUD、DS 加双客户端、无 AI、临时免消耗冷却，两端各录约 40 秒，Owner 356 帧、Observer 355 帧，执行检查通过。最终磁盘模块 SHA256 为 `98fcdcf8a1bad524abee3cd67f28e1ba1cb9b472409c4213d36b89d7a47e0a46`，录像前后未变；未测量进程内已加载模块哈希。
+
+实际抽查 Owner／Observer 第 38 帧可见 Q 防御动作且无护体粒子；双方第 73 帧、Owner 第 76 帧与 Observer 第 147 帧可见 E 的蓝色护体粒子，人物没有治疗起手姿态，五槽标题紧凑居中。该抽查不等于每帧连续观感、音效、弱网、实际治疗数值或完整敌人战斗验收，测试与画面证据分开记录。Owner 第 76 帧有着色器准备提示，不声称冷加载零提示或稳定帧率。自动报告的 `visual_passed=false` 不改写，具体人工图像检查另存 `DemoNormal/VisualInspection.json`。
+
+## 原埃及图恢复后的正式技能验收（2026-10-20）
+
+本轮以恢复原埃及布局的 `/Game/Combat/Maps/CoopEscape` 为对象，原机关位置和引用须单独核对。正式玩家为 `BP_EscapePlayerVariant`，使用独立的 `DA_EscapeCombat` 和 Escape HUD；母配置 `DA_CombatConfig` 的结果不能代替这份实际配置。原型三波路线脚本依赖 `Escape_Key_*`、`Escape_Plate_*`、`Escape_Gate` 和 `Escape_Exit`，恢复原图后应明确报告不适用，不能临时重建这些机关或放宽条件制造全流程通过。`RunLocalDedicatedServer` 不带 `-Play` 的旧自动入口同样不作为恢复原图的完整验收。
+
+当前 Q／E 规则：
+
+- Q 在防御生效期间完全挡住来自角色身体正面的直接攻击，血量和现有护盾均不应减少；侧后方、没有方向的伤害和持续伤害（DoT）不受该格挡保护，照常先扣护盾再扣生命。短时正面投射物弹反仍受原窗口限制；身体正面与镜头方向分开判断。
+- Q 保留防御动作与音效，两类粒子配置均为空。原 Q 蓝色护体特效交给 E，出现在实际受治疗者脚底并跟随角色；E 不播放治疗动作。
+- E 按住预览、松开确认，右键取消预览；基础规则为消耗 25 能量、冷却 6 秒、治疗 30 生命，搜索半径 6 米。治疗量与冷却可随技能等级变化，数值回归应明确当前等级。
+- E 只选择范围内受伤且可行动的友方（包括自己），优先最低血量比例；队友须可见，自疗不做自身遮挡射线。满血且无受伤队友时拒绝，不能以演示模式的满血自疗行为作为正式规则。
+- 倒地需要队友按住 F 救援，E 不负责复活；倒地、死亡、未接纳、救援中、眩晕、施法中、未学习、能量不足、冷却或无合法治疗目标均须给出对应失败原因。图标亮度只反映所属角色的资源、冷却和状态，不保证当前存在治疗目标；目标资格在预览和确认时重新判断，满血提示与无可治疗目标提示区分。拒绝请求不扣新能量，也不启动新冷却。
+
+正式技能受控联机入口示例：
+
+~~~powershell
+.\Scripts\RunMultiplayerNetworkTests.ps1 -Scenario Combat -VisualAcceptance -Map /Game/Combat/Maps/CoopEscape -Profiles Normal,Harsh -Repeat 1 -Offscreen -TimeoutSeconds 600 -OutputDirectory 'C:/UEBuild/CoopFormalFix_20261020/CombatVisual'
+~~~
+
+该入口使用实际保存的 Escape GameMode、玩家、独立配置和 HUD，不替换它们；不启用 `CoopSkillDemo`、`AbilitySystem.IgnoreCosts` 或 `AbilitySystem.IgnoreCooldowns`。Combat 仍是隔离目标、站位与输入的受控场景，不能把其通过称作恢复原图的机关、导航或完整闯关通过。
+
+本轮需分别核对以下证据：
+
+- 原生格挡回归检查正面直接伤害为零，侧后、无方向与持续伤害照常结算；Q 动作、Q 无粒子和 E 蓝色特效另看实际双端画面。
+- `Multiplayer.Combat.EscapeHUDHealFailure` 使用正式 Escape 角色和 HUD，检查满血无目标及能量不足的可见失败反馈、资源图标状态，以及拒绝后资源和冷却不变；另验证无冷却且 HUD 无定时器时，受伤队友进出范围会改变真实治疗资格，图标不会停留在过期的目标灰色状态，不增加全局轮询。此原生用例走确认函数，真实 E 键链另由网络场景验证。
+- 网络场景经所属 PlayerController 的 E 按下／松开，分别检查预览不提交、预测扣费、服务器实际回血与单次冷却、拥有者和观察者收到本轮治疗 Cue 及对应截图。自疗链保留真实受伤的 90 生命基线，验证 90→100；能量 55→30，不能仅看到预览或记录输入就算治疗成功。
+- 原图机关、平台、钥匙、出口与实际通关仍需按恢复后的原位置和配置单独验证，不能复用旧原型路线的通过记录。
+
+本轮报告根目录为 `C:/UEBuild/CoopFormalFix_20261020`。最终模块 SHA256 为 `28FBF8AA9EC3B2886B3F5A5BFBC46D78C793EB222F6AFA486CA0739D135B4710`，下列结果只对应这次构建，不引用历史通过记录：
+
+- `RegressionVisualFinal/index.json`：140 项通过、0 警告、0 失败。新增 `Multiplayer.Combat.Guard.BlockedHitPresentation` 用真实 Combat/Escape 蓝图核对：正面格挡不损失血盾、不发布伤害 Cue、不创建命中粒子或受击蒙太奇；侧后命中仍保留正常伤害与表现。判定在提交前固定，血量回调中的同步转身不追溯改变本次结果。
+- `EscapeCombatNormalVisualFinal/report.json` 与 `EscapeCombatHarshVisualFinal/report.json`：正式 Escape 配置的受控双端 Combat 各 1 轮通过。Harsh 是本机模拟 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不是公网实测或实际 RTT 指标。真实输入、预测拒绝/纠正、单次消耗、队友 40→70、自疗 90→100 均保留严格断言。
+- `RestoredMapAuditFinal.log`：独立读取原图和恢复副本，原有 21 个机关/出生点位置不匹配数为 0；包含 4 钥匙、4 插槽、5 压力板、3 平台、2 门、2 出生点、1 终点。原图文件 SHA256 仍为 `E2D04E4905867717252F9552AF9CC43A3EA5BCFECD3DABB0A681901AF321CD6D`。仅副本修复负数触发盒尺寸及 DS 上无本地控制器时的输入初始化，原图文件未回写。
+- 人工核对最终 Normal 截图：Q 防御动作不再被本次被格挡攻击的伤害火焰覆盖；后续自疗截图能看见蓝色护体效果。**首次队友治疗 BasicHeal 截图仍有 `Preparing Shaders (10)` 且未见蓝球，首次冷加载特效视觉不登记通过**。测试准备已非阻塞等待真实资源、Niagara/GPU 编译及已提交 shader 任务，但不能据此保证首次绘制的新 shader/PSO，或把组件存在当作像素可见。此次也不登记完整原图通关、连续录像、声音或云服务器验收。
+
+首轮旧血量预期与侧后规则夹具失败报告均保留在该报告根目录，未用重跑覆盖失败证据。地图和配置恢复前的备份见 `Saved/CombatAssetImport/BeforeOriginalLayoutRestore-20261020-003433-505389/RestoreReport.json`；本地输入修复前的副本另保存在报告根目录 `BeforeLocalInputRepair.umap`。
 
 ## 历史实验
 

@@ -66,7 +66,7 @@ int32 AmultiplayerCombatEncounter::GetLivingEnemyCount() const
 	return Count;
 }
 
-// 固定间隔施压，但不超过当前人数上限；旧波尚存时等待，不在同一帧补齐多个波次。
+// 固定间隔施压，但存活与待出生敌人合计不得超过上限；容量不足时等待，不在同一帧补齐多个波次。
 void AmultiplayerCombatEncounter::StartNextWave()
 {
 	if (bStopped || CurrentWave >= FMath::Min(WaveSizes.Num(), 10)) return;
@@ -110,6 +110,7 @@ void AmultiplayerCombatEncounter::HandleEnemyDestroyed(AActor* Actor)
 	Enemies.RemoveAll([Actor](auto Weak) { return !Weak.IsValid() || Weak.Get() == Actor; });
 	PublishState();
 }
+// 服务器按出生/状态/销毁事件发布整局快照；HUD 读取 GameState 副本，不另行推算波次或存活数。
 void AmultiplayerCombatEncounter::PublishState()
 {
 	if (auto* State = BoundGameState.Get())
@@ -196,6 +197,7 @@ AmultiplayerCombatSupply::AmultiplayerCombatSupply()
 	Label->SetHorizontalAlignment(EHTA_Center);
 	Label->SetTextRenderColor(FColor(100,255,120));
 	Label->SetText(FText::FromString(TEXT("SUPPLY")));
+	Label->SetHiddenInGame(true);
 }
 
 void AmultiplayerCombatSupply::BeginPlay()
@@ -204,6 +206,7 @@ void AmultiplayerCombatSupply::BeginPlay()
 	if (HasAuthority()) Trigger->OnComponentBeginOverlap.AddUniqueDynamic(this, &ThisClass::HandleOverlap);
 	OnRep_Consumed();
 }
+// 只有服务器消费补给；先占用再应用属性效果，避免同步属性回调或重复重叠重复发放。
 void AmultiplayerCombatSupply::HandleOverlap(UPrimitiveComponent*, AActor* Other, UPrimitiveComponent*, int32, bool, const FHitResult&)
 {
 	auto* Player = Cast<AmultiplayerCombatCharacter>(Other);

@@ -13,15 +13,7 @@ namespace
 {
 	FGameplayTag SkillCooldownTag(EMultiplayerCombatSkill Skill)
 	{
-		switch (Skill)
-		{
-		case EMultiplayerCombatSkill::Attack: return CombatTags::Cooldown_Attack;
-		case EMultiplayerCombatSkill::Defend: return CombatTags::Cooldown_Defend;
-		case EMultiplayerCombatSkill::Heal: return CombatTags::Cooldown_Heal;
-		case EMultiplayerCombatSkill::Area: return CombatTags::Cooldown_Area;
-		case EMultiplayerCombatSkill::Dash: return CombatTags::Cooldown_Dash;
-		default: return {};
-		}
+		return CombatTags::GetSkillTags(Skill).Cooldown;
 	}
 
 	FGameplayTag SpecificFailure(const FGameplayTagContainer& Reasons)
@@ -47,20 +39,21 @@ bool AmultiplayerCombatCharacter::CheckSkillAvailable(EMultiplayerCombatSkill Sk
 	if (!IsAlive() || AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Dead)) return Reject(CombatTags::Failure_Dead);
 	if ((Coop && Coop->IsRescuing()) || AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Rescuing))
 		return Reject(CombatTags::Failure_Rescuing);
-	if (IsStunned()) return Reject(CombatTags::Failure_Stunned);
-	if (IsCasting()) return Reject(CombatTags::Failure_Casting);
 	const auto Class = GetSkillAbilityClass(Skill);
 	if (!Class || (bGrantSupportAbilities && Progression->GetSkillLevel(Skill) <= 0))
 		return Reject(CombatTags::Failure_NotLearned);
 	const FGameplayAbilitySpec* Spec = AbilitySystem->FindAbilitySpecFromClass(Class);
 	if (!Spec) return Reject(CombatTags::Failure_NotReady);
+	// 读取实际授予能力的完整分类，派生能力增加的子标签也参与父子关系匹配。
+	if (!CastChecked<UmultiplayerCombatAbilitySystem>(AbilitySystem)
+		->CheckAbilityTagRelationships(Spec->Ability->GetAssetTags(), OutReasons)) return false;
 	if (Skill == EMultiplayerCombatSkill::Dash)
 	{
-		if (AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Dashing)) return Reject(CombatTags::Failure_Dashing);
-		if (IsMovementBlocked() || GetCharacterMovement()->MovementMode == MOVE_None)
+		// MOVE_None 是实际 CMC 状态，不把非标签来源的移动锁遗漏在关系查询之外。
+		if (GetCharacterMovement()->MovementMode == MOVE_None)
 			return Reject(CombatTags::Failure_MovementBlocked);
 	}
-	if ((Skill == EMultiplayerCombatSkill::Defend && IsDefending()) || Spec->IsActive())
+	if (Spec->IsActive())
 		return Reject(CombatTags::Failure_AlreadyActive);
 	// 不检查其他技能的 Active 标记：治疗/范围技能仍可按原规则取消普通攻击。
 	const UAbilitySystemGlobals& Globals = UAbilitySystemGlobals::Get();
@@ -92,12 +85,17 @@ FText AmultiplayerCombatCharacter::GetSkillFailureText(EMultiplayerCombatSkill S
 		const float Remaining = AuthorityValue >= 0 ? AuthorityValue : GetEffectRemaining(SkillCooldownTag(Skill));
 		return FText::FromString(Remaining > 0.f ? FString::Printf(TEXT("技能冷却中：剩余 %.1f 秒"), Remaining) : TEXT("技能冷却中，等待服务器同步"));
 	}
-	if (Reason == CombatTags::Failure_NoHealTarget) return FText::FromString(TEXT("治疗范围内没有可见的受伤队友（含自己）"));
+	if (Reason == CombatTags::Failure_NoHealTarget)
+		return FText::FromString(GetHealth() >= GetMaxHealth()
+			? TEXT("生命已满；附近没有可治疗的受伤队友")
+			: TEXT("没有可治疗的受伤目标；倒地队友请按 F 救援"));
 	if (Reason == CombatTags::Failure_InvalidGround) return FText::FromString(TEXT("没有有效地面落点，请调整瞄准位置"));
 	if (Reason == CombatTags::Failure_DashBlocked) return FText::FromString(TEXT("前方空间不足，无法冲刺"));
 	if (Reason == CombatTags::Failure_MovementBlocked) return FText::FromString(TEXT("当前移动受限，无法冲刺"));
 	if (Reason == CombatTags::Failure_InvalidAim) return FText::FromString(TEXT("瞄准请求无效，请重新瞄准后释放"));
 	if (Reason == CombatTags::Failure_MuzzleBlocked) return FText::FromString(TEXT("发射点被遮挡，请离开墙体"));
+	if (Reason == CombatTags::Failure_Requirements) return FText::FromString(TEXT("当前状态不满足该技能的使用条件"));
+	if (Reason == CombatTags::Failure_Conflict) return FText::FromString(TEXT("当前动作与该技能冲突，请结束当前动作后重试"));
 	if (Reason == CombatTags::Failure_Rejected) return FText::FromString(TEXT("服务器未接受本次技能，预测状态已撤销"));
 	return FText::GetEmpty();
 }

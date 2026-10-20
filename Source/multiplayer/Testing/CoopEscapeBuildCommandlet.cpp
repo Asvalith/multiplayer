@@ -28,12 +28,19 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Editor.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/TextRenderActor.h"
 #include "Engine/Blueprint.h"
+#include "Engine/Level.h"
+#include "Engine/LevelScriptBlueprint.h"
+#include "Engine/LevelScriptActor.h"
 #include "EngineUtils.h"
 #include "FileHelpers.h"
 #include "GameFramework/PlayerStart.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/WorldSettings.h"
 #include "NavigationSystem.h"
@@ -43,6 +50,12 @@
 #include "NavMesh/RecastNavMesh.h"
 #include "StaticMeshCompiler.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/CompilerResultsLog.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_VariableSet.h"
 #include "IAssetTools.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionConstant.h"
@@ -164,6 +177,313 @@ namespace CoopEscapeAssets
 		UE_LOG(LogCoopEscapeBuild,Display,TEXT("ESCAPE_PLACEMENT position=%s floor=%.1f actor=%s"),*Point.ToCompactString(),Hit.ImpactPoint.Z,*GetNameSafe(Hit.GetActor()));
 		return Point;
 	}
+	// 原图的本地输入初始化不能在 DS 上操作空控制器；只为副本的既有输入子链加守卫。
+	bool RepairLocalInput(UWorld* World, bool& bChanged)
+	{
+		bChanged = false;
+		if (!World || World->GetPackage()->GetName() != TEXT("/Game/Combat/Maps/CoopEscape")) return false;
+		auto* Blueprint = World->PersistentLevel->GetLevelScriptBlueprint(true);
+		if (!Blueprint) return false;
+		const auto Fail = [](const TCHAR* Reason)
+		{
+			UE_LOG(LogCoopEscapeBuild, Error, TEXT("ESCAPE_LOCAL_INPUT_REPAIR failed=%s mapNotSaved=1"), Reason);
+			return false;
+		};
+		UK2Node_CallFunction* Input = nullptr;
+		UK2Node_VariableSet* Cursor = nullptr;
+		TArray<UEdGraph*> Graphs;
+		Blueprint->GetAllGraphs(Graphs);
+		for (auto* Graph : Graphs)
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				FString Member;
+				if (auto* Call = Cast<UK2Node_CallFunction>(Node))
+				{
+					Member = Call->FunctionReference.GetMemberName().ToString();
+					if (Member.StartsWith(TEXT("SetInputMode_")))
+					{
+						if (Input || Member != TEXT("SetInputMode_GameOnly")) return Fail(TEXT("Unexpected input-mode policy"));
+						Input = Call;
+					}
+				}
+				if (auto* Set = Cast<UK2Node_VariableSet>(Node))
+				{
+					Member = Set->GetVarName().ToString();
+					if (Member == TEXT("bShowMouseCursor"))
+					{
+						if (Cursor) return Fail(TEXT("Multiple cursor assignments require inspection"));
+						Cursor = Set;
+					}
+				}
+				FString Links;
+				for (auto* Pin : Node->Pins)
+					if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+						for (auto* Linked : Pin->LinkedTo)
+							Links += FString::Printf(TEXT(" %s->%s.%s"), *Pin->PinName.ToString(), *Linked->GetOwningNode()->GetName(), *Linked->PinName.ToString());
+				UE_LOG(LogCoopEscapeBuild, Display, TEXT("ESCAPE_LEVEL_INPUT_NODE node=%s member=%s exec=%s"), *Node->GetName(), *Member, *Links);
+			}
+		if (!Input || !Cursor || Input->GetGraph() != Cursor->GetGraph()) return Fail(TEXT("Expected existing GameOnly/cursor pair"));
+		const auto Linked = [](const UEdGraphPin* From, const UEdGraphPin* To)
+		{
+			return From && To && From->LinkedTo.Num() == 1 && From->LinkedTo.Contains(To);
+		};
+		const auto Exec = [](UK2Node* Node) { return Node->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input); };
+		const auto Then = [](UK2Node* Node) { return Node->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output); };
+		UK2Node* First = nullptr;
+		UK2Node* Last = nullptr;
+		if (Linked(Then(Input), Exec(Cursor))) { First = Input; Last = Cursor; }
+		else if (Linked(Then(Cursor), Exec(Input))) { First = Cursor; Last = Input; }
+		else return Fail(TEXT("Input/cursor pair is not one contiguous execution chain"));
+		if (!Exec(First) || Exec(First)->LinkedTo.Num() != 1 || !Then(Last) || Then(Last)->LinkedTo.Num() > 1)
+			return Fail(TEXT("Unexpected input-chain branching"));
+		auto* ControllerPin = Input->FindPin(TEXT("PlayerController"), EGPD_Input);
+		auto* CursorTarget = Cursor->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input);
+		if (!ControllerPin || ControllerPin->LinkedTo.Num() != 1 || !CursorTarget || CursorTarget->LinkedTo.Num() != 1
+			|| ControllerPin->LinkedTo[0] != CursorTarget->LinkedTo[0]) return Fail(TEXT("Input and cursor do not use the same controller"));
+		auto* Controller = ControllerPin->LinkedTo[0];
+		auto* GetController = Cast<UK2Node_CallFunction>(Controller->GetOwningNode());
+		if (!GetController || GetController->FunctionReference.GetMemberName() != TEXT("GetPlayerController"))
+			return Fail(TEXT("Expected existing GetPlayerController target"));
+		auto* Graph = Input->GetGraph();
+		const FName ValidName(TEXT("EscapeInput_IsValid")), ValidBranchName(TEXT("EscapeInput_ValidBranch"));
+		const FName LocalName(TEXT("EscapeInput_IsLocal")), LocalBranchName(TEXT("EscapeInput_LocalBranch"));
+		auto* Valid = FindObject<UK2Node_CallFunction>(Graph, *ValidName.ToString());
+		auto* ValidBranch = FindObject<UK2Node_IfThenElse>(Graph, *ValidBranchName.ToString());
+		auto* Local = FindObject<UK2Node_CallFunction>(Graph, *LocalName.ToString());
+		auto* LocalBranch = FindObject<UK2Node_IfThenElse>(Graph, *LocalBranchName.ToString());
+		auto* Suffix = Then(Last)->LinkedTo.Num() ? Then(Last)->LinkedTo[0] : nullptr;
+		const auto FalseRejoins = [Suffix](UK2Node_IfThenElse* Branch)
+		{
+			const auto* Pin = Branch->GetElsePin();
+			return Suffix ? Pin->LinkedTo.Num() == 1 && Pin->LinkedTo.Contains(Suffix) : Pin->LinkedTo.IsEmpty();
+		};
+		if (Valid || ValidBranch || Local || LocalBranch)
+		{
+			if (!Valid || !ValidBranch || !Local || !LocalBranch
+				|| Valid->FunctionReference.GetMemberName() != TEXT("IsValid") || Local->FunctionReference.GetMemberName() != TEXT("IsLocalController")
+				|| !Linked(Valid->FindPin(UEdGraphSchema_K2::PN_ReturnValue), ValidBranch->GetConditionPin())
+				|| !Linked(Local->FindPin(UEdGraphSchema_K2::PN_ReturnValue), LocalBranch->GetConditionPin())
+				|| !Linked(Valid->FindPin(TEXT("Object")), Controller) || !Linked(Local->FindPin(UEdGraphSchema_K2::PN_Self), Controller)
+				|| !Exec(ValidBranch) || Exec(ValidBranch)->LinkedTo.Num() != 1
+				|| !Linked(Then(ValidBranch), Exec(LocalBranch)) || !Linked(Then(LocalBranch), Exec(First))
+				|| !FalseRejoins(ValidBranch) || !FalseRejoins(LocalBranch)) return Fail(TEXT("Existing guard was changed; inspect before repairing"));
+			UE_LOG(LogCoopEscapeBuild, Display, TEXT("ESCAPE_LOCAL_INPUT_REPAIR alreadyApplied=1 originalInputChain=preserved"));
+			return true;
+		}
+		UFunction* ValidFunction = UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("IsValid"));
+		UFunction* LocalFunction = AController::StaticClass()->FindFunctionByName(TEXT("IsLocalController"));
+		if (!ValidFunction || !LocalFunction) return Fail(TEXT("Required engine guards unavailable"));
+		const auto AddCall = [Graph, First](FName Name, UFunction* Function, int32 X)
+		{
+			auto* Node = NewObject<UK2Node_CallFunction>(Graph, Name);
+			Graph->AddNode(Node, false, false); Node->CreateNewGuid(); Node->SetFromFunction(Function);
+			Node->PostPlacedNewNode(); Node->AllocateDefaultPins();
+			Node->NodePosX = First->NodePosX + X; Node->NodePosY = First->NodePosY + 200;
+			return Node;
+		};
+		const auto AddBranch = [Graph, First](FName Name, int32 X)
+		{
+			auto* Node = NewObject<UK2Node_IfThenElse>(Graph, Name);
+			Graph->AddNode(Node, false, false); Node->CreateNewGuid(); Node->PostPlacedNewNode(); Node->AllocateDefaultPins();
+			Node->NodePosX = First->NodePosX + X; Node->NodePosY = First->NodePosY;
+			return Node;
+		};
+		Valid = AddCall(ValidName, ValidFunction, -800); ValidBranch = AddBranch(ValidBranchName, -600);
+		Local = AddCall(LocalName, LocalFunction, -400); LocalBranch = AddBranch(LocalBranchName, -200);
+		ValidBranch->NodeComment = TEXT("DS 可能尚无玩家控制器；先检查有效性，不调用空对象");
+		LocalBranch->NodeComment = TEXT("只初始化本地玩家输入；服务器跳过后继续原关卡流程");
+		auto* Previous = Exec(First)->LinkedTo[0];
+		Previous->BreakLinkTo(Exec(First));
+		const auto* Schema = GetDefault<UEdGraphSchema_K2>();
+		if (!Schema->TryCreateConnection(Controller, Valid->FindPin(TEXT("Object")))
+			|| !Schema->TryCreateConnection(Valid->FindPin(UEdGraphSchema_K2::PN_ReturnValue), ValidBranch->GetConditionPin())
+			|| !Schema->TryCreateConnection(Controller, Local->FindPin(UEdGraphSchema_K2::PN_Self))
+			|| !Schema->TryCreateConnection(Local->FindPin(UEdGraphSchema_K2::PN_ReturnValue), LocalBranch->GetConditionPin())
+			|| !Schema->TryCreateConnection(Previous, Exec(ValidBranch))
+			|| !Schema->TryCreateConnection(Then(ValidBranch), Exec(LocalBranch))
+			|| !Schema->TryCreateConnection(Then(LocalBranch), Exec(First))
+			|| (Suffix && (!Schema->TryCreateConnection(ValidBranch->GetElsePin(), Suffix) || !Schema->TryCreateConnection(LocalBranch->GetElsePin(), Suffix))))
+			return Fail(TEXT("Could not preserve all existing input-chain paths"));
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		FCompilerResultsLog Results;
+		FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::None, &Results);
+		if (Results.NumErrors || Blueprint->Status == BS_Error) return Fail(TEXT("Target level blueprint did not compile"));
+		bChanged = true;
+		UE_LOG(LogCoopEscapeBuild, Display, TEXT("ESCAPE_LOCAL_INPUT_REPAIR addedNodes=4 originalInputChain=preserved unknownSuccessor=preserved compileErrors=0"));
+		return true;
+	}
+	// 恢复原图整体布局，只叠加战斗内容；原地图文件及机关的原始配置不回写。
+	int32 RestoreOriginalLayout(const FString& Source, const FString& Target)
+	{
+		const auto LoadMap = [](const FString& Package)
+		{
+			return FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(Package,
+				FPackageName::GetMapPackageExtension()), false, false);
+		};
+		if (!LoadMap(Target)) return 1;
+		UWorld* World = GEditor->GetEditorWorldContext().World();
+		struct FCombatOverlayActor
+		{
+			FName Name;
+			FString ClassPath;
+			FTransform Transform;
+			TMap<FName, FString> Properties;
+		};
+		TArray<FCombatOverlayActor> CombatActors;
+		for (TActorIterator<AActor> It(World); It; ++It)
+			if (It->IsA<AmultiplayerCombatEncounter>() || It->IsA<AmultiplayerCombatSupply>() || It->IsA<ANavMeshBoundsVolume>())
+			{
+				FCombatOverlayActor& Description = CombatActors.AddDefaulted_GetRef();
+				Description.Name = It->GetFName(); Description.ClassPath = It->GetClass()->GetPathName(); Description.Transform = It->GetActorTransform();
+				for (const TCHAR* Name : {TEXT("EnemyClass"), TEXT("WaveSizes"), TEXT("WaveInterval"), TEXT("MaxLivingEnemies"), TEXT("StartPlayers"), TEXT("HealthAmount"), TEXT("EnergyAmount")})
+					if (const FProperty* Property = FindFProperty<FProperty>(It->GetClass(), Name))
+					{
+						FString& Value = Description.Properties.Add(FName(Name));
+						Property->ExportText_InContainer(0, Value, *It, *It, *It, PPF_None);
+					}
+			}
+		if (CombatActors.Num() != 5)
+		{
+			UE_LOG(LogCoopEscapeBuild, Error, TEXT("Restore requires the existing encounter, three supplies and navigation bounds; found %d"), CombatActors.Num());
+			return 1;
+		}
+		if (!LoadMap(Source)) return 1;
+		World = GEditor->GetEditorWorldContext().World();
+		TMap<FName, FTransform> OriginalTransforms;
+		TMap<FName, FString> OriginalRules;
+		const auto RuleSnapshot = [](AActor* Actor)
+		{
+			FString Result;
+			for (const TCHAR* Name : {TEXT("DestinationSocket"), TEXT("ActivationPlate"), TEXT("RequiredPlates"),
+				TEXT("ActivationSource"), TEXT("RequiredActivePlateCount"), TEXT("bLatchOnceActivated"),
+				TEXT("bStayOpenOnceActivated"), TEXT("bRequireObjectiveComplete")})
+				if (const FProperty* Property = FindFProperty<FProperty>(Actor->GetClass(), Name))
+				{
+					FString Value;
+					Property->ExportText_InContainer(0, Value, Actor, Actor, Actor, PPF_None);
+					// 包路径随另存改变，实例名称、引用关系与规则值必须相同。
+					Value.ReplaceInline(TEXT("/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo.Stylized_Egypt_Demo:"), TEXT("WORLD:"));
+					Value.ReplaceInline(TEXT("/Game/Combat/Maps/CoopEscape.CoopEscape:"), TEXT("WORLD:"));
+					Result += FString(Name) + TEXT("=") + Value + TEXT("\n");
+				}
+			return Result;
+		};
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			if (It->IsA<AWorldSettings>() || It->IsA<ALevelScriptActor>()) continue;
+			OriginalTransforms.Add(It->GetFName(), It->GetActorTransform());
+			OriginalRules.Add(It->GetFName(), RuleSnapshot(*It));
+		}
+		if (!FEditorFileUtils::SaveMap(World, FPackageName::LongPackageNameToFilename(Target,
+			FPackageName::GetMapPackageExtension())) || !LoadMap(Target)) return 1;
+		World = GEditor->GetEditorWorldContext().World();
+		if (!World || World->GetPackage()->GetName() != Target) return 1;
+		TArray<AActor*> Pasted;
+		for (const auto& Description : CombatActors)
+		{
+			UClass* Class = LoadClass<AActor>(nullptr, *Description.ClassPath);
+			if (!Class) return 1;
+			AActor* Actor = Spawn(World, Class, *Description.Name.ToString(), Description.Transform.GetLocation());
+			if (!Actor) return 1;
+			Actor->SetActorTransform(Description.Transform);
+			for (const auto& Pair : Description.Properties)
+			{
+				const FProperty* Property = FindFProperty<FProperty>(Class, Pair.Key);
+				if (!Property || !Property->ImportText_Direct(*Pair.Value, Property->ContainerPtrToValuePtr<void>(Actor), Actor, PPF_None)) return 1;
+			}
+			if (Actor->IsA<AmultiplayerCombatSupply>())
+			{
+				auto* Visual = CastChecked<UStaticMeshComponent>(Actor->GetDefaultSubobjectByName(TEXT("SupplyVisual")));
+				Visual->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
+				Visual->SetRelativeScale3D(FVector(.5f,.35f,.35f));
+				Visual->SetMaterial(0, LoadObject<UMaterial>(nullptr, TEXT("/Game/Combat/Escape/M_EscapeSupplyGreen.M_EscapeSupplyGreen")));
+				SupplyCross(Actor, LoadObject<UMaterial>(nullptr, TEXT("/Game/Combat/Escape/M_EscapeSupplyWhite.M_EscapeSupplyWhite")));
+			}
+			Pasted.Add(Actor);
+		}
+		if (Pasted.Num() != CombatActors.Num()) return 1;
+		World->GetWorldSettings()->DefaultGameMode = LoadClass<AGameModeBase>(nullptr,
+			TEXT("/Game/Combat/Escape/BP_EscapeGameMode.BP_EscapeGameMode_C"));
+		if (!World->GetWorldSettings()->DefaultGameMode) return 1;
+		bool bInputChanged = false;
+		if (!RepairLocalInput(World, bInputChanged)) return 1;
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			if (const FTransform* Expected = OriginalTransforms.Find(It->GetFName()))
+			{
+				if (!It->GetActorTransform().Equals(*Expected, .001f) || RuleSnapshot(*It) != OriginalRules[It->GetFName()])
+				{
+					UE_LOG(LogCoopEscapeBuild, Error, TEXT("Restored actor differs from original: %s"), *It->GetName());
+					return 1;
+				}
+				OriginalTransforms.Remove(It->GetFName());
+			}
+		}
+		if (!OriginalTransforms.IsEmpty()) return 1;
+		// 只同步表现字段；正式关卡的治疗数值、资源、冷却与持续效果配置保留。
+		auto* Base = LoadObject<UmultiplayerCombatConfig>(nullptr, TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig"));
+		auto* Config = LoadObject<UmultiplayerCombatConfig>(nullptr, TEXT("/Game/Combat/Escape/DA_EscapeCombat.DA_EscapeCombat"));
+		if (!Base || !Config) return 1;
+		const auto CopyVfx = [](FmultiplayerCombatFeedback& To, const FmultiplayerCombatFeedback& From)
+		{
+			To.Effect = From.Effect; To.CascadeEffect = From.CascadeEffect;
+		};
+		CopyVfx(Config->AttackFeedback, Base->AttackFeedback); CopyVfx(Config->ImpactFeedback, Base->ImpactFeedback);
+		CopyVfx(Config->HealFeedback, Base->HealFeedback); CopyVfx(Config->CastingFeedback, Base->CastingFeedback);
+		CopyVfx(Config->AreaFeedback, Base->AreaFeedback); CopyVfx(Config->StunFeedback, Base->StunFeedback);
+		Config->DefenseFeedback.Effect.Reset(); Config->DefenseFeedback.CascadeEffect.Reset();
+		Config->ProjectileEffect = Base->ProjectileEffect; Config->ProjectileCascadeEffect = Base->ProjectileCascadeEffect;
+		Config->AreaMarkerMaterial = Base->AreaMarkerMaterial; Config->AreaEffectReferenceRadius = Base->AreaEffectReferenceRadius;
+		if (!Save(Config)) return 1;
+		// 原实例的负触发盒尺寸无法用于碰撞；只修副本尺寸，不移动原机关。
+		FBox PlayBounds(ForceInit);
+		for (TActorIterator<AActor> It(World); It; ++It)
+			if (It->IsA<AmultiplayerCoopKey>() || It->IsA<AmultiplayerPressurePlate>() || It->IsA<APlayerStart>() || It->IsA<AmultiplayerWinArea>())
+			{
+				PlayBounds += It->GetActorLocation();
+				if (It->IsA<AmultiplayerPressurePlate>())
+					for (auto* Box : TInlineComponentArray<UBoxComponent*>(*It))
+					{
+						const FVector Extent = Box->GetUnscaledBoxExtent();
+						if (Extent.GetMin() < 0.f)
+						{
+							Box->SetBoxExtent(Extent.GetAbs());
+							UE_LOG(LogCoopEscapeBuild, Display, TEXT("ESCAPE_TRIGGER_EXTENT_REPAIRED actor=%s from=%s to=%s locationUnchanged=1"), *It->GetName(), *Extent.ToString(), *Extent.GetAbs().ToString());
+						}
+					}
+			}
+		for (auto* Actor : Pasted)
+			if (auto* Volume = Cast<ANavMeshBoundsVolume>(Actor))
+			{
+				const FBox Bounds = PlayBounds.ExpandBy(FVector(1200,1200,600));
+				Volume->SetActorLocation(Bounds.GetCenter());
+				auto* Builder = NewObject<UCubeBuilder>();
+				Builder->X = Bounds.GetSize().X; Builder->Y = Bounds.GetSize().Y; Builder->Z = Bounds.GetSize().Z;
+				UActorFactory::CreateBrushForVolumeActor(Volume, Builder);
+			}
+		FStaticMeshCompilingManager::Get().FinishAllCompilation();
+		World->UpdateWorldComponents(true, false);
+		FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::EditorMode);
+		if (auto* Navigation = UNavigationSystemV1::GetCurrent(World))
+		{
+			for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+			{
+				auto* Mesh = It->GetStaticMeshComponent();
+				if (Mesh->Mobility == EComponentMobility::Static && Mesh->GetCollisionEnabled() != ECollisionEnabled::NoCollision
+					&& Mesh->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block)
+				{
+					Mesh->RecreatePhysicsState(); Mesh->SetCanEverAffectNavigation(true);
+					FNavigationSystem::UpdateComponentData(*Mesh);
+				}
+			}
+			for (TActorIterator<ANavMeshBoundsVolume> It(World); It; ++It) Navigation->OnNavigationBoundsUpdated(*It);
+			Navigation->Build();
+		}
+		if (!FEditorFileUtils::SaveLevel(World->PersistentLevel)) return 1;
+		UE_LOG(LogCoopEscapeBuild, Display, TEXT("ESCAPE_ORIGINAL_LAYOUT_RESTORED map=%s originalActors=%d combatOverlay=%d originalFile=untouched courtyardPrototype=removed escapeVfx=synchronized"),
+			*Target, OriginalRules.Num(), Pasted.Num());
+		return 0;
+	}
 }
 #endif
 
@@ -172,6 +492,17 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 #if WITH_EDITOR
 	const FString Source = TEXT("/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo");
 	const FString Target = TEXT("/Game/Combat/Maps/CoopEscape");
+	if (FParse::Param(*Params, TEXT("RepairLocalInput")))
+	{
+		if (!FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(Target, FPackageName::GetMapPackageExtension()), false, false)) return 1;
+		UWorld* World = GEditor->GetEditorWorldContext().World();
+		bool bChanged = false;
+		if (!CoopEscapeAssets::RepairLocalInput(World, bChanged)) return 1;
+		return !bChanged || FEditorFileUtils::SaveLevel(World->PersistentLevel) ? 0 : 1;
+	}
+	if (FParse::Param(*Params, TEXT("RestoreOriginalLayout"))
+		|| (FParse::Param(*Params, TEXT("Create")) && !FParse::Param(*Params, TEXT("CourtyardPrototype"))))
+		return CoopEscapeAssets::RestoreOriginalLayout(Source, Target);
 	const bool bAudit = FParse::Param(*Params, TEXT("Audit"));
 	const bool bAuditSaved = FParse::Param(*Params, TEXT("AuditSaved"));
 	if (!bAudit && !bAuditSaved && !FParse::Param(*Params, TEXT("Create"))) return 1;
@@ -370,6 +701,7 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 		auto* Key = Spawn(World, KeyClass, *FString::Printf(TEXT("Escape_Key_%d"),Index+1), Keys[Index]);
 		ObjectProperty(Key, TEXT("DestinationSocket"), Socket);
 		auto* Label = Sign(World, *FString::Printf(TEXT("Escape_KeySign_%d"), Index+1), Keys[Index]+FVector(0,0,160), FString::Printf(TEXT("KEY %d"),Index+1), FColor(255,215,80), 26,WorldText);
+		Label->SetActorHiddenInGame(true);
 		// 标识随钥匙安装到终点，不在原拾取点留下仍可领取的误导提示。
 		Label->AttachToActor(Key,FAttachmentTransformRules::KeepWorldTransform);
 	}
@@ -409,7 +741,11 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 		Visual->SetRelativeScale3D(FVector(.5f,.35f,.35f));
 		Visual->SetMaterial(0,SupplyGreen);
 		SupplyCross(Supply,SupplyWhite);
-		if (auto* Label=Supply->FindComponentByClass<UTextRenderComponent>()) Label->SetTextMaterial(WorldText);
+		if (auto* Label=Supply->FindComponentByClass<UTextRenderComponent>())
+		{
+			Label->SetTextMaterial(WorldText);
+			Label->SetHiddenInGame(true);
+		}
 	}
 	// 移动平台保留原生 Occupancy/Transporter：作为侧面高点，不让基础撤离必须掌握跳台时序。
 	auto* Platform = Spawn(World,AmultiplayerMovingPlatform::StaticClass(),TEXT("Escape_Platform"),FVector(-1000,-3000,130));

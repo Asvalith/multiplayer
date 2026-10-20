@@ -136,13 +136,13 @@ bool FCombatRecoveryOfflineSettlementTest::RunTest(const FString&)
 	Source->ApplyBurning(Old, 20.f, 3.2f); AddTimedEffect(Source, Old, UmultiplayerRootEffect::StaticClass(), 1.f);
 	Fixture.Advance(.25f); auto Snapshot = Old->CaptureResumeState(); Old->Destroy();
 	auto* Pawn = Fixture.Restore(Snapshot, 2.f);
-	TestEqual(TEXT("Offline defended tick10 plus normal tick20 exhausts shield15 and costs health15"), Pawn->GetHealth(), 85.f);
+	TestEqual(TEXT("Two full undirected offline burn ticks exhaust shield15 and cost health25 despite defense"), Pawn->GetHealth(), 75.f);
 	TestEqual(TEXT("Offline damage consumes the saved shield rather than granting it anew"), Pawn->GetShield(), 0.f);
 	TestFalse(TEXT("Expired defense is not refreshed"), Pawn->IsDefending());
 	TestFalse(TEXT("Expired root is not restored"), Pawn->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Rooted));
 	Pawn->SetCombatSessionReady(true); Fixture.Advance(.6f);
-	TestEqual(TEXT("Final remaining burn does not tick immediately on recovery"), Pawn->GetHealth(), 85.f);
-	Fixture.Advance(.2f); TestEqual(TEXT("The preserved next periodic tick deals twenty once"), Pawn->GetHealth(), 65.f);
+	TestEqual(TEXT("Final remaining burn does not tick immediately on recovery"), Pawn->GetHealth(), 75.f);
+	Fixture.Advance(.2f); TestEqual(TEXT("The preserved next periodic tick deals twenty once"), Pawn->GetHealth(), 55.f);
 	Fixture.Advance(.3f);
 	TestFalse(TEXT("Burn ends at the original remaining lifetime"), Pawn->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Burning));
 

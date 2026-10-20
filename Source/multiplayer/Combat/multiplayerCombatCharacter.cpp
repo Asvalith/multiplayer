@@ -368,14 +368,12 @@ void AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatRes
 	Progression->RestoreState(State.Progression);
 	const float Elapsed = FMath::Max(0.f, OfflineSeconds);
 	float OfflineDamage = 0.f;
-	// 白名单中只有灼烧造成离线数值变化；先分开防御有效和到期后的跳数，再统一先盾后血。
+	// 白名单中只有灼烧造成离线数值变化；无方向灼烧不经过正面格挡，再统一先盾后血。
 	for (const FmultiplayerCombatResumeEffect& Effect : State.PersistentEffects)
 	{
 		if (!Effect.Spec.IsValid() || !Effect.Spec.Data->Def || !Effect.Spec.Data->Def->IsA<UmultiplayerBurningEffect>()) continue;
 		const int32 TotalTicks = CountOfflineBurnTicks(Effect, Elapsed);
-		const int32 DefendedTicks = State.DefenseRemaining > 0.f
-			? CountOfflineBurnTicks(Effect, FMath::Min(Elapsed, FMath::Max(0.f, State.DefenseRemaining - KINDA_SMALL_NUMBER))) : 0;
-		OfflineDamage += Effect.RawDamagePerTick * (TotalTicks - DefendedTicks + DefendedTicks * GetCombatConfig().DefenseDamageMultiplier);
+		OfflineDamage += Effect.RawDamagePerTick * TotalTicks;
 	}
 	const float SavedShield = FMath::Clamp(State.Shield, 0.f, GetMaxShield());
 	const float RestoredShield = FMath::Max(0.f, SavedShield - OfflineDamage);
@@ -446,13 +444,13 @@ void AmultiplayerCombatCharacter::CastArea() { Progression->ActivateSlot(3); }
 void AmultiplayerCombatCharacter::Dash() { Progression->ActivateSlot(4); }
 bool AmultiplayerCombatCharacter::ActivateSkill(EMultiplayerCombatSkill Skill)
 {
-	if (!CheckSkillAvailable(Skill)) { ReportSkillFailure(Skill); return false; }
+	// 所有入口最终由 GAS 的 CanActivate 共用资格查询；不要在相邻分发层重复扫描治疗目标。
 	const auto Class = GetSkillAbilityClass(Skill);
-	if (Skill == EMultiplayerCombatSkill::Attack) return ActivateAimedSkill(Class, CombatTags::Event_Attack);
-	if (Skill == EMultiplayerCombatSkill::Defend) return ActivateAimedSkill(Class, CombatTags::Event_Defend);
-	if (Skill == EMultiplayerCombatSkill::Area) return ActivateAimedSkill(Class, CombatTags::Event_Area);
-	if (Skill == EMultiplayerCombatSkill::Dash) return ActivateAimedSkill(Class, CombatTags::Event_Dash);
-	return Class && AbilitySystem->TryActivateAbilityByClass(Class);
+	// 尚未授予 Spec 时 GAS 不会进入 CanActivate 或发送失败回调，入口必须明确提示。
+	if (!Class || !AbilitySystem->FindAbilitySpecFromClass(Class)) { ReportSkillFailure(Skill); return false; }
+	const FGameplayTag Event = CombatTags::GetSkillTags(Skill).Event;
+	if (Event.IsValid()) return ActivateAimedSkill(Class, Event);
+	return AbilitySystem->TryActivateAbilityByClass(Class);
 }
 void AmultiplayerCombatCharacter::Rescue() { AbilitySystem->TryActivateAbilityByClass(UmultiplayerRescueAbility::StaticClass()); }
 void AmultiplayerCombatCharacter::CancelRescue()
@@ -539,19 +537,44 @@ void AmultiplayerCombatCharacter::Jump()
 	if (IsCombatReady() && !IsMovementBlocked() && !IsCasting()) Super::Jump();
 }
 
+bool AmultiplayerCombatCharacter::ShouldBlockDirectDamage(const FGameplayEffectSpec& Spec) const
+{
+	const FGameplayEffectContextHandle Context = Spec.GetContext();
+	if (!IsCombatReady() || !AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Defending)
+		|| !Spec.Def || !Spec.Def->IsA<UmultiplayerDamageEffect>() || !Context.HasOrigin()) return false;
+	// Q 只完全挡住身体正面范围内的直接攻击；无方向与持续伤害照常先盾后血。
+	const FVector ToAttack = (Context.GetOrigin() - GetActorLocation()).GetSafeNormal();
+	const FVector Facing = GetActorForwardVector().GetSafeNormal2D();
+	return !ToAttack.ContainsNaN() && !ToAttack.IsNearlyZero()
+		&& FVector::DotProduct(Facing, ToAttack) >= GetCombatConfig().ParryFrontDot;
+}
+
 // 唯一业务伤害入口；服务器生成效果并读取来源/目标属性，不信任客户端上传结果。
-bool AmultiplayerCombatCharacter::ApplyCombatDamage(AmultiplayerCombatCharacter* Target, float Amount, const FHitResult* Hit)
+bool AmultiplayerCombatCharacter::ApplyCombatDamage(AmultiplayerCombatCharacter* Target, float Amount, const FHitResult* Hit,
+	const FVector* IncomingDirection)
 {
 	if (!HasAuthority() || !IsValid(Target) || !Target->IsCombatReady() || !IsHostileTo(Target)
 		|| !FMath::IsFinite(Amount) || Amount <= 0) return false;
 	FGameplayEffectContextHandle Context = AbilitySystem->MakeEffectContext();
 	if (Hit) Context.AddHitResult(*Hit);
+	// Context 固定本次攻击来向，命中结算不再读取发射者后来移动到的位置。
+	if (IncomingDirection)
+	{
+		if (!IncomingDirection->ContainsNaN() && !IncomingDirection->IsNearlyZero())
+			Context.AddOrigin(Target->GetActorLocation() - IncomingDirection->GetSafeNormal());
+	}
+	else Context.AddOrigin(GetActorLocation());
 	FGameplayEffectSpecHandle Spec = AbilitySystem->MakeOutgoingSpec(UmultiplayerDamageEffect::StaticClass(), 1, Context);
 	Spec.Data->SetSetByCallerMagnitude(CombatTags::Data_Damage, Amount);
+	// 先固定本次格挡结果；属性通知可同步改变朝向/防御状态，不能让它改写已经结算的命中反馈。
+	const bool bBlockedDirectDamage = Target->ShouldBlockDirectDamage(*Spec.Data.Get());
 	AbilitySystem->ApplyGameplayEffectSpecToTarget(*Spec.Data.Get(), Target->AbilitySystem);
-	FGameplayCueParameters Feedback(Context);
-	Feedback.Location = Hit ? FVector(Hit->ImpactPoint) : Target->GetActorLocation();
-	if (IsValid(Target)) Target->AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Impact, Feedback);
+	if (!bBlockedDirectDamage && IsValid(Target))
+	{
+		FGameplayCueParameters Feedback(Context);
+		Feedback.Location = Hit ? FVector(Hit->ImpactPoint) : Target->GetActorLocation();
+		Target->AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Impact, Feedback);
+	}
 	return true;
 }
 
@@ -608,12 +631,13 @@ void AmultiplayerCombatCharacter::ResolveArea(const FVector& Center)
 {
 	if (!HasAuthority() || !IsCombatReady() || IsStunned()) return;
 	const auto Targets = CombatTargeting::CollectAreaTargets(*this, Center, GetCombatConfig().AreaRadius);
+	const FVector NoDirection = FVector::ZeroVector;
 	// 快照与去重先完成，结算回调中即使销毁其他目标也不会访问悬空指针。
 	for (auto Weak : Targets)
 	{
 		auto* Target = Weak.Get();
 		if (!Target || !CombatTargeting::CanAffectArea(*this, *Target, Center, GetCombatConfig().AreaRadius)) continue;
-		ApplyCombatDamage(Target, GetSkillRule(EMultiplayerCombatSkill::Area).Amount);
+		ApplyCombatDamage(Target, GetSkillRule(EMultiplayerCombatSkill::Area).Amount, nullptr, &NoDirection);
 		if (IsValid(Target) && Target->IsCombatReady()) Target->ApplyStun(GetSkillRule(EMultiplayerCombatSkill::Area).Duration);
 		// 持续效果仍由本次服务器技能施加；只扩展目标效果，不让 Cue 或客户端再执行伤害。
 		if (IsValid(Target) && Target->IsCombatReady())
@@ -636,7 +660,7 @@ bool AmultiplayerCombatCharacter::FireProjectile(float Damage, float Speed, cons
 	UWorld* World = GetWorld();
 	const FRotator Aim = AimSnapshot ? *AimSnapshot : GetControlRotation();
 	if (Aim.ContainsNaN()) return false;
-	const FVector MuzzleStart = GetCombatMuzzleLocation();
+	const FVector MuzzleStart = GetCombatMuzzleLocation(&Aim);
 	// 不能把发射点直接放到墙后，否则贴墙时会绕过投射物的碰撞检测。
 	// 从真实起点开启扫掠，不再跳过前 75cm 的敌人；出生在实体内部时才拒绝，友军与触发盒不阻挡。
 	FCollisionQueryParams Query(SCENE_QUERY_STAT(CoopProjectileMuzzle), false, this);

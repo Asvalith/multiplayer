@@ -4,6 +4,34 @@
 
 当前恢复原埃及地图后的规则与验收入口见下文“原埃及图恢复后的正式技能验收（2026-10-20）”。旧 `CoopEscape` 全流程依赖原型的 `Escape_*` 机关布局，不适用于恢复后的原图；本文此前各日期的通过记录只对应当时的布局、规则和构建。
 
+## GAS 同步回调与属性边界复查
+
+本轮不扩展玩法或再拆生产文件，集中修复真实通知窗口：
+
+- 输入确认先处理请求、后通知预览关闭；通知中的取消和下一技能预览不能被旧确认覆盖。失败提示直接使用这次检查的原因，原生拒绝没有项目标签时显示通用条件说明。
+- 同实例准入同时检查 Spec 活动计数与能力实例活动状态，封住 `PreActivate` 拥有标签通知早于计数递增的窗口。具体能力开始执行后的旧栈仍由激活版本复核。
+- ASC 统一适配 UE5.5 `PlayMontage` 的 Started 同步通知：已取消请求不认领动画，旧播放不覆盖较新的成功播放，旧预测拒绝不能误停下一轮同资产动画。删除小兵能力内的局部补停，普攻转向通知返回后也先复核本轮。
+- 属性集统一处理生命、能量和护盾上限降低；GE 被移除后 current/base 均不能保留超额。成长／被动替换使用原生聚合通知批次，避免中间上限误扣生命，最终上限降低仍正常钳制。
+
+新增 `ReentryAudit` 七项、`Settlement` 三项和 `Targeting` 两项真实回归；已有 `Admission.PreviewUsesNativeActivationInhibition` 增补无项目失败标签时的提示断言。动画回归使用保存的玩家、真实动画实例和生产能力；预测键隔离用例经过非权威 ASC 的原生拒绝接收入口，是窄回调测试，不冒充完整联网激活。成长替换使用真实经验奖励与被动装配。
+
+首次扩展红测 `RedExpanded/index.json` 为 156 通过、7 失败，分别复现动画取消／替换、转向后继续执行、PreActivate 重复激活及资源上限缺口。统一钳制后的 `FirstFixRegression/index.json` 为 163 通过、1 失败，进一步复现成长替换的中间上限问题。`BuildFinal.log` 保留测试调用未导出预测委托函数的链接错误，改用反射校验参数的原生拒绝入口，不开放生产测试接口。
+
+本轮报告根目录为 `C:/UEBuild/CoopGASReentryReview_20261020`。`BuildVerified.log` 编译成功；`RegressionFinal/index.json` 为 166 通过、0 测试警告、0 失败，DX12 离屏运行。脚本 `-SelfTest` 契约检查通过，该检查本身不启动 UE。
+
+本机 Editor DS 加两个独立客户端完成以下 8 轮，均保留原有状态与数值断言：
+
+| 报告目录 | Normal | Harsh | 范围 |
+| --- | --- | --- | --- |
+| `CombatNormalHarsh` | 通过 | 通过 | 恢复后的 CoopEscape 地图、DX12 渲染客户端与受控技能输入夹具 |
+| `LifecycleNormalHarsh` | 通过 | 通过 | 取消、眩晕、死亡与重新激活，NullRHI |
+| `ExpansionNormalHarsh` | 通过 | 通过 | 冲刺预测／取消／拒绝、弹反和救援，NullRHI |
+| `ReconnectNormalHarsh` | 通过 | 通过 | 真实断线后的存活、倒地超时与死亡恢复，NullRHI |
+
+Harsh 参数为三端 PktLag 200、PktLagVariance 50、PktLoss 5，不是实测 RTT。四组磁盘模块 SHA256 均为 `e613f717e5269720e074b371b88c74561cd00599ea4c94891a222c6ed7585e28`，报告保留 `loadedByRuntimeVerified=false`。296 项清单对比中只有本文因记录测试过程而变化，运行代码、配置、资产与脚本未变；不将不同文档版本的全清单指纹说成相同构建指纹。双端范围预览截图已抽查，仅确认相应界面与范围提示可见。
+
+动画窗口的覆盖限于本节列举的 Started 取消／替换、失败嵌套播放及预测拒绝。旧动画 BlendingOut 通知内启动新技能尚未回归；本轮检查的 C++ 业务没有从该通知启动技能，不宣称任意动画回调都已解决。测试不替代首次冷加载特效、完整地图通关、连续手动操作录像、公网或发布包验收。
+
 ## GAS 架构收口
 
 2026-10-20 本轮整理保留原玩法数值、蓝图父类、配置资产和网络边界，收敛规则归属，不增加新的战斗框架。完整阅读顺序和连续追问见 [GAS 架构与调用链](../Docs/Study/GAS架构与调用链.md)。
@@ -11,7 +39,7 @@
 - `CheckSkillAvailable` 查询实际已授予能力的 `CanActivateAbility`，不再自行实现成本、冷却、标签关系和治疗目标判断。角色业务资格留在 `CheckSkillBusinessRequirements`，治疗目标资格留在治疗能力。
 - 成本、冷却和提示统一读取 `GetSkillRule`。`CommitExecute` 以一份局部规则提交本次成本和冷却；激活与提交两个时点的必要校验继续保留。
 - ASC 集成实现集中到 `multiplayerCombatAbilitySystem.cpp`，原反射类型与头文件不变。普通攻击发弹归 `Projectile::FireFromSkill`，范围结算归 `AreaAbility::ResolveTargets`，角色不再代管这两项专属执行。
-- 范围查询先收集去重弱引用候选，再在每个目标应用前完整检查一次阵营、存活、圆柱范围与遮挡。同轮数值取局部快照，目标合法性仍实时复核。旧几何测试只迁移生产入口，不降低断言。
+- 范围查询先收集去重弱引用候选，再在每个目标应用前完整检查一次阵营、存活、圆柱范围与遮挡。同轮基础规则与附加效果配置取局部快照，攻击属性仍在各伤害 Spec 创建时捕获，目标合法性实时复核。旧几何测试只迁移生产入口，不降低断言。
 - 保留激活版本、预测键、效果句柄、异步任务与重入收尾；没有把取消改成退款或权威伤害回滚。
 
 新增五项 `Multiplayer.Combat.Admission` 测试覆盖派生能力条件、原生输入限制、只读查询、提交二次检查与忽略开关、扣费回调改变等级后的成本和冷却快照。另新增 `Targeting.AreaCandidateBoundary` 和 `Targeting.AreaRuleSnapshot`，验证真实碰撞过滤与同轮结算数值一致。
@@ -51,7 +79,7 @@
 | Dash | 禁锢、禁行、已有冲刺时不能起手；不新增“所有技能互斥” |
 | Rescue | 额外禁止冲刺/禁行/禁锢时起手；开始时替换普攻，引导期间阻断 `Ability.Combat`；取消/完成后按原生计数解除自己的阻断 |
 
-关系查询同时接入项目 `CanActivateAbility` 与原生 `DoesAbilitySatisfyTagRequirements`，按标签筛选、输入预检与实际准入不能使用相互矛盾的规则。ASC 只扩展传给 `Super::ApplyAbilityBlockAndCancelTags` 的集合，不覆盖原有能力/蓝图条件、不维护第二份活动能力或 bool 锁。任务、蒙太奇、预测键、GE 句柄、CMC 根运动仍在各能力 `EndAbility` 收尾。
+关系查询经 `CanActivateAbility → Super → DoesAbilitySatisfyTagRequirements` 接入，按标签筛选、输入预检与实际准入共用规则，不在这两个函数分别执行同一查询。ASC 只扩展传给 `Super::ApplyAbilityBlockAndCancelTags` 的集合，不覆盖原有能力/蓝图条件、不维护第二份活动能力或 bool 锁。任务、蒙太奇、预测键、GE 句柄、CMC 根运动仍在各能力 `EndAbility` 收尾。
 
 本轮同时删除公开激活分发层和治疗派生 `CanActivate` 的相邻重复查询；未授予 Spec 的入口仍明确提示失败。客户端预览、服务器准入和提交后实时复核属于不同边界，保留其必要校验。救援释放占用时支持同步再次取消，清理完成前不重新激活同一实例。
 

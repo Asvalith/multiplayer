@@ -149,7 +149,8 @@ public:
 	bool CheckSkillAvailable(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons = nullptr) const;
 	FText GetSkillFailureReason(EMultiplayerCombatSkill Skill) const;
 	FText GetSkillFailureText(EMultiplayerCombatSkill Skill, FGameplayTag Reason, float AuthorityValue = -1.f) const;
-	void ReportSkillFailure(EMultiplayerCombatSkill Skill);
+	// 已有拒绝结果直接用于提示，不能为显示原因重新运行一遍资格查询。
+	void ReportSkillFailure(EMultiplayerCombatSkill Skill, const FGameplayTagContainer* Reasons = nullptr);
 	UFUNCTION(Client, Reliable) void ClientSkillRejected(EMultiplayerCombatSkill Skill, FGameplayTag Reason, float AuthorityValue = -1.f);
 	// 两端固定本轮落点，施法期间转动镜头不移动预告圈；服务器结果可纠正预测快照。
 	void SetAreaCastTarget(const FVector& Location, const FVector& Normal);

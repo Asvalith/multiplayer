@@ -4,6 +4,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "Testing/CoopCombatRelationshipTestProbe.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Animation/AnimMontage.h"
@@ -40,6 +41,7 @@
 #include "Player/multiplayerCoopPlayerController.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
+#include "UObject/StrongObjectPtr.h"
 
 namespace
 {
@@ -699,6 +701,130 @@ bool FCoopCombatTargetingConfirmationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Completed R does not leave a camera-aligned body rotation"),
 		BodyBefore.Equals(Caster->GetActorRotation(), .001f));
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatTargetConfirmReentrantCancelTest,
+	"Multiplayer.Combat.Targeting.ConfirmNotificationCanCancelAcceptedCast",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 预览关闭通知中的取消必须针对已接纳的本次施法，不能先取消空状态、返回后再偷偷启动旧请求。
+bool FCoopCombatTargetConfirmReentrantCancelTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture(true, true);
+	auto* Caster = Fixture.AdmitInputPlayer();
+	if (!TestNotNull(TEXT("Saved production player is admitted for real input"), Caster)) return false;
+	auto* PC = Cast<APlayerController>(Caster->GetController());
+	if (!TestTrue(TEXT("Production keyboard bindings and EnhancedPlayerInput exist"),
+		PC && Cast<UEnhancedPlayerInput>(PC->PlayerInput) && Caster->InputComponent)) return false;
+	Fixture.Advance(.3f);
+	PC->SetControlRotation(FRotator(-20, 0, 0));
+	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+	if (!TestTrue(TEXT("Real camera query finds the area ground target"), Preview.bValid)) return false;
+	auto* Target = Fixture.Enemy(Preview.End + FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("A real enemy occupies the pending damage area"), Target)) return false;
+	auto* ASC = Caster->GetAbilitySystemComponent();
+	const auto Rule = Caster->GetSkillRule(EMultiplayerCombatSkill::Area);
+	const float EnergyBefore = Caster->GetEnergy(), HealthBefore = Target->GetHealth();
+	int32 CancelRequests = 0, AreaResults = 0;
+	bool bSawActiveCast = false, bSawCastingState = false;
+	TStrongObjectPtr<UCoopCombatRelationshipTestProbe> Probe(NewObject<UCoopCombatRelationshipTestProbe>());
+	Probe->StateCallback = [&]
+	{
+		if (CancelRequests || Caster->IsTargetingSkill()) return;
+		++CancelRequests; // 清理本身还会同步通知；只认领一次，不能递归取消。
+		const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+		bSawActiveCast = Spec && Spec->IsActive();
+		bSawCastingState = Caster->IsCasting();
+		Caster->CancelCast();
+	};
+	auto* CueManager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+	const auto CueListener = CueManager->OnGameplayCueRouted().AddLambda(
+		[&](AActor* Recipient, FGameplayTag Tag, EGameplayCueEvent::Type Event,
+			const FGameplayCueParameters&, EGameplayCueExecutionOptions)
+		{ if (Recipient == Caster && Tag == CombatTags::Cue_Area && Event == EGameplayCueEvent::Executed) ++AreaResults; });
+	Caster->OnCombatStateChanged.AddDynamic(Probe.Get(), &UCoopCombatRelationshipTestProbe::HandleState);
+	ON_SCOPE_EXIT
+	{
+		Caster->OnCombatStateChanged.RemoveDynamic(Probe.Get(), &UCoopCombatRelationshipTestProbe::HandleState);
+		Probe->StateCallback = nullptr;
+		CueManager->OnGameplayCueRouted().Remove(CueListener);
+	};
+	PC->InputKey(FInputKeyParams(EKeys::R, IE_Pressed, 1.));
+	Fixture.Advance(.02f);
+	TestTrue(TEXT("Actual R press starts preview without spending resources"), Caster->IsTargetingSkill()
+		&& Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Area && Caster->GetEnergy() == EnergyBefore);
+	PC->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.));
+	Fixture.Advance(.02f);
+	TestEqual(TEXT("Preview-close observer synchronously requests one cancellation"), CancelRequests, 1);
+	TestTrue(TEXT("Notification never exposes the old gap before GAS accepted R"), bSawActiveCast && bSawCastingState);
+	TestEqual(TEXT("Cancel targets an already committed cast, not an unstarted request"), Caster->GetEnergy(), EnergyBefore - Rule.Cost);
+	const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+	TestTrue(TEXT("Reentrant cancellation ends the real ability and removes its casting effect"),
+		Spec && !Spec->IsActive() && !Caster->IsCasting() && !Caster->IsTargetingSkill());
+	Fixture.Advance(Rule.Windup + Rule.Recovery + .3f);
+	TestEqual(TEXT("No old release task damages the target after the notification canceled R"), Target->GetHealth(), HealthBefore);
+	TestEqual(TEXT("No late area result is published by the canceled request"), AreaResults, 0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatTargetConfirmReentrantPreviewTest,
+	"Multiplayer.Combat.Targeting.ConfirmNotificationPreservesNextPreview",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 完成本次接纳后，监听者可以开始下一技能预览；旧 R 松键不能把新 E 预览当作自己的确认。
+bool FCoopCombatTargetConfirmReentrantPreviewTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture(true, true);
+	auto* Caster = Fixture.AdmitInputPlayer();
+	if (!TestNotNull(TEXT("Saved production player is admitted"), Caster)) return false;
+	auto* PC = Cast<APlayerController>(Caster->GetController());
+	if (!TestTrue(TEXT("The real keyboard input stack is installed"),
+		PC && Cast<UEnhancedPlayerInput>(PC->PlayerInput) && Caster->InputComponent)) return false;
+	Fixture.Advance(.3f);
+	PC->SetControlRotation(FRotator(-20, 0, 0));
+	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+	if (!TestTrue(TEXT("The saved player can resolve an area target"), Preview.bValid)) return false;
+	auto* Target = Fixture.Enemy(Preview.End + FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("The area has a real damage recipient"), Target)) return false;
+	const auto Rule = Caster->GetSkillRule(EMultiplayerCombatSkill::Area);
+	const float EnergyBefore = Caster->GetEnergy(), HealthBefore = Target->GetHealth();
+	bool bOpenedNextPreview = false, bPreviousRequestAlreadyAccepted = false;
+	TStrongObjectPtr<UCoopCombatRelationshipTestProbe> Probe(NewObject<UCoopCombatRelationshipTestProbe>());
+	Probe->StateCallback = [&]
+	{
+		if (bOpenedNextPreview || Caster->IsTargetingSkill()) return;
+		bOpenedNextPreview = true;
+		const auto* Spec = Caster->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+		bPreviousRequestAlreadyAccepted = Spec && Spec->IsActive() && Caster->IsCasting();
+		Caster->BeginSkillTargeting(EMultiplayerCombatSkill::Heal);
+	};
+	Caster->OnCombatStateChanged.AddDynamic(Probe.Get(), &UCoopCombatRelationshipTestProbe::HandleState);
+	ON_SCOPE_EXIT
+	{
+		Caster->OnCombatStateChanged.RemoveDynamic(Probe.Get(), &UCoopCombatRelationshipTestProbe::HandleState);
+		Probe->StateCallback = nullptr;
+	};
+	PC->InputKey(FInputKeyParams(EKeys::R, IE_Pressed, 1.));
+	Fixture.Advance(.02f);
+	PC->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.));
+	Fixture.Advance(.02f);
+	TestTrue(TEXT("The next preview is opened only after the previous request was accepted"),
+		bOpenedNextPreview && bPreviousRequestAlreadyAccepted);
+	TestTrue(TEXT("New heal preview remains independent of the accepted area cast"),
+		Caster->IsCasting() && Caster->IsTargetingSkill() && Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Heal);
+	PC->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.));
+	Fixture.Advance(.02f);
+	TestTrue(TEXT("A stale R release does not confirm or erase the next heal preview"),
+		Caster->IsTargetingSkill() && Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Heal);
+	TestEqual(TEXT("Only the original area request commits resources"), Caster->GetEnergy(), EnergyBefore - Rule.Cost);
+	TestEqual(TEXT("Old key-up never creates a heal cooldown"), Caster->GetHealCooldownRemaining(), 0.f);
+	Fixture.Advance(Rule.Windup + Rule.Recovery + .3f);
+	TestEqual(TEXT("The original area cast still resolves exactly one configured hit"), Target->GetHealth(), HealthBefore - Rule.Amount);
+	TestFalse(TEXT("Original cast ends while the next preview stays editable"), Caster->IsCasting());
+	TestTrue(TEXT("Ending the original cast does not erase the next preview"),
+		Caster->IsTargetingSkill() && Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Heal);
+	Caster->CancelSkillTargeting();
+	return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaLethalWindupTest, "Multiplayer.Combat.Targeting.AreaLethalWindupNoRelease",

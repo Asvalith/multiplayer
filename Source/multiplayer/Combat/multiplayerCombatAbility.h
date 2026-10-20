@@ -28,10 +28,16 @@ public:
 	void SetPeriodicEffectDelay(FActiveGameplayEffectHandle Handle, float FirstDelay);
 	virtual void NotifyAbilityFailed(FGameplayAbilitySpecHandle Handle, UGameplayAbility* Ability,
 		const FGameplayTagContainer& FailureReason) override;
+	// UE5.5 的动画开始通知早于 ASC 认领；在这里统一处理同步取消/替换，能力不各自补停。
+	virtual float PlayMontage(UGameplayAbility* AnimatingAbility, FGameplayAbilityActivationInfo ActivationInfo,
+		UAnimMontage* Montage, float InPlayRate, FName StartSectionName = NAME_None, float StartTimeSeconds = 0.f) override;
 protected:
 	// 远程定向技能必须随激活提交瞄准；服务器 AI 的直接激活不经过此 RPC 入口。
 	virtual void InternalServerTryActivateAbility(FGameplayAbilitySpecHandle Handle, bool InputPressed,
 		const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData) override;
+private:
+	// 只标识动画播放请求，不替代能力激活版本或网络预测键。
+	uint32 MontagePlayRevision = 0;
 };
 
 // 五个战斗技能共用 GAS 本地预测、连接接纳与死亡限制；最终玩法结果仍由服务器决定。

@@ -117,6 +117,8 @@ bool FCoopCombatAdmissionNativeInputGateTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Native GAS CanActivate rejects inhibited input"),
 		GrantedAbility(*Spec)->CanActivateAbility(Spec->Handle, ASC->AbilityActorInfo.Get()));
 	TestFalse(TEXT("HUD availability observes the native rejection"), Player->CheckSkillAvailable(EMultiplayerCombatSkill::Attack));
+	TestFalse(TEXT("A native rejection without a project tag still produces a useful failure hint"),
+		Player->GetSkillFailureReason(EMultiplayerCombatSkill::Attack).IsEmpty());
 	TestFalse(TEXT("Real activation is likewise rejected"), ASC->TryActivateAbility(Spec->Handle));
 	TestFalse(TEXT("Rejection never activates the granted spec"), Spec->IsActive());
 	TestEqual(TEXT("Rejection leaves resources unchanged"), Player->GetEnergy(), Player->GetMaxEnergy());

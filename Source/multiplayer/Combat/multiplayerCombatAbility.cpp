@@ -286,6 +286,7 @@ void UmultiplayerAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle
 	}
 	// 接纳攻击时只朝本次瞄准方向转身；观察输入不再持续驱动身体，不改变镜头俯仰。
 	Character->SetActorRotation(FRotator(0.f, AimRotation.Yaw, 0.f));
+	if (Revision != ActivationRevision || !IsActive()) return;
 	if (UAnimMontage* Montage = Character->GetActionMontage(EMultiplayerCombatAnimation::Attack))
 		// 冷却限制请求频率，不用于压缩动作；按素材原速播放，避免短冷却把整段动画强行加速。
 		ActorInfo->AbilitySystemComponent->PlayMontage(this, ActivationInfo, Montage, 1.0f);
@@ -406,14 +407,7 @@ void UmultiplayerEnemyMeleeAbility::ActivateAbility(FGameplayAbilitySpecHandle H
 	Enemy->SetCastTiming(GetRule().Windup + GetRule().Recovery);
 	if (Revision != ActivationRevision || !IsActive()) return;
 	if (UAnimMontage* Montage = Enemy->GetActionMontage(EMultiplayerCombatAnimation::Attack))
-	{
-		UAbilitySystemComponent* ASC = ActorInfo->AbilitySystemComponent.Get();
-		ASC->PlayMontage(this, ActivationInfo, Montage, 1.0f);
-		// OnMontageStarted 可在 ASC 写入动画归属前取消本轮；返回后补停旧动作，不碰回调中新激活的技能。
-		if (Revision == ActivationRevision && !IsActive() && IsValid(ASC)
-			&& ASC->GetAnimatingAbility() == this && ASC->GetCurrentMontage() == Montage)
-			ASC->CurrentMontageStop(.15f);
-	}
+		ActorInfo->AbilitySystemComponent->PlayMontage(this, ActivationInfo, Montage, 1.0f);
 	if (Revision != ActivationRevision || !IsActive()) return;
 	ActorInfo->AbilitySystemComponent->ExecuteGameplayCue(CombatTags::Cue_Attack);
 	if (Revision != ActivationRevision || !IsActive()) return;
@@ -720,6 +714,7 @@ void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Charac
 	const float BurningDuration = Config.BurningDuration;
 	const auto Targets = CombatTargeting::CollectAreaCandidates(Character, Center, Radius);
 	const FVector NoDirection = FVector::ZeroVector;
+	// 已出手的范围伤害按一次同步结算处理：普通取消不撤回本批命中；施法者死亡或眩晕则停止后续候选。
 	// 快照与去重先完成，结算回调中即使销毁其他目标也不会访问悬空指针。
 	for (auto Weak : Targets)
 	{

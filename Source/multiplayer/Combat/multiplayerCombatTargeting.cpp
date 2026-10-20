@@ -12,6 +12,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Misc/ScopeExit.h"
 
 namespace
 {
@@ -286,8 +287,11 @@ void AmultiplayerCombatCharacter::ConfirmSkillTargeting()
 {
 	if (!bSkillTargeting) return;
 	const auto Skill = TargetingSkill;
-	CancelSkillTargeting();
-	if (!CheckSkillAvailable(Skill)) { ReportSkillFailure(Skill); return; }
+	// 先关闭预览并完成本次请求，再通知外部；监听者取消或切换时，不得让旧请求在通知后才启动。
+	bSkillTargeting = false;
+	ON_SCOPE_EXIT { OnCombatStateChanged.Broadcast(); };
+	FGameplayTagContainer Reasons;
+	if (!CheckSkillAvailable(Skill, &Reasons)) { ReportSkillFailure(Skill, &Reasons); return; }
 	const auto Preview = GetSkillTargetPreview(Skill);
 	if (!Preview.bValid)
 	{

@@ -49,7 +49,9 @@ bool AmultiplayerCombatCharacter::CheckSkillBusinessRequirements(EMultiplayerCom
 		if (GetCharacterMovement()->MovementMode == MOVE_None)
 			return Reject(CombatTags::Failure_MovementBlocked);
 	}
-	if (Spec->IsActive())
+	// PreActivate 先标记实例活动并广播 owned tag，最后才增加 Spec.ActiveCount；两者均须拒绝复入。
+	const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
+	if (Spec->IsActive() || (Instance && Instance->IsActive()))
 		return Reject(CombatTags::Failure_AlreadyActive);
 	// 不检查其他技能的 Active 标记：治疗/范围技能仍可按原规则取消普通攻击。
 	return true;
@@ -117,14 +119,17 @@ FText AmultiplayerCombatCharacter::GetSkillFailureReason(EMultiplayerCombatSkill
 {
 	FGameplayTagContainer Reasons;
 	if (CheckSkillAvailable(Skill, &Reasons)) return FText::GetEmpty();
-	return GetSkillFailureText(Skill, SpecificFailure(Reasons));
+	const FGameplayTag Reason = SpecificFailure(Reasons);
+	// 原生输入限制或派生条件未提供项目标签时，也必须提示“不满足条件”，不能显示成可用。
+	return GetSkillFailureText(Skill, Reason.IsValid() ? Reason : CombatTags::Failure_Requirements);
 }
 
-void AmultiplayerCombatCharacter::ReportSkillFailure(EMultiplayerCombatSkill Skill)
+void AmultiplayerCombatCharacter::ReportSkillFailure(EMultiplayerCombatSkill Skill, const FGameplayTagContainer* Reasons)
 {
 	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
-	FText Message = GetSkillFailureReason(Skill);
-	if (Message.IsEmpty()) Message = GetSkillFailureText(Skill, CombatTags::Failure_Rejected);
+	const FGameplayTag Reason = Reasons ? SpecificFailure(*Reasons) : FGameplayTag();
+	FText Message = Reasons ? GetSkillFailureText(Skill, Reason) : GetSkillFailureReason(Skill);
+	if (Message.IsEmpty()) Message = GetSkillFailureText(Skill, CombatTags::Failure_Requirements);
 	OnCombatMessage.Broadcast(Message);
 	AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
 }
@@ -142,10 +147,7 @@ void AmultiplayerCombatCharacter::HandleAbilityFailed(const UGameplayAbility* Ab
 	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
 	if (const auto* CombatAbility = Cast<UmultiplayerCombatAbility>(Ability))
 	{
-		const FGameplayTag Reason = SpecificFailure(Reasons);
-		if (!Reason.IsValid()) { ReportSkillFailure(CombatAbility->GetCombatSkill()); return; }
-		OnCombatMessage.Broadcast(GetSkillFailureText(CombatAbility->GetCombatSkill(), Reason));
-		AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
+		ReportSkillFailure(CombatAbility->GetCombatSkill(), &Reasons);
 	}
 	else
 	{

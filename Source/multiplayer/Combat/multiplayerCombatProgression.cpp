@@ -4,6 +4,7 @@
 #include "AbilitySystemComponent.h"
 #include "Combat/multiplayerCombatAttributes.h"
 #include "Combat/multiplayerCombatCharacter.h"
+#include "GameplayEffectAggregator.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -191,6 +192,9 @@ FActiveGameplayEffectHandle UmultiplayerCombatProgressionComponent::ApplyBonus(f
 void UmultiplayerCombatProgressionComponent::RefreshBonuses()
 {
 	auto* ASC = Character()->GetAbilitySystemComponent();
+	// 同一装配提交先换完两份 GE，再通知最终聚合值；不能按移除旧 GE 的中间上限扣血。
+	// 最终资源上限统一由 AttributeSet 钳制，成长层不再重复写生命。
+	FScopedAggregatorOnDirtyBatch ReplacingBonuses;
 	if (AppliedLevel != State.Level)
 	{
 		ASC->RemoveActiveGameplayEffect(GrowthHandle); GrowthHandle.Invalidate();
@@ -205,8 +209,6 @@ void UmultiplayerCombatProgressionComponent::RefreshBonuses()
 		PassiveHandle = ApplyBonus(AppliedPassive == EMultiplayerCombatPassive::Fortitude ? PassiveLevel * 20.f : 0.f,
 			AppliedPassive == EMultiplayerCombatPassive::Power ? PassiveLevel * 5.f : 0.f);
 	}
-	if (Character()->GetHealth() > Character()->GetMaxHealth())
-		ASC->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), Character()->GetMaxHealth());
 }
 
 // 无效槽位不用于激活，查询返回基础攻击仅为蓝图显示提供稳定默认值。

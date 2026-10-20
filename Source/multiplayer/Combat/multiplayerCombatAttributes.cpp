@@ -47,11 +47,17 @@ void UmultiplayerCombatAttributes::PreAttributeBaseChange(const FGameplayAttribu
 	ClampAttributeValue(Attribute, NewValue);
 }
 
-// 只在上限真的降低到当前护盾以下时修正，回调若再次降低上限，由新一轮通知继续处理。
+// 持续 GE 移除不会经过 PostGameplayEffectExecute；上限变化在这里统一钳制资源。
+// 仅写一次当前资源；回调若再次降低上限，由新一轮通知处理，不用旧上限覆盖新值。
 void UmultiplayerCombatAttributes::PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue)
 {
 	Super::PostAttributeChange(Attribute, OldValue, NewValue);
-	if (Attribute == GetMaxShieldAttribute() && NewValue != OldValue && GetShield() > NewValue)
+	if (NewValue == OldValue) return;
+	if (Attribute == GetMaxHealthAttribute() && GetHealth() > NewValue)
+		SetHealth(FMath::Clamp(GetHealth(), 0.f, NewValue));
+	else if (Attribute == GetMaxEnergyAttribute() && GetEnergy() > NewValue)
+		SetEnergy(FMath::Clamp(GetEnergy(), 0.f, NewValue));
+	else if (Attribute == GetMaxShieldAttribute() && GetShield() > NewValue)
 		SetShield(FMath::Clamp(GetShield(), 0.f, NewValue));
 }
 

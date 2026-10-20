@@ -2,6 +2,8 @@
 
 #include "Combat/multiplayerCombatAbility.h"
 
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Engine/World.h"
@@ -101,6 +103,67 @@ void UmultiplayerCombatAbilitySystem::InternalServerTryActivateAbility(FGameplay
 		return;
 	}
 	Super::InternalServerTryActivateAbility(Handle, InputPressed, PredictionKey, TriggerEventData);
+}
+
+// 保留 UE5.5 PlayMontage 的播放、复制和预测流程，只在认领动作前封住同步通知窗口。
+// 不能先调用 Super 再恢复记录：旧调用已绑定的预测拒绝回调仍可能误停后来的同资产动作。
+float UmultiplayerCombatAbilitySystem::PlayMontage(UGameplayAbility* AnimatingAbility,
+	FGameplayAbilityActivationInfo ActivationInfo, UAnimMontage* Montage, float InPlayRate,
+	FName StartSectionName, float StartTimeSeconds)
+{
+	UAnimInstance* Animation = AbilityActorInfo.IsValid() ? AbilityActorInfo->GetAnimInstance() : nullptr;
+	if (!Animation || !Montage) return -1.f;
+	const uint32 PreviousRevision = MontagePlayRevision;
+	const uint32 Revision = ++MontagePlayRevision;
+	const float Duration = Animation->Montage_Play(Montage, InPlayRate, EMontagePlayReturnType::MontageLength, StartTimeSeconds);
+	if (Duration <= 0.f)
+	{
+		// 没有播放成功的嵌套请求不能抢走外层动作。
+		if (MontagePlayRevision == Revision) MontagePlayRevision = PreviousRevision;
+		return Duration;
+	}
+	// Started 内可同步取消并启动另一技能；较新的播放已经负责自己的归属，旧栈不得再覆盖。
+	if (MontagePlayRevision != Revision) return -1.f;
+	if (AnimatingAbility && (!AnimatingAbility->IsActive()
+		|| AnimatingAbility->GetCurrentActivationInfo().GetActivationPredictionKey() != ActivationInfo.GetActivationPredictionKey()))
+	{
+		Animation->Montage_Stop(.15f, Montage);
+		return -1.f;
+	}
+	LocalAnimMontageInfo.AnimMontage = Montage;
+	LocalAnimMontageInfo.AnimatingAbility = AnimatingAbility;
+	LocalAnimMontageInfo.PlayInstanceId = LocalAnimMontageInfo.PlayInstanceId < UINT8_MAX ? LocalAnimMontageInfo.PlayInstanceId + 1 : 0;
+	if (AnimatingAbility) AnimatingAbility->SetCurrentMontage(Montage);
+	if (StartSectionName != NAME_None) Animation->Montage_JumpToSection(StartSectionName, Montage);
+	if (ShouldRecordMontageReplication())
+	{
+		auto& Replicated = GetRepAnimMontageInfo_Mutable();
+		Replicated.Animation = Montage->IsDynamicMontage() ? Montage->GetFirstAnimReference() : Montage;
+		Replicated.PlayInstanceId = Replicated.PlayInstanceId < UINT8_MAX ? Replicated.PlayInstanceId + 1 : 0;
+		Replicated.SectionIdToPlay = StartSectionName != NAME_None ? Montage->GetSectionIndex(StartSectionName) + 1 : 0;
+		if (Montage->IsDynamicMontage())
+		{
+			check(!Montage->SlotAnimTracks.IsEmpty());
+			Replicated.SlotName = Montage->SlotAnimTracks[0].SlotName;
+			Replicated.BlendOutTime = Montage->GetDefaultBlendInTime();
+		}
+		AnimMontage_UpdateReplicatedData();
+	}
+	if (IsOwnerActorAuthoritative())
+	{
+		if (AActor* Avatar = GetAvatarActor()) Avatar->ForceNetUpdate();
+	}
+	else
+	{
+		FPredictionKey Key = GetPredictionKeyForNewAction();
+		if (Key.IsValidKey())
+			Key.NewRejectedDelegate().BindWeakLambda(this, [this, Revision]
+			{
+				// 资产可能被下一轮复用，旧预测拒绝只能结束自己的播放请求。
+				if (MontagePlayRevision == Revision) CurrentMontageStop(.25f);
+			});
+	}
+	return Duration;
 }
 
 void UmultiplayerCombatAbilitySystem::EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey)

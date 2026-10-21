@@ -1,6 +1,10 @@
 #include "Testing/CoopRideTestCharacter.h"
 #include "Engine/World.h"
 
+// 载人实验观测层：在原生 CMC 钩子旁记录历史 Move/校正，不改误差容差或重演行为。
+// 只由显式测试角色使用，数组容量有上限，不能将本地观察指标当作普通玩家功能。
+
+// 新采样阶段清除观测统计与历史记录，不重置 CMC 本身的预测/校正状态。
 void UCoopRideTestMovement::ResetMetrics()
 {
 	CorrectionCount = 0;
@@ -14,6 +18,7 @@ void UCoopRideTestMovement::ResetMetrics()
 	DroppedClientMoves = DroppedServerMoves = 0;
 }
 
+// 保留客户端原生预测和发送后记录最新 SavedMove，以同一 Move 时间戳供两端对照。
 void UCoopRideTestMovement::ReplicateMoveToServer(float DeltaTime, const FVector& NewAcceleration)
 {
 	Super::ReplicateMoveToServer(DeltaTime, NewAcceleration);
@@ -46,6 +51,7 @@ void UCoopRideTestMovement::ReplicateMoveToServer(float DeltaTime, const FVector
 #endif
 }
 
+// 在原生误差检查前保存服务器完成模拟的位置/基座，随后原样交给 Super 决定是否校正。
 void UCoopRideTestMovement::ServerMoveHandleClientError(float ClientTimeStamp, float DeltaTime,
 	const FVector& Accel, const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase,
 	FName ClientBaseBoneName, uint8 ClientMovementMode)
@@ -81,6 +87,7 @@ void UCoopRideTestMovement::ServerMoveHandleClientError(float ClientTimeStamp, f
 		ClientMovementBase, ClientBaseBoneName, ClientMovementMode);
 }
 
+// 观察已被 CMC 接受的校正，只比较同一历史 Move 的可比坐标系；基座切换单独计数。
 void UCoopRideTestMovement::OnClientCorrectionReceived(
 	FNetworkPredictionData_Client_Character& ClientData,
 	float TimeStamp,
@@ -155,6 +162,7 @@ void UCoopRideTestMovement::OnClientCorrectionReceived(
 		NewBase, NewBaseBoneName, bHasBase, bBaseRelativePosition, ServerMovementMode, ServerGravityDirection);
 }
 
+// 仅替换测试 Pawn 的默认移动子对象以安装观测钩子，正式角色默认 CMC 不受影响。
 ACoopRideTestCharacter::ACoopRideTestCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCoopRideTestMovement>(ACharacter::CharacterMovementComponentName))
 {

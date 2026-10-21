@@ -14,7 +14,7 @@ enum class EMultiplayerConnectionState : uint8
 {
 	// 无进行中的连接操作；接受新请求还要求当前 World 为 Standalone。
 	Idle,
-	// 首次连接已发起，尚未收到本地 PlayingState 确认。
+	// 首次连接已发起，尚未收到服务器接纳及个人状态恢复完成的确认。
 	Connecting,
 	// 已进入客户端 PlayingState，不表示所有复制对象和界面都已就绪。
 	// 还必须已收到服务器会话接纳/恢复完成回执。
@@ -33,7 +33,7 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerLeaveFailed, const FText&);
 
 /**
  * DS 地址连接、取消和有限重连；不承担房间发现、账号登录或匹配。
- * 连接状态在进入游戏、重开和返回菜单期间保留；进入客户端 PlayingState 才确认成功。
+ * 连接状态在进入游戏、重开和返回菜单期间保留；PlayingState 发起握手，服务器接纳后才确认成功。
  * 状态提交统一更新操作编号，通知后只检查本次操作是否被取消或替换。
  */
 UCLASS()
@@ -57,13 +57,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Network")
 	void LeaveGame();
 
-	// 由本地 PlayerController 进入 PlayingState 时调用，不以 Travel 发出作为成功依据。
-	// PlayingState 只准备握手；本入口仅在服务器确认且当前 Controller 已接纳后生效。
+	// 本地控制器收到服务器接纳后提交连接成功；Travel 发出或进入 PlayingState 本身不算成功。
 	void NotifyClientConnected();
 	// Owned Controller 在 PlayingState 准备握手，只有同一操作与同一控制器的服务器结果可以提交成功。
 	bool PrepareCombatHandshake(AmultiplayerCoopPlayerController* Controller, FGuid& OutTicket, uint64& OutOperation);
+	// 消费当前握手回执；成功只记录票据，由控制器接着提交 Connected 状态。
 	bool CompleteCombatHandshake(AmultiplayerCoopPlayerController* Controller, uint64 Operation,
 		const FGuid& Ticket, const FText& Error, bool bRetryable);
+	// 仅接受当前已接纳的所属控制器更新端点票据，不持久化个人战斗数值。
 	void SetReconnectTicket(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket);
 
 	// 只读状态供菜单展示，配置供玩法规则读取；地址校验不发起连接。
@@ -127,9 +128,8 @@ private:
 	TWeakObjectPtr<AmultiplayerCoopPlayerController> HandshakeController;
 	// 已经开始的重连次数，用作下一次等待间隔的下标。
 	int32 ReconnectAttempt = 0;
-	// 仅由 SetConnectionState 递增，使旧回调和通知中被替换的操作失效。
-	// 超时和状态通知后显式校验编号；重试 Timer 则检查当前等待状态。
-	// 握手回执及重试 Timer 同样绑定操作编号，旧 World/旧 Controller 不得接管新连接。
+	// 状态提交或 Shutdown 使编号递增；超时、重试 Timer、握手回执都绑定本次编号。
+	// 旧 World/旧 Controller 的通知不能接管新连接，广播后也必须复核是否被同步回调替换。
 	uint64 OperationRevision = 0;
 	// 一次连接尝试的等待期限，与重试前的等待分别管理。
 	FTimerHandle ConnectTimeoutHandle;

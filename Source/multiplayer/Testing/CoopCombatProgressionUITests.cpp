@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归真实成长菜单按钮、事件驱动刷新、角色替换与关闭后的解绑。
+// 通过正式组件处理学习和装配，不修改玩家存档，也不把文字断言当成视觉验收。
+
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "AbilitySystemComponent.h"
@@ -22,6 +25,7 @@ namespace
 	struct FCombatMenuWorld
 	{
 		UWorld* World;
+		// 创建供 UMG 与真实角色绑定的独立世界，关闭无关 AI 和导航。
 		FCombatMenuWorld()
 		{
 			UWorld::InitializationValues Values;

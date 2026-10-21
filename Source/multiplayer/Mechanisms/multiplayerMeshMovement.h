@@ -8,9 +8,11 @@
 namespace MultiplayerMeshMovement
 {
 
+// 门使用固定世界端点，压力板使用相对按压偏移；只决定网格变换坐标系。
 enum class ESpace : uint8 { World, Relative };
 
 // 状态机关的本地网格过渡；速度未同步时等待，到位后返回 true 供调用者停止 Tick。
+// 本工具不计算激活资格、不复制状态，也不替代承载玩家的平台运动。
 inline bool MoveTo(USceneComponent& Mesh, const FVector& TargetLocation,
 	float DeltaSeconds, float Speed, float Tolerance, ESpace Space)
 {

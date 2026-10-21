@@ -39,6 +39,7 @@ class MULTIPLAYER_API AmultiplayerPressurePlate : public AActor
 	GENERATED_BODY()
 
 public:
+	// 创建触发器和人数组件，网格只在状态过渡期间 Tick。
 	AmultiplayerPressurePlate();
 
 	// 返回本机当前状态：服务器为规则真相，客户端为最近一次收到的复制快照。
@@ -47,7 +48,9 @@ public:
 	// 追加有效不同角色，供门合并多个压力板的玩家集合。
 	void GetOccupyingCharacters(TArray<ACharacter*>& OutCharacters) const;
 
+	// 各端播放本地按压过渡，到位关闭 Tick。
 	virtual void Tick(float DeltaSeconds) override;
+	// 同步最终开关与初始速度，不同步每帧网格位置。
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// 状态变化的本机事件。依赖权威结果的机关只在服务器绑定，客户端可用于非规则表现。
@@ -57,24 +60,31 @@ public:
 	FOnPressurePlateOccupancyChanged OnPlateOccupancyChanged;
 
 protected:
+	// 校准初始网格位置，服务器绑定当前占用和可选目标条件。
 	virtual void BeginPlay() override;
+	// 先解除本板监听，再释放人数记录和 GameState 订阅。
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	// 只扩展材质、音效等表现，不允许蓝图从这里反向修改 bPlateActive 或共享进度。
 	UFUNCTION(BlueprintImplementableEvent, Category = "Pressure Plate", meta = (DisplayName = "On Plate Visual State Changed"))
 	void ReceivePlateVisualStateChanged(bool bIsActive);
 
+	// 先更新开关再广播人数，使合作门读取到一致的最新事实。
 	UFUNCTION()
 	void HandleOccupancyChanged(int32 PlayerCount);
 
+	// 玩家已站在板上时，完成钥匙目标也应立即触发重算。
 	UFUNCTION()
 	void HandleObjectiveProgressChanged(int32 ActivatedKeys, int32 RequiredKeys);
 
+	// 接收复制开关或服务器本地提交，统一启动视觉过渡与本机通知。
 	UFUNCTION()
 	void OnRep_PlateActive();
 
 private:
+	// 只由服务器事件入口调用，组合人数、目标与锁存并忽略同值更新。
 	void EvaluatePlateState();
+	// 从初始相对位置与按压偏移计算网格目标，不影响 Actor 根位置。
 	FVector GetMeshTargetLocation() const;
 
 	UPROPERTY(VisibleAnywhere, Category = "Pressure Plate|Components")

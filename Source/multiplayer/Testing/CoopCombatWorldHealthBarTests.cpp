@@ -1,4 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+
+// 回归世界空间血条的锚点、每视角朝向、事件重绘和死亡／专服清理。
+// 使用正式小兵蓝图和 Widget 组件，材质及状态断言不代替同屏渲染性能验收。
+
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
@@ -22,6 +26,7 @@ namespace
 	struct FWorldHealthFixture
 	{
 		UWorld* World;
+		// 按指定端类型创建真实世界，使专服抑制显示走实际 NetMode 分支。
 		FWorldHealthFixture(ENetMode Mode = NM_Standalone)
 		{
 			UWorld::InitializationValues Values;
@@ -33,12 +38,14 @@ namespace
 			World->SetBegunPlay(true);
 			if (Mode != NM_Standalone) World->WorldType = EWorldType::PIE;
 		}
+		// 结束角色和 Widget 生命周期后销毁世界，避免血条订阅跨用例残留。
 		~FWorldHealthFixture()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
 			GEngine->DestroyWorldContext(World);
 			World->DestroyWorld(false);
 		}
+		// 延迟生成正式敌人，可预置错误旧版屏幕空间参数来验证实例初始化能正确修复。
 		AmultiplayerCombatEnemy* Spawn(UClass* Class, bool bLegacy = false)
 		{
 			const FTransform Transform(FRotator(0.f, 35.f, 0.f), FVector(500.f, 0.f, 150.f), FVector(1.4f));
@@ -60,6 +67,7 @@ namespace
 			return Enemy;
 		}
 	};
+	// 加载实际关卡使用的小兵类，不能用测试替代蓝图绕过原资产接线问题。
 	UClass* EnemyHealthBlueprint()
 	{
 		return LoadClass<AmultiplayerCombatEnemy>(nullptr,
@@ -69,6 +77,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopWorldHealthAnchorTest, "Multiplayer.Combat.WorldHealth.AnchorAndView",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 原生和保存蓝图都应修复旧设置，跟随平滑后的身体并只在本地面向各自镜头。
 bool FCoopWorldHealthAnchorTest::RunTest(const FString&)
 {
 	FWorldHealthFixture Fixture;
@@ -118,6 +127,7 @@ bool FCoopWorldHealthAnchorTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopWorldHealthEventsTest, "Multiplayer.Combat.WorldHealth.EventsAndCleanup",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 血量事件按需重绘，距离变化不丢最新值，死亡后解除订阅且不被迟到事件重建。
 bool FCoopWorldHealthEventsTest::RunTest(const FString&)
 {
 	FWorldHealthFixture Fixture;
@@ -158,6 +168,7 @@ bool FCoopWorldHealthEventsTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopWorldHealthDedicatedTest, "Multiplayer.Combat.WorldHealth.DedicatedServer",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 专服保留真实敌人和属性规则，但不创建血条 Widget 或每视角显示工作。
 bool FCoopWorldHealthDedicatedTest::RunTest(const FString&)
 {
 	FWorldHealthFixture Fixture(NM_DedicatedServer);

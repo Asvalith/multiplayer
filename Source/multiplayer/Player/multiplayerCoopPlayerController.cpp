@@ -9,6 +9,9 @@
 #include "InputCoreTypes.h"
 #include "Components/InputComponent.h"
 
+// 所属连接的请求层：握手、重开与退出经本控制器建立端点，不在控制器内重写玩法规则。
+// 服务器只通过 Owned RPC 回复该玩家；界面反馈使用本地委托，其他客户端不参与请求锁。
+
 // Pawn 死亡后只关闭自身输入；Controller 保留终局重开入口，服务器仍复核是否真的结束。
 void AmultiplayerCoopPlayerController::SetupInputComponent()
 {
@@ -47,8 +50,8 @@ void AmultiplayerCoopPlayerController::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
-//进入可游玩状态
-// 本地控制器进入 PlayingState 后确认连接；此时不保证所有机关复制和 UI 初始化已完成。
+// 本地控制器进入 PlayingState 后准备会话握手；接纳回执前不把连接视为业务就绪。
+// 设计：GI 跨 World 保留连接意图，Owned Controller 提供请求端点，GameMode 决定是否开放角色权限。
 void AmultiplayerCoopPlayerController::BeginPlayingState()
 {
 	Super::BeginPlayingState();
@@ -57,7 +60,6 @@ void AmultiplayerCoopPlayerController::BeginPlayingState()
 	{
 		return;
 	}
-	//连接成功后通知 GameInstance，避免客户端在连接后立即断开
 	// PlayingState 现在只发起握手；必须等服务器恢复完成的可靠回执才能确认连接成功。
 	if (bCombatHandshakeSubmitted) return;
 	if (HasAuthority()) { ServerEstablishCombatSession(FGuid(), 0); return; }
@@ -88,6 +90,8 @@ void AmultiplayerCoopPlayerController::ServerEstablishCombatSession_Implementati
 	if (!bAccepted) SetLifeSpan(1.0f); // 留出可靠失败回执的发送机会；未接纳 Pawn 始终不能移动或施法。
 }
 
+// 所属客户端验证回执仍属于当前握手，成功后才开放本地连接状态，迟到回执不能接管新尝试。
+// 接纳回执和 Pawn/属性复制独立到达；可靠 RPC 不是所有 Actor、资源与 HUD 已就绪的屏障。
 void AmultiplayerCoopPlayerController::ClientCombatSessionResult_Implementation(FGuid Ticket, uint64 Operation, const FText& Error, bool bRetryable)
 {
 	if (!IsLocalController() || HasAuthority()) return;
@@ -101,6 +105,7 @@ void AmultiplayerCoopPlayerController::ClientCombatSessionResult_Implementation(
 	}
 }
 
+// 服务器切图或恢复失败回合时更新本机票据，票据不向其他玩家广播。
 void AmultiplayerCoopPlayerController::ClientSetReconnectTicket_Implementation(FGuid Ticket)
 {
 	if (UmultiplayerGameInstance* Instance = GetGameInstance<UmultiplayerGameInstance>()) Instance->SetReconnectTicket(this, Ticket);
@@ -113,6 +118,7 @@ void AmultiplayerCoopPlayerController::Destroyed()
 	Super::Destroyed();
 }
 
+// 正常离线销毁 Pawn 之前补存快照，与 Destroyed/Logout 共用服务器去重保存入口。
 void AmultiplayerCoopPlayerController::PawnLeavingGame()
 {
 	if (AmultiplayerGameMode* Mode = GetWorld()->GetAuthGameMode<AmultiplayerGameMode>()) Mode->SaveCombatSession(this);

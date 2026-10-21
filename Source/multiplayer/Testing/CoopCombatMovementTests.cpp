@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归正式角色出生、会话接纳与视口输入恢复后的真实 CMC 移动。
+// 不手动解除移动锁替代业务修复，也不把离屏输入注入称为真人实机验收。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -51,6 +54,7 @@ namespace
 		TSharedPtr<FSceneViewport> SceneViewport;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 创建正式 GameMode、角色类和可行走地面，保留真实出生／接纳流程。
 		FCombatMovementWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -82,6 +86,7 @@ namespace
 			Ground->SetActorLocation(FVector(0, 0, -10));
 		}
 
+		// 按生命周期清理本地玩家和离屏视口，再销毁世界，防止输入模式串到下一用例。
 		~FCombatMovementWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -128,6 +133,7 @@ namespace
 			}
 		}
 
+		// 连续提交移动输入并读取真实水平位移，而不是只断言速度或移动模式标记。
 		float WalkDistance(AmultiplayerCombatCharacter* Character, float Seconds = .4f)
 		{
 			const FVector Before = Character->GetActorLocation();

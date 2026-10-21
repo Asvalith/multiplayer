@@ -1,3 +1,5 @@
+// 编辑器离线生成/恢复合作撤离副本，原 Egypt 地图不回写。
+// 只读审计、原布局恢复与显式庭院原型分支分开，运行时不执行这些资产操作。
 #include "Testing/CoopEscapeBuildCommandlet.h"
 #if WITH_EDITOR
 #include "Combat/multiplayerCombatEncounter.h"
@@ -66,6 +68,7 @@
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogCoopEscapeBuild, Log, All);
+// 使用编辑器命令环境，不启动真实客户端或服务器玩法。
 UCoopEscapeBuildCommandlet::UCoopEscapeBuildCommandlet()
 {
 	IsClient = false; IsServer = false; IsEditor = true; LogToConsole = true;
@@ -84,6 +87,7 @@ namespace CoopEscapeAssets
 		return UPackage::SavePackage(Object->GetPackage(), Object,
 			*FPackageName::LongPackageNameToFilename(Object->GetPackage()->GetName(), FPackageName::GetAssetPackageExtension()), Args);
 	}
+	// 只在关卡专用目录创建副本，已有目标复用，不覆盖第三方源资产。
 	template<class T> T* Copy(const TCHAR* Source, const TCHAR* Name)
 	{
 		const FString Package = Folder / Name;
@@ -92,16 +96,19 @@ namespace CoopEscapeAssets
 		if (!Original) return nullptr;
 		return Cast<T>(FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().DuplicateAsset(Name, Folder, Original));
 	}
+	// 离线构建写入已知对象字段，缺少预期字段立即暴露工具与资产版本不匹配。
 	void ObjectProperty(UObject* Object, const TCHAR* Name, UObject* Value)
 	{
 		auto* Property = FindFProperty<FObjectPropertyBase>(Object->GetClass(), Name); check(Property);
 		Property->SetObjectPropertyValue_InContainer(Object, Value);
 	}
+	// 写入已知规则布尔字段，不向运行时角色添加工具专用接口。
 	void BoolProperty(UObject* Object, const TCHAR* Name, bool Value)
 	{
 		auto* Property = FindFProperty<FBoolProperty>(Object->GetClass(), Name); check(Property);
 		Property->SetPropertyValue_InContainer(Object, Value);
 	}
+	// 编辑器中按稳定实例名和变换放置对象，最终碰撞和导航由后续步骤核验。
 	AActor* Spawn(UWorld* World, UClass* Class, const TCHAR* Name, FVector Location, float Yaw = 0.f)
 	{
 		FActorSpawnParameters Params; Params.Name = Name;
@@ -110,6 +117,7 @@ namespace CoopEscapeAssets
 		if (Actor) Actor->SetActorLabel(Name);
 		return Actor;
 	}
+	// 构建无碰撞的关卡说明牌；文字只是表现，不参与钥匙或通关判定。
 	ATextRenderActor* Sign(UWorld* World, const TCHAR* Name, FVector Location, const FString& Text, FColor Color = FColor::White, float Size = 30.f, UMaterialInterface* TextMaterial = nullptr)
 	{
 		auto* Actor = CastChecked<ATextRenderActor>(Spawn(World, ATextRenderActor::StaticClass(), Name, Location, 90.f));
@@ -123,6 +131,7 @@ namespace CoopEscapeAssets
 		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		return Actor;
 	}
+	// 用统一立方体尺寸创建实体阻挡墙，材质只来自调用方提供的现有引用。
 	void Wall(UWorld* World, const TCHAR* Name, FVector Center, FVector Size, UMaterialInterface* Material)
 	{
 		auto* Actor = CastChecked<AStaticMeshActor>(Spawn(World, AStaticMeshActor::StaticClass(), Name, Center));
@@ -150,6 +159,7 @@ namespace CoopEscapeAssets
 		FAssetRegistryModule::AssetCreated(Material);
 		return Save(Material) ? Material : nullptr;
 	}
+	// 给补给副本添加无碰撞的十字标识，领取逻辑仍由原生补给 Actor 负责。
 	void SupplyCross(AActor* Supply, UMaterialInterface* Material)
 	{
 		for (int32 Index = 0; Index < 2; ++Index)
@@ -167,6 +177,7 @@ namespace CoopEscapeAssets
 			Mesh->RegisterComponent();
 		}
 	}
+	// 按实际碰撞地面计算放置高度，查询失败直接暴露不可用位置而不猜测 Z。
 	FVector Ground(UWorld* World, FVector Point, float Offset)
 	{
 		FHitResult Hit;
@@ -184,6 +195,7 @@ namespace CoopEscapeAssets
 		if (!World || World->GetPackage()->GetName() != TEXT("/Game/Combat/Maps/CoopEscape")) return false;
 		auto* Blueprint = World->PersistentLevel->GetLevelScriptBlueprint(true);
 		if (!Blueprint) return false;
+		// 遇到未知蓝图结构时停止保存，保留失败原因供手动检查。
 		const auto Fail = [](const TCHAR* Reason)
 		{
 			UE_LOG(LogCoopEscapeBuild, Error, TEXT("ESCAPE_LOCAL_INPUT_REPAIR failed=%s mapNotSaved=1"), Reason);
@@ -223,11 +235,14 @@ namespace CoopEscapeAssets
 				UE_LOG(LogCoopEscapeBuild, Display, TEXT("ESCAPE_LEVEL_INPUT_NODE node=%s member=%s exec=%s"), *Node->GetName(), *Member, *Links);
 			}
 		if (!Input || !Cursor || Input->GetGraph() != Cursor->GetGraph()) return Fail(TEXT("Expected existing GameOnly/cursor pair"));
+		// 只接受单一明确连线，避免工具接入已有分叉后改变关卡语义。
 		const auto Linked = [](const UEdGraphPin* From, const UEdGraphPin* To)
 		{
 			return From && To && From->LinkedTo.Num() == 1 && From->LinkedTo.Contains(To);
 		};
+		// 统一读取执行输入引脚，下面的验证和接线使用相同入口。
 		const auto Exec = [](UK2Node* Node) { return Node->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input); };
+		// 统一读取成功执行输出，不假定节点数组中引脚的索引。
 		const auto Then = [](UK2Node* Node) { return Node->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output); };
 		UK2Node* First = nullptr;
 		UK2Node* Last = nullptr;
@@ -252,6 +267,7 @@ namespace CoopEscapeAssets
 		auto* Local = FindObject<UK2Node_CallFunction>(Graph, *LocalName.ToString());
 		auto* LocalBranch = FindObject<UK2Node_IfThenElse>(Graph, *LocalBranchName.ToString());
 		auto* Suffix = Then(Last)->LinkedTo.Num() ? Then(Last)->LinkedTo[0] : nullptr;
+		// 校验被新增守卫跳过的 DS/非本地路径仍接回原后续流程。
 		const auto FalseRejoins = [Suffix](UK2Node_IfThenElse* Branch)
 		{
 			const auto* Pin = Branch->GetElsePin();
@@ -273,6 +289,7 @@ namespace CoopEscapeAssets
 		UFunction* ValidFunction = UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("IsValid"));
 		UFunction* LocalFunction = AController::StaticClass()->FindFunctionByName(TEXT("IsLocalController"));
 		if (!ValidFunction || !LocalFunction) return Fail(TEXT("Required engine guards unavailable"));
+		// 创建工具命名的纯条件调用，执行链仍围绕原输入子链插入。
 		const auto AddCall = [Graph, First](FName Name, UFunction* Function, int32 X)
 		{
 			auto* Node = NewObject<UK2Node_CallFunction>(Graph, Name);
@@ -281,6 +298,7 @@ namespace CoopEscapeAssets
 			Node->NodePosX = First->NodePosX + X; Node->NodePosY = First->NodePosY + 200;
 			return Node;
 		};
+		// 创建对应条件分支，调用方负责把两条出口接回既有流程。
 		const auto AddBranch = [Graph, First](FName Name, int32 X)
 		{
 			auto* Node = NewObject<UK2Node_IfThenElse>(Graph, Name);
@@ -315,6 +333,7 @@ namespace CoopEscapeAssets
 	// 恢复原图整体布局，只叠加战斗内容；原地图文件及机关的原始配置不回写。
 	int32 RestoreOriginalLayout(const FString& Source, const FString& Target)
 	{
+		// 按显式长包名切换编辑器世界，不通过当前打开地图猜测源和目标。
 		const auto LoadMap = [](const FString& Package)
 		{
 			return FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(Package,
@@ -351,6 +370,7 @@ namespace CoopEscapeAssets
 		World = GEditor->GetEditorWorldContext().World();
 		TMap<FName, FTransform> OriginalTransforms;
 		TMap<FName, FString> OriginalRules;
+		// 规范化包路径后记录机关关系和规则值，另存副本后仍可逐项比对原布局。
 		const auto RuleSnapshot = [](AActor* Actor)
 		{
 			FString Result;
@@ -424,6 +444,7 @@ namespace CoopEscapeAssets
 		auto* Base = LoadObject<UmultiplayerCombatConfig>(nullptr, TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig"));
 		auto* Config = LoadObject<UmultiplayerCombatConfig>(nullptr, TEXT("/Game/Combat/Escape/DA_EscapeCombat.DA_EscapeCombat"));
 		if (!Base || !Config) return 1;
+		// 只同步特效引用，不覆盖正式关卡的音效、伤害、消耗或冷却数值。
 		const auto CopyVfx = [](FmultiplayerCombatFeedback& To, const FmultiplayerCombatFeedback& From)
 		{
 			To.Effect = From.Effect; To.CascadeEffect = From.CascadeEffect;
@@ -487,6 +508,7 @@ namespace CoopEscapeAssets
 }
 #endif
 
+// 显式选择修复、原布局恢复、审计或庭院原型；所有编辑只保存合作关卡与专用资产副本。
 int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR

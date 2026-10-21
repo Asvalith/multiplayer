@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归经验发奖、技能学习／装配、被动替换和成长存档的权威规则。
+// 断言真实 Spec 等级与属性聚合结果，不以界面快照代替实际生效状态。
+
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "AbilitySystemComponent.h"
@@ -25,6 +28,7 @@ namespace
 	struct FCombatProgressionWorld
 	{
 		UWorld* World;
+		// 建立真实角色、GAS 和施法地面，隔离 AI，不改玩家实际存档或共享素材。
 		FCombatProgressionWorld()
 		{
 			UWorld::InitializationValues Values;

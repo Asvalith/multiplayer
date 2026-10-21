@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 实现技能公共准入／提交和攻击、防御、治疗、范围技能的阶段流程。
+// GAS 管生命周期与预测，服务器管目标和结果；这里不处理输入、HUD 或机关规则。
+
 #include "Combat/multiplayerCombatAbility.h"
 
 #include "AbilitySystemComponent.h"
@@ -12,11 +15,9 @@
 #include "Combat/multiplayerCombatAttributes.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatEnemy.h"
-#include "Combat/multiplayerCombatMobility.h"
 #include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 #include "GameplayCueManager.h"
 
@@ -55,6 +56,8 @@ namespace
 }
 
 // 预测客户端的消耗、冷却和表现；伤害、发弹及治疗结果仍只在服务器提交。
+// 取舍：复用 GAS 预测账本，不另写资源回滚；LocalPredicted 不代表任意 C++ 副作用都能自动撤销。
+// InstancedPerActor 会复用对象，后续必须区分“同一个实例”和“同一轮激活”。
 UmultiplayerCombatAbility::UmultiplayerCombatAbility()
 {
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
@@ -62,11 +65,13 @@ UmultiplayerCombatAbility::UmultiplayerCombatAbility()
 	// 共用状态要求由角色实际 CombatConfig 提供，不在每个能力 CDO 再复制一份。
 }
 
+// 从角色读取结合等级后的有效数值，调用点决定是即时读取还是固定本次局部规则。
 FmultiplayerCombatSkillRule UmultiplayerCombatAbility::GetRule() const
 {
 	return CastChecked<AmultiplayerCombatCharacter>(GetAvatarActorFromActorInfo())->GetSkillRule(Skill);
 }
 
+// 准入与提交复核都读取当前能量；只产生失败标签，不提前扣费。
 bool UmultiplayerCombatAbility::CheckCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayTagContainer* OptionalRelevantTags) const
 {
@@ -77,6 +82,7 @@ bool UmultiplayerCombatAbility::CheckCost(FGameplayAbilitySpecHandle Handle, con
 	return bEnough;
 }
 
+// 沿用原生冷却标签查询，将拒绝映射成项目的冷却提示。
 bool UmultiplayerCombatAbility::CheckCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayTagContainer* OptionalRelevantTags) const
 {
@@ -86,6 +92,7 @@ bool UmultiplayerCombatAbility::CheckCooldown(FGameplayAbilitySpecHandle Handle,
 	return bReady;
 }
 
+// 支持 GAS 单独提交成本的入口；完整 Commit 的成本／冷却快照由 CommitExecute 统一处理。
 void UmultiplayerCombatAbility::ApplyCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo) const
 {
@@ -93,6 +100,7 @@ void UmultiplayerCombatAbility::ApplyCost(FGameplayAbilitySpecHandle Handle, con
 	if (Character) ApplyRuleCost(Handle, ActorInfo, ActivationInfo, Character->GetSkillRule(Skill));
 }
 
+// 把本次成本作为负的 SetByCaller 值交给 GE，客户端预测和权威确认不另写扣费账本。
 void UmultiplayerCombatAbility::ApplyRuleCost(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const
 {
@@ -102,6 +110,7 @@ void UmultiplayerCombatAbility::ApplyRuleCost(FGameplayAbilitySpecHandle Handle,
 	ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
 }
 
+// 支持 GAS 单独提交冷却的入口，使用当前规则和原生效果生命周期。
 void UmultiplayerCombatAbility::ApplyCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo) const
 {
@@ -109,6 +118,7 @@ void UmultiplayerCombatAbility::ApplyCooldown(FGameplayAbilitySpecHandle Handle,
 	if (Character) ApplyRuleCooldown(Handle, ActorInfo, ActivationInfo, Character->GetSkillRule(Skill));
 }
 
+// 使用调用者固定的冷却时长，避免扣费回调改变等级后混用另一份提交数值。
 void UmultiplayerCombatAbility::ApplyRuleCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const
 {
@@ -118,6 +128,9 @@ void UmultiplayerCombatAbility::ApplyRuleCooldown(FGameplayAbilitySpecHandle Han
 	ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
 }
 
+// CommitCheck 通过后先扣费再挂冷却；每次外部通知返回时，旧激活栈必须仍属于当前版本。
+// Can 决定能否开始，CommitCheck 只复核此刻的成本/CD；它不重跑完整 Can，也不代替出手时目标检查。
+// 这不是原子事务：扣费通知可以取消技能，不自动退款；具体能力在 Commit 返回后仍须复核本轮资格。
 void UmultiplayerCombatAbility::CommitExecute(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo)
 {
@@ -129,7 +142,7 @@ void UmultiplayerCombatAbility::CommitExecute(FGameplayAbilitySpecHandle Handle,
 	const FmultiplayerCombatSkillRule Rule = CommitCharacter->GetSkillRule(Skill);
 	if (!ActorInfo->IsNetAuthority())
 	{
-		// 服务器拒绝不走本地 CanActivate 失败通知；只补提示，不另写属性回滚。
+		// 预测拒绝只清理仍归属于本次预测键的动作；资源／冷却撤销仍交 GAS，原因另走失败通知。
 		FPredictionKey Key = ActivationInfo.GetActivationPredictionKey();
 		if (Key.IsLocalClientKey())
 			Key.NewRejectedDelegate().BindWeakLambda(ActorInfo->AvatarActor.Get(), [Weak = TWeakObjectPtr<AmultiplayerCombatCharacter>(Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get())),
@@ -161,6 +174,7 @@ bool UmultiplayerCombatAbility::CanActivateAbility(const FGameplayAbilitySpecHan
 		&& Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags);
 }
 
+// 将集中关系补入原生标签检查，预检与正式激活都经同一虚函数，而非再复制一遍规则。
 bool UmultiplayerCombatAbility::DoesAbilitySatisfyTagRequirements(const UAbilitySystemComponent& ASC,
 	const FGameplayTagContainer* SourceTags, const FGameplayTagContainer* TargetTags, FGameplayTagContainer* Reasons) const
 {
@@ -170,6 +184,7 @@ bool UmultiplayerCombatAbility::DoesAbilitySatisfyTagRequirements(const UAbility
 }
 
 // 只校验事件，不写技能实例；拒绝的新请求不能覆盖上一轮仍在执行的瞄准快照。
+// 合法方向只是输入意图：发射点、落点和命中仍由服务器查询，不以载荷校验替代权威结算。
 bool UmultiplayerCombatAbility::ShouldAbilityRespondToEvent(const FGameplayAbilityActorInfo* ActorInfo,
 	const FGameplayEventData* Payload) const
 {
@@ -301,6 +316,7 @@ void UmultiplayerAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle
 	else ReleaseProjectile();
 }
 
+// 起手结束后先认领出手，服务器创建一次弹体；嵌套取消后不得追加旧收招任务。
 void UmultiplayerAttackAbility::ReleaseProjectile()
 {
 	if (!IsActive() || bProjectileReleased) return;
@@ -335,11 +351,13 @@ void UmultiplayerAttackAbility::ReleaseProjectile()
 	else FinishAttack();
 }
 
+// 收招完成；客户端正常结束只影响自身能力，不能提前结束服务器尚未完成的阶段。
 void UmultiplayerAttackAbility::FinishAttack()
 {
 	EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, CurrentActorInfo->IsNetAuthority(), false);
 }
 
+// 预测键隔离旧轮结束，版本号隔离停动画时触发的新激活；只停当前能力拥有的动作。
 void UmultiplayerAttackAbility::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
 {
@@ -495,6 +513,7 @@ UmultiplayerDefendingEffect::UmultiplayerDefendingEffect()
 	GameplayCues.Add(FGameplayEffectCue(CombatTags::Cue_Defense, 0, 1));
 }
 
+// 短弹反单独持有标签，不随防御能力立即结束，也不覆盖较长的防御状态。
 UmultiplayerParryEffect::UmultiplayerParryEffect()
 {
 	auto* Tags = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("ParryTags"));
@@ -610,10 +629,8 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 		return;
 	}
 
-	TWeakObjectPtr<AmultiplayerCombatCharacter> SelectedTarget;
-	if (ActorInfo->IsNetAuthority()) SelectedTarget = Character->GetHealTarget();
 	// 无目标直接结束；只有确认目标合法后才提交资源与冷却。
-	const bool bCommitted = (!ActorInfo->IsNetAuthority() || SelectedTarget.IsValid())
+	const bool bCommitted = (!ActorInfo->IsNetAuthority() || Character->GetHealTarget() != nullptr)
 		&& CommitAbility(Handle, ActorInfo, ActivationInfo);
 	if (Revision != ActivationRevision) return;
 	if (!bCommitted)
@@ -628,10 +645,9 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
 		return;
 	}
-	if (Revision != ActivationRevision || !IsActive()) return;
-	AmultiplayerCombatCharacter* Target = SelectedTarget.Get();
-	if (ActorInfo->IsNetAuthority()) Target = Character->GetHealTarget();
-	if (ActorInfo->IsNetAuthority() && IsValid(Target) && Target->IsCombatReady())
+	// 提交后仅服务器重新选目标，不跨扣费回调保留旧目标。
+	if (auto* Target = ActorInfo->IsNetAuthority() ? Character->GetHealTarget() : nullptr;
+		IsValid(Target) && Target->IsCombatReady())
 	{
 		FGameplayEffectSpecHandle HealSpec = MakeOutgoingGameplayEffectSpec(UmultiplayerHealEffect::StaticClass());
 		if (HealSpec.IsValid())
@@ -649,6 +665,7 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 	if (Revision == ActivationRevision) EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }
 
+// 通用能量成本效果只接受本次 Data.Cost；不在效果默认值中写死某个技能的消耗。
 UmultiplayerAreaCostEffect::UmultiplayerAreaCostEffect()
 {
 	FSetByCallerFloat Cost; Cost.DataTag = CombatTags::Data_Cost;
@@ -657,6 +674,7 @@ UmultiplayerAreaCostEffect::UmultiplayerAreaCostEffect()
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
 }
 
+// 定义范围冷却标签和默认时长，实际提交由当前有效规则覆盖时长。
 UmultiplayerAreaCooldownEffect::UmultiplayerAreaCooldownEffect()
 {
 	auto* Tags = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("AreaCooldownTags"));
@@ -664,6 +682,7 @@ UmultiplayerAreaCooldownEffect::UmultiplayerAreaCooldownEffect()
 	ConfigureTimedTagEffect(*this, *Tags, 5, CombatTags::Cooldown_Area);
 }
 
+// 施法锁跟随能力保存的效果句柄，生命周期由 EndAbility 解除，不使用独立到期解锁。
 UmultiplayerCastingEffect::UmultiplayerCastingEffect()
 {
 	auto* Tags = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("CastingTags"));
@@ -674,6 +693,7 @@ UmultiplayerCastingEffect::UmultiplayerCastingEffect()
 	GameplayCues.Add(FGameplayEffectCue(CombatTags::Cue_Casting, 0, 1));
 }
 
+// 同目标再次眩晕刷新时长；共享禁行标签的计数仍允许其他禁锢效果独立存在。
 UmultiplayerStunEffect::UmultiplayerStunEffect()
 {
 	auto* Tags = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("StunTags"));
@@ -690,6 +710,7 @@ UmultiplayerStunEffect::UmultiplayerStunEffect()
 	GameplayCues.Add(FGameplayEffectCue(CombatTags::Cue_Stun, 0, 1));
 }
 
+// 范围技能采用本地预测和集中互斥，拥有者的主动取消可通知服务器。
 UmultiplayerAreaAbility::UmultiplayerAreaAbility()
 {
 	Skill = EMultiplayerCombatSkill::Area;
@@ -706,7 +727,7 @@ void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Charac
 {
 	if (!Character.HasAuthority() || !Character.IsCombatReady() || Character.IsStunned()) return;
 	const auto& Config = Character.GetCombatConfig();
-	// 一次范围结算固定本次规则；命中回调可以改变后续技能等级，但不能让同一轮目标承受不同数值。
+	// 固定本批配置与等级数值；各次伤害 GE 的来源属性捕获仍在各自创建时发生，并非全量战斗快照。
 	const auto Rule = Character.GetSkillRule(EMultiplayerCombatSkill::Area);
 	const float Radius = Config.AreaRadius;
 	const float RootDuration = Config.AreaRootDuration;
@@ -737,14 +758,14 @@ void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Charac
 	Character.GetAbilitySystemComponent()->ExecuteGameplayCue(CombatTags::Cue_Area, Feedback);
 }
 
+// 先验证并锁定落点，再提交资源／冷却、挂施法锁和起手任务；通知中的取消必须及时截断旧栈。
 void UmultiplayerAreaAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData)
 {
 	const uint32 Revision = ++ActivationRevision;
 	auto* Character = CastChecked<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
 	bReleased = false;
-	// 两端都计算表现落点，服务器只使用自己的控制朝向、遮挡和地面查询。
-	// 本次朝向改为随激活传递的快照；起点、射程、遮挡和地面仍由各自世界查询，伤害仅由服务器结算。
+	// 两端使用请求中的方向快照计算落点；起点、射程、遮挡和地面各自查询，服务器独立裁决最终结果。
 	const FRotator AimRotation = TriggerEventData
 		? TriggerEventData->TargetData.Get(0)->GetEndPointTransform().Rotator()
 		: Character->GetControlRotation();
@@ -795,6 +816,7 @@ void UmultiplayerAreaAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle,
 	Delay->ReadyForActivation();
 }
 
+// 起手完成先提交出手阶段；服务器按锁定落点结算一次，再建立本轮收招任务。
 void UmultiplayerAreaAbility::ReleaseArea()
 {
 	if (bReleased || !IsActive()) return;
@@ -829,12 +851,16 @@ void UmultiplayerAreaAbility::ReleaseArea()
 	Delay->ReadyForActivation();
 }
 
+// 完成正常收招；客户端只结束本地阶段，服务器保有权威时间线。
 void UmultiplayerAreaAbility::FinishRecovery()
 {
 	// 客户端只结束本地表现；正常收招由服务器裁决，不能用客户端提前到达的 End RPC 跳过起手。
 	EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, CurrentActorInfo->IsNetAuthority(), false);
 }
 
+// 先摘下本轮锁句柄再结束任务，最后精确解锁；旧预测键和同步新激活不能清掉下一轮状态。
+// Key 对应预测请求，Revision 区分复用实例的轮次，GEHandle 只认领自己施加的效果，三者不能互相替代。
+// 普通取消不退款，也不撤销已结算伤害；独立冷却和目标持续效果不随本次施法锁一起删除。
 void UmultiplayerAreaAbility::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
 {

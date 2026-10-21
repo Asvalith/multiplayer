@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归集中标签关系的继承合并、原生阻断计数和攻击被治疗／范围／救援替换后的清理。
+// 使用保存玩家与真实起手任务，不用只读关系表的结果代替实际技能生命周期。
+
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
@@ -35,6 +38,7 @@ namespace
 		FDelegateHandle ProjectileSpawnObserver;
 		TArray<TWeakObjectPtr<AmultiplayerCombatProjectile>> SpawnedProjectiles;
 
+		// 建立施法地面与真实弹体观察，并克隆短时规则而不修改共享资产。
 		FCombatRelationshipWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -67,6 +71,7 @@ namespace
 			Config->RescueDuration = .4f;
 		}
 
+		// 移除生成监听再结束真实世界，使旧任务与回调不能影响下一用例。
 		~FCombatRelationshipWorld()
 		{
 			World->RemoveOnActorSpawnedHandler(ProjectileSpawnObserver);
@@ -76,6 +81,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 在保存蓝图 BeginPlay 前挂测试规则，再以真实控制器接管和授予能力。
 		AmultiplayerCombatCharacter* Player(const FVector& Location = FVector(0, 0, 100), bool bEnableDowned = false)
 		{
 			if (!PlayerClass) return nullptr;
@@ -96,6 +102,7 @@ namespace
 			return Character;
 		}
 
+		// 推进真正的能力延迟任务及冷却，让替换后的旧出手有机会暴露残留。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0.f; Elapsed < Seconds;)
@@ -107,6 +114,7 @@ namespace
 			}
 		}
 
+		// 返回累计实际出生数，而不是当前存活弹体数，避免错误发弹后销毁造成假通过。
 		int32 Projectiles() const
 		{
 			// 保留真实出生记录；错误发弹即使随后撞墙销毁，也不能让取消用例假通过。
@@ -114,17 +122,20 @@ namespace
 		}
 	};
 
+	// 从真实角色读取项目 ASC，以正式集中关系和阻断容器作为被测对象。
 	UmultiplayerCombatAbilitySystem* CombatASC(AmultiplayerCombatCharacter* Character)
 	{
 		return Character ? Cast<UmultiplayerCombatAbilitySystem>(Character->GetAbilitySystemComponent()) : nullptr;
 	}
 
+	// 查询已授予 Spec 的活动状态，不以角色表现标签推断能力是否仍运行。
 	bool AbilityActive(AmultiplayerCombatCharacter* Character, TSubclassOf<UGameplayAbility> Class)
 	{
 		const auto* Spec = Character->GetAbilitySystemComponent()->FindAbilitySpecFromClass(Class);
 		return Spec && Spec->IsActive();
 	}
 
+	// 查询角色实际配置的攻击能力，兼容保存蓝图的派生类。
 	bool AttackActive(AmultiplayerCombatCharacter* Character)
 	{
 		return AbilityActive(Character, Character->GetAttackAbilityClass());
@@ -134,6 +145,7 @@ namespace
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipDefaultMatrixTest, "Multiplayer.Combat.Relationships.DefaultMatrix",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 核对默认及旧资产继承的准入矩阵，并通过真实角色查询确认阻断生效。
 bool FCoopCombatRelationshipDefaultMatrixTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -228,6 +240,7 @@ bool FCoopCombatRelationshipDefaultMatrixTest::RunTest(const FString& Parameters
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipHierarchyTest, "Multiplayer.Combat.Relationships.HierarchyAndRequirements",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 父分类和具体技能关系共同追加，保留调用方原生要求及阻断／取消参数。
 bool FCoopCombatRelationshipHierarchyTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -293,6 +306,7 @@ bool FCoopCombatRelationshipHierarchyTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipBlockCountsTest, "Multiplayer.Combat.Relationships.NativeBlockReferenceCounts",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 多个能力来源阻断同一分类时沿用 GAS 引用计数，结束一方不能解开另一方限制。
 bool FCoopCombatRelationshipBlockCountsTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -333,6 +347,7 @@ bool FCoopCombatRelationshipBlockCountsTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipHealReplacementTest, "Multiplayer.Combat.Relationships.HealReplacesAttack",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 治疗替换未出手攻击后，旧任务不发弹，已提交攻击成本／冷却也不被退款或重置。
 bool FCoopCombatRelationshipHealReplacementTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -358,6 +373,7 @@ bool FCoopCombatRelationshipHealReplacementTest::RunTest(const FString& Paramete
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipAreaReplacementTest, "Multiplayer.Combat.Relationships.AreaReplacesAttackAndKeepsGuard",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// R 替换普攻并保留独立防御效果，旧普攻不能在新的范围起手中迟到发弹。
 bool FCoopCombatRelationshipAreaReplacementTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -388,6 +404,7 @@ bool FCoopCombatRelationshipAreaReplacementTest::RunTest(const FString& Paramete
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipRescueReplacementTest, "Multiplayer.Combat.Relationships.RescueReplacesAttack",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 救援替换攻击并持有战斗阻断，取消或正常完成后都只释放自己的状态。
 bool FCoopCombatRelationshipRescueReplacementTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -460,6 +477,7 @@ bool FCoopCombatRelationshipRescueReplacementTest::RunTest(const FString& Parame
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipMissingSpecFeedbackTest, "Multiplayer.Combat.Relationships.MissingSpecFeedback",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 已学习却缺失真实 Spec 时必须明确拒绝和提示，不扣费、不施效，也不谎称技能可用。
 bool FCoopCombatRelationshipMissingSpecFeedbackTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;

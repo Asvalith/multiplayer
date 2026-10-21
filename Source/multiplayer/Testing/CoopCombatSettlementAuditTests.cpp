@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归持续上限 GE 移除、嵌套属性通知以及成长／被动效果替换时的资源不变量。
+// 检查实际聚合值和基础值，不能只钳制显示结果而保留隐藏超额资源。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -17,6 +20,7 @@ namespace
 	{
 		UWorld* World;
 
+		// 建立仅需真实角色、ASC 和属性聚合器的独立世界，隔离 AI 与导航。
 		FSettlementAuditWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -27,6 +31,7 @@ namespace
 			World->SetBegunPlay(true);
 		}
 
+		// 结束世界中的真实效果与属性订阅，不让持续修饰器跨用例保留。
 		~FSettlementAuditWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -34,12 +39,14 @@ namespace
 			World->DestroyWorld(false);
 		}
 
+		// 创建使用正式属性集与成长初始化的角色，不提供额外测试补偿逻辑。
 		AmultiplayerCombatCharacter* Character()
 		{
 			return World->SpawnActor<AmultiplayerCombatCharacter>();
 		}
 	};
 
+	// 把资源与对应上限配对，让生命、能量、护盾接受同一组不变量断言。
 	struct FCapacityAttributes
 	{
 		const TCHAR* Name;
@@ -47,6 +54,7 @@ namespace
 		FGameplayAttribute Maximum;
 	};
 
+	// 返回三种持续资源的真实属性标识，不创建另一份属性数值模型。
 	TArray<FCapacityAttributes> CapacityAttributes()
 	{
 		return {
@@ -56,6 +64,7 @@ namespace
 		};
 	}
 
+	// 挂载真实无限上限增益，移除时必须由属性集处理资源钳制而非成长组件兜底。
 	FActiveGameplayEffectHandle ApplyCapacityBonus(UAbilitySystemComponent& ASC, const FGameplayAttribute& Maximum)
 	{
 		auto* Effect = NewObject<UGameplayEffect>(GetTransientPackage());

@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 战斗角色协调层：初始化 ASC、接收操作意图、监听生命与控制状态，并保存短时恢复快照。
+// 技能准入见 SkillStatus，瞄准查询见 Targeting；执行步骤与属性结算不在角色中重复实现。
+
 #include "Combat/multiplayerCombatCharacter.h"
 
 #include "AbilitySystemComponent.h"
@@ -18,8 +21,6 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
-#include "Engine/OverlapResult.h"
 #include "Engine/AssetManager.h"
 #include "Engine/StreamableManager.h"
 #include "NiagaraSystem.h"
@@ -33,6 +34,7 @@
 #include "TimerManager.h"
 
 // ASC 与属性集属于角色生命周期；短时重连由服务器快照恢复，不跨回合保存。
+// 取舍：玩家和敌人共用角色战斗层；换 Pawn 要重建稳定状态，而不是让 ASC 跨 Pawn 常驻。
 AmultiplayerCombatCharacter::AmultiplayerCombatCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
@@ -173,38 +175,62 @@ void AmultiplayerCombatCharacter::GetLifetimeReplicatedProps(TArray<FLifetimePro
 // 只读状态查询。
 // 接口与数值查询都读取现存组件，不创建临时状态。
 UAbilitySystemComponent* AmultiplayerCombatCharacter::GetAbilitySystemComponent() const { return AbilitySystem; }
+// 读取 GAS 当前生命，不在角色中保存第二份余额。
 float AmultiplayerCombatCharacter::GetHealth() const { return CombatAttributes->GetHealth(); }
+// 读取包含成长和被动加成的当前生命上限。
 float AmultiplayerCombatCharacter::GetMaxHealth() const { return CombatAttributes->GetMaxHealth(); }
+// 读取本端已有能量；完整资源仅保证服务器与拥有者可见。
 float AmultiplayerCombatCharacter::GetEnergy() const { return CombatAttributes->GetEnergy(); }
+// 读取本端能量上限，旁观者不能据此判断对方能否付费。
 float AmultiplayerCombatCharacter::GetMaxEnergy() const { return CombatAttributes->GetMaxEnergy(); }
+// 读取可被伤害消费的当前护盾。
 float AmultiplayerCombatCharacter::GetShield() const { return CombatAttributes->GetShield(); }
+// 读取护盾容量，不把它与生命上限合并。
 float AmultiplayerCombatCharacter::GetMaxShield() const { return CombatAttributes->GetMaxShield(); }
+// 同时检查持久死亡标记与生命，避免复制到达顺序造成暂时可行动。
 bool AmultiplayerCombatCharacter::IsAlive() const { return !bDead && GetHealth() > 0.0f; }
+// 战斗入口要求已接纳、存活且未倒地；不等于任意技能都满足激活条件。
 bool AmultiplayerCombatCharacter::IsCombatReady() const { return bCombatSessionReady && IsAlive() && !Coop->IsDowned(); }
+// 防御状态来自限时 GE；能力结束不代表防御效果已经到期。
 bool AmultiplayerCombatCharacter::IsDefending() const { return IsAlive() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Defending); }
+// 查询施法锁标签，供移动权限与读条共同读取。
 bool AmultiplayerCombatCharacter::IsCasting() const { return IsAlive() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Casting); }
+// 查询当前是否眩晕，不自行维护控制结束计时。
 bool AmultiplayerCombatCharacter::IsStunned() const { return IsAlive() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Stunned); }
+// 查询禁锢状态；禁锢仅限制移动，不等于禁止全部技能。
 bool AmultiplayerCombatCharacter::IsRooted() const { return IsAlive() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Rooted); }
+// 查询是否仍有任一来源的灼烧效果。
 bool AmultiplayerCombatCharacter::IsBurning() const { return IsAlive() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Burning); }
+// 查询短弹反窗口，与较长的防御持续时间分开。
 bool AmultiplayerCombatCharacter::IsParrying() const { return IsCombatReady() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_Parrying); }
 // 兼容业务直接授予的眩晕标签；正式 GE 同时持有统一禁行权限。
 bool AmultiplayerCombatCharacter::IsMovementBlocked() const
 {
 	return IsStunned() || IsRooted() || (IsAlive() && AbilitySystem->HasMatchingGameplayTag(CombatTags::State_MovementBlocked));
 }
+// 多来源禁锢取当前最长剩余时间，仅用于显示，不决定何时解锁。
 float AmultiplayerCombatCharacter::GetRootRemaining() const { return GetEffectRemaining(CombatTags::State_Rooted); }
+// 读取已有灼烧效果的最长剩余时间。
 float AmultiplayerCombatCharacter::GetBurnRemaining() const { return GetEffectRemaining(CombatTags::State_Burning); }
+// 读取眩晕 GE 的剩余时间。
 float AmultiplayerCombatCharacter::GetStunRemaining() const { return GetEffectRemaining(CombatTags::State_Stunned); }
+// 从 R 冷却 GE 读取剩余时间。
 float AmultiplayerCombatCharacter::GetAreaCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Area); }
+// 从普攻冷却 GE 读取剩余时间。
 float AmultiplayerCombatCharacter::GetAttackCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Attack); }
+// 从治疗冷却 GE 读取剩余时间。
 float AmultiplayerCombatCharacter::GetHealCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Heal); }
+// 从冲刺冷却 GE 读取剩余时间。
 float AmultiplayerCombatCharacter::GetDashCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Dash); }
+// 配置资产缺省时使用原生默认配置；调用者只读，不改写共享资产。
 const UmultiplayerCombatConfig& AmultiplayerCombatCharacter::GetCombatConfig() const
 {
 	return CombatConfig ? *CombatConfig : *GetDefault<UmultiplayerCombatConfig>();
 }
+// 为蓝图暴露同一份只读有效配置，而不是另一条配置来源。
 const UmultiplayerCombatConfig* AmultiplayerCombatCharacter::GetCombatConfigAsset() const { return &GetCombatConfig(); }
 
+// 将技能种类映射到实际授予类；小兵可用自己的攻击类替换玩家普攻。
 TSubclassOf<UGameplayAbility> AmultiplayerCombatCharacter::GetSkillAbilityClass(EMultiplayerCombatSkill Skill) const
 {
 	switch (Skill)
@@ -242,6 +268,7 @@ void AmultiplayerCombatCharacter::OnRep_CastTiming()
 {
 	OnCombatStateChanged.Broadcast();
 }
+// 按当前服务器时间估算读条比例；标签消失后不继续显示旧进度。
 float AmultiplayerCombatCharacter::GetCastProgress() const
 {
 	if (!IsCasting() || CastDuration <= 0) return 0;
@@ -256,7 +283,7 @@ float AmultiplayerCombatCharacter::GetDefenseRemaining() const { return GetEffec
 // 冷却使用实际 GameplayEffect 时间，不额外维护 Timer；拒绝预测后不残留本地冷却。
 float AmultiplayerCombatCharacter::GetDefenseCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Defend); }
 
-// 两个蓝图查询共用实际效果计时，死亡时统一返回零。
+// 状态和冷却查询共用实际 GE 计时；死亡时返回零，不在此移除效果。
 float AmultiplayerCombatCharacter::GetEffectRemaining(const FGameplayTag& Tag) const
 {
 	if (!IsAlive()) return 0.0f;
@@ -288,6 +315,7 @@ void AmultiplayerCombatCharacter::SetCombatSessionReady(bool bReady)
 }
 
 // 断线前从服务器真实属性与 GameplayEffect 读取快照，不接受客户端上报的资源和计时。
+// 只保存稳定数值及白名单效果；旧任务、回调和 ActiveGEHandle 不带入新 Pawn，避免重放半次技能。
 FmultiplayerCombatResumeState AmultiplayerCombatCharacter::CaptureResumeState() const
 {
 	FmultiplayerCombatResumeState State;
@@ -336,7 +364,8 @@ FmultiplayerCombatResumeState AmultiplayerCombatCharacter::CaptureResumeState() 
 		float Attack = 0.f;
 		if (const auto* Capture = Effect->Spec.CapturedRelevantAttributes.FindCaptureSpecByDefinition(AttackCapture, true))
 			Capture->AttemptCalculateAttributeMagnitude(Evaluation, Attack);
-		// 离线期间没有其他属性变化；按断线时来源快照和目标护甲保存减防御前的每跳伤害。
+		// 按离线期间没有其他属性变化的假设，固定来源快照和目标护甲后的每跳伤害。
+		// 这是白名单效果的补算，不是离线世界重演；动态护甲等新规则需要另定离线语义。
 		Saved.RawDamagePerTick = FMath::Max(0.f, Effect->Spec.GetSetByCallerMagnitude(CombatTags::Data_Damage, false)
 			+ Attack - FMath::Max(0.f, CombatAttributes->GetArmor()));
 	}
@@ -383,6 +412,7 @@ void AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatRes
 	CombatAttributes->SetEnergy(FMath::Clamp(State.Energy, 0.0f, GetMaxEnergy()));
 	CombatAttributes->SetShield(bDead ? 0.f : RestoredShield);
 	CombatAttributes->SetHealth(bDead ? 0.f : RestoredHealth);
+	// 尝试回到原位置；这里没有通用安全落点搜索，也不跨地图迁移坐标。
 	TeleportTo(State.Location, State.Rotation);
 	if (bNotifyRestoredDeath)
 	{
@@ -429,7 +459,7 @@ void AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatRes
 	ForceNetUpdate();
 }
 
-// 技能请求与服务器投射物。
+// 玩家输入与 GAS 请求；这里不创建弹体或直接结算技能结果。
 // 输入使用 GAS 的拥有者请求通道，服务器仍会重新检查技能条件。
 void AmultiplayerCombatCharacter::Attack()
 {
@@ -437,10 +467,15 @@ void AmultiplayerCombatCharacter::Attack()
 	else if (Progression->GetSlotSkill(0) == EMultiplayerCombatSkill::Area) BeginSlotTargeting(0);
 	else Progression->ActivateSlot(0);
 }
+// Q 请求当前第二槽技能；实际技能种类由配装决定。
 void AmultiplayerCombatCharacter::Defend() { Progression->ActivateSlot(1); }
+// E 请求当前第三槽技能，不在输入入口直接回血。
 void AmultiplayerCombatCharacter::Heal() { Progression->ActivateSlot(2); }
+// R 请求当前第四槽技能，目标与付费仍由对应能力处理。
 void AmultiplayerCombatCharacter::CastArea() { Progression->ActivateSlot(3); }
+// Shift 请求当前第五槽技能，不绕过 GAS 修改移动位置。
 void AmultiplayerCombatCharacter::Dash() { Progression->ActivateSlot(4); }
+// 验证能力已授予后选择事件或普通 Try 入口；正式资格检查仍由 GAS 执行。
 bool AmultiplayerCombatCharacter::ActivateSkill(EMultiplayerCombatSkill Skill)
 {
 	// 所有入口最终由 GAS 的 CanActivate 共用资格查询；不要在相邻分发层重复扫描治疗目标。
@@ -451,15 +486,20 @@ bool AmultiplayerCombatCharacter::ActivateSkill(EMultiplayerCombatSkill Skill)
 	if (Event.IsValid()) return ActivateAimedSkill(Class, Event);
 	return AbilitySystem->TryActivateAbilityByClass(Class);
 }
+// 请求服务器救援能力，距离、目标占用和引导条件由能力验证。
 void AmultiplayerCombatCharacter::Rescue() { AbilitySystem->TryActivateAbilityByClass(UmultiplayerRescueAbility::StaticClass()); }
+// 拥有者将松键意图交给服务器；权威端只取消本角色的救援能力。
 void AmultiplayerCombatCharacter::CancelRescue()
 {
 	if (!HasAuthority()) { ServerCancelRescue(); return; }
 	if (const auto* Spec = AbilitySystem->FindAbilitySpecFromClass(UmultiplayerRescueAbility::StaticClass())) AbilitySystem->CancelAbilityHandle(Spec->Handle);
 }
+// 接收所属连接的取消请求，复用同一权威清理入口。
 void AmultiplayerCombatCharacter::ServerCancelRescue_Implementation() { CancelRescue(); }
+// 生命或合作状态变化后重新计算移动权限，再通知表现层读取当前快照。
 void AmultiplayerCombatCharacter::RefreshCombatPermissions() { RefreshMovementLock(); OnCombatStateChanged.Broadcast(); }
 
+// 将同帧倒地/死亡表现变化合并到下一帧，不延迟真正的行动权限更新。
 void AmultiplayerCombatCharacter::RequestLifePresentationRefresh()
 {
 	if (GetNetMode()==NM_DedicatedServer || LifePresentationRefreshTimer.IsValid()) return;
@@ -471,6 +511,7 @@ void AmultiplayerCombatCharacter::RequestLifePresentationRefresh()
 	}));
 }
 
+// 本地播放或退出倒地姿态；不负责救援结算，也不覆盖已经提交的死亡表现。
 void AmultiplayerCombatCharacter::RefreshDownedPresentation()
 {
 	if (bDead || !DeathMontage) return;
@@ -488,7 +529,9 @@ void AmultiplayerCombatCharacter::RefreshDownedPresentation()
 		Animation->Montage_Stop(.15f,DeathMontage);
 	}
 }
+// 请求服务器保存长期成长与配装，不保存当前血量或技能执行栈。
 void AmultiplayerCombatCharacter::SaveProgress() { ServerPersistProgress(false); }
+// 请求服务器读取长期档案，不借读档回滚本局资源和冷却。
 void AmultiplayerCombatCharacter::LoadProgress() { ServerPersistProgress(true); }
 // 路径与档案由所属服务器决定；限制磁盘操作频率，不接受客户端成长数据。
 void AmultiplayerCombatCharacter::ServerPersistProgress_Implementation(bool bLoad)
@@ -498,12 +541,14 @@ void AmultiplayerCombatCharacter::ServerPersistProgress_Implementation(bool bLoa
 	LastPersistenceRequest = Now;
 	ClientProgressResult(bLoad ? Progression->LoadProgress() : Progression->SaveProgress(), bLoad);
 }
+// 所属客户端显示权威存取结果，不自行重放成长奖励。
 void AmultiplayerCombatCharacter::ClientProgressResult_Implementation(bool bSuccess, bool bLoad)
 {
 	OnCombatMessage.Broadcast(FText::FromString(bSuccess ? (bLoad ? TEXT("已读取成长与配装；本局生命、能量和冷却不回退") : TEXT("成长与配装已保存"))
 		: TEXT("操作未完成：存档不存在、不兼容或当前动作尚未结束")));
 }
 
+// 远程玩家以事件携带方向意图，服务器直接请求走自己的世界查询与方向快照。
 bool AmultiplayerCombatCharacter::ActivateAimedSkill(TSubclassOf<UGameplayAbility> AbilityClass, const FGameplayTag& EventTag)
 {
 	// AI、独立运行和服务器自己的调用直接取本地快照；远端玩家只发送方向，不发送命中结果。
@@ -520,6 +565,7 @@ bool AmultiplayerCombatCharacter::ActivateAimedSkill(TSubclassOf<UGameplayAbilit
 	Event.TargetData.Add(Aim);
 	return AbilitySystem->HandleGameplayEvent(EventTag, &Event) > 0;
 }
+// 右键撤销本地预览并请求结束救援、R 和冲刺；不撤销已经付费的成本或权威伤害。
 void AmultiplayerCombatCharacter::CancelCast()
 {
 	CancelSkillTargeting();
@@ -536,6 +582,7 @@ void AmultiplayerCombatCharacter::Jump()
 	if (IsCombatReady() && !IsMovementBlocked() && !IsCasting()) Super::Jump();
 }
 
+// 根据本次效果保存的来向判断正面直接伤害；这是只读裁决，不消费盾或血。
 bool AmultiplayerCombatCharacter::ShouldBlockDirectDamage(const FGameplayEffectSpec& Spec) const
 {
 	const FGameplayEffectContextHandle Context = Spec.GetContext();
@@ -625,6 +672,7 @@ FVector AmultiplayerCombatCharacter::GetAreaTarget(FVector* OutGroundNormal, con
 	return Preview.End;
 }
 
+// 仅在没有更高优先级动作时播放本地受击，不用受击动画触发伤害或打断技能。
 void AmultiplayerCombatCharacter::PlayImpactReaction()
 {
 	if (!IsAlive() || IsCasting() || IsStunned() || GetNetMode() == NM_DedicatedServer || !HitMontage) return;
@@ -691,11 +739,13 @@ void AmultiplayerCombatCharacter::HandleControlTagChanged(FGameplayTag Tag, int3
 	RefreshMovementLock();
 	OnCombatStateChanged.Broadcast();
 }
+// 接纳状态复制后重算移动锁并刷新界面，不能假定 Controller 已先到达。
 void AmultiplayerCombatCharacter::OnRep_SessionReady()
 {
 	RefreshMovementLock();
 	OnCombatStateChanged.Broadcast();
 }
+// 汇总生命、施法和控制限制；只在最后一项限制解除后恢复原 CMC 模式。
 void AmultiplayerCombatCharacter::RefreshMovementLock()
 {
 	const bool bLock = !IsCombatReady() || IsMovementBlocked() || IsCasting() || Coop->IsRescuing();
@@ -776,6 +826,7 @@ void AmultiplayerCombatCharacter::HandleDeath()
 		if (auto* Mode = GetWorld()->GetAuthGameMode<AmultiplayerGameMode>()) Mode->NotifyCombatPlayerDeath();
 }
 
+// 服务器记录最近合法敌对来源，供死亡奖励归属使用，不接受客户端指定获奖者。
 void AmultiplayerCombatCharacter::RecordDamageSource(AmultiplayerCombatCharacter* Source)
 {
 	if (HasAuthority() && Source && IsHostileTo(Source)) LastDamageSource = Source;

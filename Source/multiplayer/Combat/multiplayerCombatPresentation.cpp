@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 战斗表现层：Cue 管音画，UMG 订阅状态，HUD 投影范围，动画实例只采样运动与标签。
+// 展示可以异步补载与重建，但不能反向提交伤害、资源或技能成功结果。
 #include "Combat/multiplayerCombatPresentation.h"
 
 #include "AbilitySystemComponent.h"
@@ -77,6 +79,7 @@ namespace
 #endif
 	}
 
+	// 按角色配置识别近战小兵，避免把它的施法锁画成玩家 R 预告圈。
 	bool UsesEnemyMelee(const AmultiplayerCombatCharacter* Character)
 	{
 		return Character && Character->GetCombatTeam() == EMultiplayerCombatTeam::Enemies
@@ -90,11 +93,13 @@ namespace
 		const TCHAR* Names[] = {TEXT("攻击"), TEXT("防御"), TEXT("治疗"), TEXT("范围"), TEXT("冲刺")};
 		return int32(Skill) < UE_ARRAY_COUNT(Names) ? Names[int32(Skill)] : TEXT("未知");
 	}
+	// 返回槽位的固定按键名称；技能装配变化不改变物理按键。
 	const TCHAR* CombatSlotKey(int32 Slot)
 	{
 		const TCHAR* Keys[] = {TEXT("LMB"), TEXT("Q"), TEXT("E"), TEXT("R"), TEXT("Shift")};
 		return Slot >= 0 && Slot < UE_ARRAY_COUNT(Keys) ? Keys[Slot] : TEXT("--");
 	}
+	// 读取技能对应的真实 GE 剩余时间，不维护表现层冷却余额。
 	float CombatSkillCooldown(const AmultiplayerCombatCharacter* Character, EMultiplayerCombatSkill Skill)
 	{
 		if (!Character) return 0.f;
@@ -110,6 +115,7 @@ namespace
 	}
 }
 
+// Cue 组件按需创建、移除时销毁，不启用常驻 Tick。
 AmultiplayerCombatCue::AmultiplayerCombatCue()
 {
 	bAutoDestroyOnRemove = true;
@@ -117,6 +123,7 @@ AmultiplayerCombatCue::AmultiplayerCombatCue()
 	PrimaryActorTick.bCanEverTick = false;
 }
 
+// 根据 Cue 类型读取表现配置；治疗特效取施法者配置而非受治疗者配置。
 const FmultiplayerCombatFeedback* AmultiplayerCombatCue::GetFeedback(AActor* Target, const FGameplayCueParameters* Parameters) const
 {
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(Target);
@@ -250,6 +257,7 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 	return true;
 }
 
+// 创建或更新持续表现；异步加载回来时仍须确认本次循环尚未结束。
 void AmultiplayerCombatCue::StartLoop(AActor* Target, const FGameplayCueParameters& Parameters)
 {
 	if (GetNetMode() == NM_DedicatedServer) return;
@@ -337,6 +345,7 @@ void AmultiplayerCombatCue::StartLoop(AActor* Target, const FGameplayCueParamete
 	LoopEffect->Activate(true);
 }
 
+// 持续效果首次进入时请求循环表现，可播放一次起始音效。
 bool AmultiplayerCombatCue::OnActive_Implementation(AActor* Target, const FGameplayCueParameters& Parameters)
 {
 	if (GetNetMode() == NM_DedicatedServer) return false;
@@ -346,6 +355,7 @@ bool AmultiplayerCombatCue::OnActive_Implementation(AActor* Target, const FGamep
 		if (auto* Sound = Feedback->Sound.Get()) UGameplayStatics::PlaySoundAtLocation(this, Sound, Target->GetActorLocation());
 	return true;
 }
+// 相关性恢复或晚加入时补持续表现，不把它重放为一次新的施法。
 bool AmultiplayerCombatCue::WhileActive_Implementation(AActor* Target, const FGameplayCueParameters& Parameters)
 {
 	// 晚加入恢复持续表现，但不重播过去的一次性施法音效。
@@ -353,16 +363,19 @@ bool AmultiplayerCombatCue::WhileActive_Implementation(AActor* Target, const FGa
 	StartLoop(Target, Parameters);
 	return true;
 }
+// 对应效果结束后撤销本 Cue 的组件与补载请求。
 bool AmultiplayerCombatCue::OnRemove_Implementation(AActor* Target, const FGameplayCueParameters& Parameters)
 {
 	StopPresentation();
 	return true;
 }
+// 交还引擎 Cue 池前清空表现状态，不让下一次实例复用继承旧组件。
 bool AmultiplayerCombatCue::Recycle()
 {
 	StopPresentation();
 	return Super::Recycle();
 }
+// 退出世界时也执行同一清理，不依赖一定先收到效果移除。
 void AmultiplayerCombatCue::EndPlay(const EEndPlayReason::Type Reason)
 {
 	StopPresentation();
@@ -384,6 +397,7 @@ void AmultiplayerCombatCue::StopPresentation()
 	if (AreaMarker) { AreaMarker->DestroyComponent(); AreaMarker = nullptr; }
 }
 
+// 缓存原图标并监听拥有者 Pawn 变化，随后订阅当前角色并补读状态。
 void UmultiplayerCombatWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -405,12 +419,15 @@ void UmultiplayerCombatWidget::NativeConstruct()
 	}
 	else BindPawn(nullptr, nullptr);
 }
+// 控件离开视口时解绑控制器、角色和计时器，重建不会累加监听。
 void UmultiplayerCombatWidget::NativeDestruct()
 {
 	if (auto* Controller = GetOwningPlayer()) Controller->OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::BindPawn);
 	BindPawn(nullptr, nullptr);
 	Super::NativeDestruct();
 }
+// 先释放旧 Pawn/ASC/整局状态的订阅，再绑定新对象并读取当前快照。
+// 委托只通知本机；跨网络靠属性和 OnRep。补读快照覆盖晚加入，解绑避免换 Pawn 后重复响应。
 void UmultiplayerCombatWidget::BindPawn(APawn* PreviousPawn, APawn* NewPawn)
 {
 	const FGameplayTag CooldownTags[] = { CombatTags::Cooldown_Attack, CombatTags::Cooldown_Defend,
@@ -475,11 +492,14 @@ void UmultiplayerCombatWidget::BindPawn(APawn* PreviousPawn, APawn* NewPawn)
 	}
 	else RefreshStats(0, 1, 0, 1);
 }
+// Pawn 已销毁时立即解除绑定，等待控制器之后提供新 Pawn。
 void UmultiplayerCombatWidget::HandlePawnDestroyed(AActor* DestroyedActor)
 {
 	BindPawn(nullptr, nullptr);
 }
+// 目标进度事件只触发重读共享状态，不在 HUD 累加进度。
 void UmultiplayerCombatWidget::HandleObjectiveChanged(int32 Activated, int32 Required) { RefreshState(); }
+// 按属性事件刷新血条与能量，再更新依赖资源的技能外观。
 void UmultiplayerCombatWidget::RefreshStats(float Health, float MaxHealth, float Energy, float MaxEnergy)
 {
 	CachedEnergy = Energy;
@@ -489,6 +509,7 @@ void UmultiplayerCombatWidget::RefreshStats(float Health, float MaxHealth, float
 	if (EnergyText) EnergyText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Energy, MaxEnergy)));
 	RefreshState();
 }
+// 从当前角色重新生成施法/救援显示与可用状态，不把缓存布尔值作为玩法依据。
 void UmultiplayerCombatWidget::RefreshState()
 {
 	const auto* Current = Character.Get();
@@ -558,6 +579,7 @@ void UmultiplayerCombatWidget::RefreshStatusText()
 			Progression->GetState().SkillPoints)) : FText::GetEmpty());
 	}
 }
+// 用短时区域显示本次提示，新的消息替换旧消息并重置隐藏时间。
 void UmultiplayerCombatWidget::ShowFeedback(FText Message)
 {
 	if (FeedbackText) FeedbackText->SetText(Message);
@@ -565,12 +587,14 @@ void UmultiplayerCombatWidget::ShowFeedback(FText Message)
 	GetWorld()->GetTimerManager().ClearTimer(FeedbackTimer);
 	if (!Message.IsEmpty()) GetWorld()->GetTimerManager().SetTimer(FeedbackTimer, this, &ThisClass::ClearFeedback, 2.f, false);
 }
+// 撤销提示计时并清空显示；空文本不会遗留可见背景。
 void UmultiplayerCombatWidget::ClearFeedback()
 {
 	GetWorld()->GetTimerManager().ClearTimer(FeedbackTimer);
 	if (FeedbackText) FeedbackText->SetText(FText::GetEmpty());
 	if (FeedbackPanel) FeedbackPanel->SetVisibility(ESlateVisibility::Collapsed);
 }
+// 更新活动冷却/读条数字和槽位图标；全部计时结束后停掉低频 Timer。
 void UmultiplayerCombatWidget::RefreshTimers()
 {
 	const auto* Current = Character.Get();
@@ -589,7 +613,8 @@ void UmultiplayerCombatWidget::RefreshTimers()
 		const float Remaining = CombatSkillCooldown(Current, Skill);
 		const auto Rule = Current ? Current->GetSkillRule(Skill) : Config.GetSkill(Skill);
 		const bool bCoolingDown = Remaining > 0;
-		// 图标仅概括资源与自身状态，不承诺本次目标合法；目标资格由瞄准预览和确认时实时查询。
+		// 图标低成本概括资源与自身状态，不逐槽扫描目标/几何，也不承诺本次必能释放。
+		// 目标资格交给瞄准预览和正式能力；此处不作为第二套权威 CanActivate。
 		const bool bAvailable = bReady && !bStunned && !bCasting && !bCoolingDown
 			&& CachedEnergy >= Rule.Cost && (!Progression || Progression->GetSkillLevel(Skill) > 0);
 		bHasActiveTimer |= bCoolingDown;
@@ -803,27 +828,40 @@ void UmultiplayerCombatProgressionWidget::RefreshMenu()
 
 // 前后选择仅改变本地菜单光标，不向服务器提交成长状态。
 void UmultiplayerCombatProgressionWidget::PreviousSkill() { SelectedSkill = (SelectedSkill + 4) % 5; RefreshMenu(); }
+// 选择下一个技能，只移动本地菜单光标。
 void UmultiplayerCombatProgressionWidget::NextSkill() { SelectedSkill = (SelectedSkill + 1) % 5; RefreshMenu(); }
+// 选择上一个待装配槽位，不立即交换服务器配装。
 void UmultiplayerCombatProgressionWidget::PreviousSlot() { SelectedSlot = (SelectedSlot + 4) % 5; RefreshMenu(); }
+// 选择下一个待装配槽位，随后由装配按钮发请求。
 void UmultiplayerCombatProgressionWidget::NextSlot() { SelectedSlot = (SelectedSlot + 1) % 5; RefreshMenu(); }
+// 在两种被动之间切换本地选择。
 void UmultiplayerCombatProgressionWidget::PreviousPassive() { SelectedPassive = 1 - SelectedPassive; RefreshMenu(); }
+// 向后循环切换被动选择，不施加或移除效果。
 void UmultiplayerCombatProgressionWidget::NextPassive() { SelectedPassive = 1 - SelectedPassive; RefreshMenu(); }
 // 学习与装备只申请服务器操作，UI 等待事件更新实际结果。
 void UmultiplayerCombatProgressionWidget::LearnSkill() { if (auto* P = BoundProgression.Get()) P->RequestLearnSkill(EMultiplayerCombatSkill(SelectedSkill)); }
+// 请求将所选技能装到所选槽，服务器验证并决定交换规则。
 void UmultiplayerCombatProgressionWidget::EquipSkill() { if (auto* P = BoundProgression.Get()) P->RequestEquipSkill(SelectedSlot, EMultiplayerCombatSkill(SelectedSkill)); }
+// 请求学习或升级所选被动，点数只能由服务器扣除。
 void UmultiplayerCombatProgressionWidget::LearnPassive() { if (auto* P = BoundProgression.Get()) P->RequestLearnPassive(EMultiplayerCombatPassive(SelectedPassive + 1)); }
+// 请求装配所选已学习被动，不直接改变客户端属性。
 void UmultiplayerCombatProgressionWidget::EquipPassive() { if (auto* P = BoundProgression.Get()) P->RequestEquipPassive(EMultiplayerCombatPassive(SelectedPassive + 1)); }
+// 请求卸下当前被动；最终上限和资源处理仍由服务器 GAS 完成。
 void UmultiplayerCombatProgressionWidget::UnequipPassive() { if (auto* P = BoundProgression.Get()) P->RequestEquipPassive(EMultiplayerCombatPassive::None); }
 // 磁盘请求使用角色已拥有连接的服务器包装，不从客户端直接调用组件存档函数。
 void UmultiplayerCombatProgressionWidget::SaveProgress() { if (auto* P = Character.Get()) P->SaveProgress(); }
+// 经角色所属连接请求读档，不在本地自行替换成长快照。
 void UmultiplayerCombatProgressionWidget::LoadProgress() { if (auto* P = Character.Get()) P->LoadProgress(); }
 
+// 创建各端独立的世界血条组件，不复制朝向或 UI 对象。
+// 只同步玩法数值，朝向本地镜头；内容事件重绘不等于取消距离/朝向更新或保证固定帧率。
 UmultiplayerEnemyHealthWidgetComponent::UmultiplayerEnemyHealthWidgetComponent()
 {
 	ConfigureWorldDefaults();
 	SetIsReplicatedByDefault(false);
 }
 
+// 统一世界空间、深度遮挡与手动重绘设置，保留原素材内部布局。
 void UmultiplayerEnemyHealthWidgetComponent::ConfigureWorldDefaults()
 {
 	SetWidgetSpace(EWidgetSpace::World);
@@ -844,6 +882,7 @@ void UmultiplayerEnemyHealthWidgetComponent::ConfigureWorldDefaults()
 	SetMaterial(0, nullptr); // 使用正常深度检测的引擎 Masked 材质，不穿墙。
 }
 
+// 仅在有画面的世界创建 UMG，专服连 Widget 实例也不生成。
 void UmultiplayerEnemyHealthWidgetComponent::InitWidget()
 {
 	// PIE 的 DS 世界也不创建 UI，不能只依赖进程级 IsRunningDedicatedServer。
@@ -855,6 +894,7 @@ void UmultiplayerEnemyHealthWidgetComponent::InitWidget()
 	Super::InitWidget();
 }
 
+// 在引擎创建 Renderer 前落实世界空间，防止旧蓝图值把血条切回屏幕空间。
 void UmultiplayerEnemyHealthWidgetComponent::OnRegister()
 {
 	// Renderer 在 Super::OnRegister 按 Space 创建；先消除旧蓝图的 Screen 覆盖，不能等 BeginPlay 才改。
@@ -862,6 +902,7 @@ void UmultiplayerEnemyHealthWidgetComponent::OnRegister()
 	Super::OnRegister();
 }
 
+// 绑定观察角色并设置头顶锚点、独立尺寸和事件驱动内容。
 void UmultiplayerEnemyHealthWidgetComponent::InitializeForCharacter(AmultiplayerCombatCharacter* NewCharacter)
 {
 	Character = NewCharacter;
@@ -891,6 +932,7 @@ void UmultiplayerEnemyHealthWidgetComponent::InitializeForCharacter(Amultiplayer
 	RequestRedraw();
 }
 
+// 隐藏并解绑血条、释放 Widget、停止 Tick；死亡和 EndPlay 共用此入口。
 void UmultiplayerEnemyHealthWidgetComponent::StopPresentation()
 {
 	bPresentationStopped = true;
@@ -904,6 +946,7 @@ void UmultiplayerEnemyHealthWidgetComponent::StopPresentation()
 	SetTickMode(ETickMode::Disabled);
 }
 
+// 只有显示数据变化时请求 RenderTarget 重绘，死亡则立即停止表现。
 void UmultiplayerEnemyHealthWidgetComponent::NotifyContentChanged()
 {
 	if (bPresentationStopped) return;
@@ -912,6 +955,7 @@ void UmultiplayerEnemyHealthWidgetComponent::NotifyContentChanged()
 	else RequestRedraw();
 }
 
+// 按本地镜头调整朝向并做距离隐藏；重新可见时补读数值，不同步展示旋转。
 void UmultiplayerEnemyHealthWidgetComponent::UpdateForView(const FVector& ViewLocation)
 {
 	if (bPresentationStopped) return;
@@ -931,6 +975,7 @@ void UmultiplayerEnemyHealthWidgetComponent::UpdateForView(const FVector& ViewLo
 	}
 }
 
+// Tick 做镜头朝向、距离/存活筛选与可见绘制；血量文本和进度内容由属性事件刷新。
 void UmultiplayerEnemyHealthWidgetComponent::TickComponent(float DeltaSeconds, ELevelTick TickType,
 	FActorComponentTickFunction* TickFunction)
 {
@@ -945,24 +990,28 @@ void UmultiplayerEnemyHealthWidgetComponent::TickComponent(float DeltaSeconds, E
 	if (!bPresentationStopped && !bHiddenInGame) Super::TickComponent(DeltaSeconds, TickType, TickFunction);
 }
 
+// 退出世界前结束观察与绘制，避免旧角色血条继续工作。
 void UmultiplayerEnemyHealthWidgetComponent::EndPlay(EEndPlayReason::Type Reason)
 {
 	StopPresentation();
 	Super::EndPlay(Reason);
 }
 
+// 将重绘接收器传给实际条形控件，兼容素材的外层嵌套 Widget。
 void UmultiplayerEnemyHealthWidget::SetPresentationComponent(UmultiplayerEnemyHealthWidgetComponent* Component)
 {
 	PresentationComponent = Component;
 	if (Health) Health->SetPresentationComponent(Component);
 }
 
+// 主动补读当前生命，用于刚绑定、重建或从距离隐藏恢复时的初始化。
 void UmultiplayerEnemyHealthWidget::RefreshSnapshot()
 {
 	if (Health) Health->RefreshSnapshot();
 	else if (auto* Enemy = ObservedCharacter.Get()) RefreshHealth(Enemy->GetHealth(), Enemy->GetMaxHealth(), 0.f, 0.f);
 }
 
+// 先解绑旧观察对象，再由最内层血条订阅一次生命事件并补读快照。
 void UmultiplayerEnemyHealthWidget::BindCharacter(AmultiplayerCombatCharacter* NewCharacter)
 {
 	if (auto* Previous = BoundCharacter.Get()) Previous->OnCombatStatsChanged.RemoveDynamic(this, &ThisClass::RefreshHealth);
@@ -986,12 +1035,14 @@ void UmultiplayerEnemyHealthWidget::BindCharacter(AmultiplayerCombatCharacter* N
 	else SetVisibility(ESlateVisibility::Collapsed);
 }
 
+// Slate 重建后恢复对弱观察对象的订阅。
 void UmultiplayerEnemyHealthWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 	BindCharacter(ObservedCharacter.Get());
 }
 
+// 解除活动订阅但保留弱观察意图，以便正常的 Slate 重建恢复。
 void UmultiplayerEnemyHealthWidget::NativeDestruct()
 {
 	if (auto* Previous = BoundCharacter.Get()) Previous->OnCombatStatsChanged.RemoveDynamic(this, &ThisClass::RefreshHealth);
@@ -1002,6 +1053,7 @@ void UmultiplayerEnemyHealthWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
+// 生命显示实际变化才更新文字/进度并通知重绘；不复用源素材的独立属性逻辑。
 void UmultiplayerEnemyHealthWidget::RefreshHealth(float CurrentHealth, float MaxHealth, float Energy, float MaxEnergy)
 {
 	// 角色的能量/护盾也广播 Stats；生命显示未变化时不格式化文字、不请求 RT 重绘。
@@ -1017,6 +1069,7 @@ void UmultiplayerEnemyHealthWidget::RefreshHealth(float CurrentHealth, float Max
 	if (auto* Component = PresentationComponent.Get()) Component->NotifyContentChanged();
 }
 
+// 本地创建一份已配置 HUD 控件并恢复游戏输入，专服不参与 UI 构建。
 void AmultiplayerCombatHUD::BeginPlay()
 {
 	Super::BeginPlay();
@@ -1045,6 +1098,7 @@ bool AmultiplayerCombatHUD::ProjectTargetPoint(const FVector& Location, FVector2
 	return true;
 }
 
+// 缓存本帧端点的场景遮挡查询，避免相邻范围线重复做同一条射线。
 bool AmultiplayerCombatHUD::IsRangePointVisible(const FVector& Location)
 {
 	if (const bool* Cached = RangeVisibilityCache.Find(Location)) return *Cached;
@@ -1065,6 +1119,7 @@ bool AmultiplayerCombatHUD::IsRangePointVisible(const FVector& Location)
 	return bVisible;
 }
 
+// 将可见世界线段投影到 Canvas；被场景挡住的边界不穿墙绘制。
 void AmultiplayerCombatHUD::DrawWorldSegment(const FVector& Start, const FVector& End,
 	const FLinearColor& Color, float Thickness)
 {
@@ -1075,6 +1130,7 @@ void AmultiplayerCombatHUD::DrawWorldSegment(const FVector& Start, const FVector
 		DrawLine(A.X, A.Y, B.X, B.Y, Color, Thickness);
 }
 
+// 按给定平面绘制圆环，尺寸取查询半径，不从粒子包围盒反推。
 void AmultiplayerCombatHUD::DrawWorldRing(const FVector& Center, const FVector& Normal,
 	float Radius, const FLinearColor& Color)
 {
@@ -1129,6 +1185,7 @@ void AmultiplayerCombatHUD::DrawTargetMarker(const AmultiplayerCombatCharacter* 
 	}
 }
 
+// 按视口宽度居中显示操作或失败说明，黑色偏移仅用于保证可读性。
 void AmultiplayerCombatHUD::DrawCenteredPrompt(const FString& Text, float Y, const FLinearColor& Color)
 {
 	if (Text.IsEmpty()) return;
@@ -1140,6 +1197,7 @@ void AmultiplayerCombatHUD::DrawCenteredPrompt(const FString& Text, float Y, con
 	DrawText(Text, Color, X, Y, GEngine->GetSmallFont(), Scale);
 }
 
+// 按技能绘制查询几何；普攻/防御不叠调试射线，R 显示真实伤害圆柱的水平边界。
 void AmultiplayerCombatHUD::DrawTargetPreview(const FmultiplayerCombatTargetPreview& Preview, const FLinearColor& Color)
 {
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(PlayerOwner->GetPawn());
@@ -1182,6 +1240,7 @@ void AmultiplayerCombatHUD::DrawTargetPreview(const FmultiplayerCombatTargetPrev
 	}
 }
 
+// 暂存已结算范围供短时展示；黄色边界不是持续伤害区域。
 void AmultiplayerCombatHUD::ShowResolvedArea(const FVector& Center, float Radius)
 {
 	ResolvedAreaCenter = Center;
@@ -1232,7 +1291,7 @@ void AmultiplayerCombatHUD::DrawEnemyTelegraphs(const AmultiplayerCombatCharacte
 		DrawCenteredPrompt(TEXT("处于近战攻击范围 · 离开红色扇区可躲避"), Canvas->ClipY * .13f, Danger);
 }
 
-// 只有瞄准几何跟随相机逐帧更新；生命、能量、状态和技能计时仍走原控件的事件/活动计时器。
+// Canvas 每帧查询预览资格并绘制瞄准几何和敌人预警；UMG 数值与计时仍走事件/活动计时器。
 void AmultiplayerCombatHUD::DrawHUD()
 {
 	Super::DrawHUD();
@@ -1297,6 +1356,7 @@ void AmultiplayerCombatHUD::DrawHUD()
 		DrawCenteredPrompt(TEXT("Q / E / R / Shift 按住预览、松开释放 · 右键取消 · 左键普攻"), PromptY, Hint.CopyWithNewOpacity(.8f));
 }
 
+// HUD 退出时移除自己创建的控件，不留下第二份视口界面。
 void AmultiplayerCombatHUD::EndPlay(EEndPlayReason::Type Reason)
 {
 	if (NativeCombatWidget) { NativeCombatWidget->RemoveFromParent(); NativeCombatWidget = nullptr; }

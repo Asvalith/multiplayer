@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归弹反窗口与方向、攻击归属转移、有限反射次数和复制弹道重建。
+// 服务器命中使用真实扫掠；模拟代理入口只验快照契约，不冒充专服网络传输。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -27,6 +30,7 @@ namespace
 	{
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
+		// 建立支持真实碰撞扫掠的独立世界，关闭无关 AI 和导航。
 		FCombatReflectionWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -36,12 +40,15 @@ namespace
 			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
 			World->InitializeActorsForPlay(FURL()); World->SetBegunPlay(true);
 		}
+		// 对称结束角色、效果和弹体，并恢复测试前全局帧号。
 		~FCombatReflectionWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
 			GFrameCounter = PreviousFrame;
 		}
+		// 推进一个真实世界帧，供弹体扫掠及持续效果计时使用。
 		void Tick(float Seconds) { ++GFrameCounter; World->Tick(LEVELTICK_All, Seconds); }
+		// 小步推进，防止一帧跨过短弹反窗口或多段弹道而掩盖问题。
 		void Advance(float Seconds)
 		{
 			for (float Time = 0; Time < Seconds;)
@@ -49,11 +56,13 @@ namespace
 				const float Step = FMath::Min(.01f, Seconds - Time); Tick(Step); Time += Step;
 			}
 		}
+		// 有界等待真实碰撞／反射结果，不手动调用弹反结算函数。
 		bool WaitFor(TFunctionRef<bool()> Condition, float Timeout = 1.f)
 		{
 			for (float Time = 0; Time < Timeout && !Condition(); Time += .01f) Tick(.01f);
 			return Condition();
 		}
+		// 创建指定阵营及身体朝向的真实角色，禁用自主移动并可注入独立规则。
 		AmultiplayerCombatCharacter* Character(bool Enemy, const FVector& Location, float Yaw = 0,
 			UmultiplayerCombatConfig* Config = nullptr)
 		{
@@ -66,6 +75,7 @@ namespace
 			Pawn->FinishSpawning(Transform); Pawn->GetCharacterMovement()->DisableMovement();
 			return Pawn;
 		}
+		// 初始化正式投射物并交给真实运动组件，归属与方向变化由生产逻辑处理。
 		AmultiplayerCombatProjectile* Fire(AmultiplayerCombatCharacter* Source, float Speed = 1000.f)
 		{
 			const FTransform Transform(FRotator::ZeroRotator, Source->GetActorLocation() + FVector(75, 0, 0));
@@ -73,6 +83,7 @@ namespace
 				Transform, Source, Source, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 			Projectile->Initialize(Source, 25.f, Speed); Projectile->FinishSpawning(Transform); return Projectile;
 		}
+		// 通过正式限时 GE 打开弹反窗口，不用手写状态布尔值替代标签生命周期。
 		bool Parry(AmultiplayerCombatCharacter* Character, float Duration = .3f)
 		{
 			auto* ASC = Character->GetAbilitySystemComponent();
@@ -81,6 +92,7 @@ namespace
 			Spec.Data->SetDuration(Duration, true);
 			return ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).IsValid();
 		}
+		// 创建真实静态阻挡，检查反射后弹体仍遵守场景碰撞和消耗规则。
 		void Wall(const FVector& Location)
 		{
 			auto* Actor = World->SpawnActor<AActor>(); auto* Box = NewObject<UBoxComponent>(Actor);

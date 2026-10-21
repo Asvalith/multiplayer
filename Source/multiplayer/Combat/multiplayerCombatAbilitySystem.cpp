@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 实现项目 ASC 的标签关系扩展、正式失败反馈、动画预测及重连所需窄入口。
+// 不代管输入或技能步骤；生命周期、复制和效果账本仍以 GAS 为主。
+
 #include "Combat/multiplayerCombatAbility.h"
 
 #include "Animation/AnimInstance.h"
@@ -9,9 +12,8 @@
 #include "Engine/World.h"
 #include "TimerManager.h"
 
-// 项目 ASC 只扩展 GAS 集成：中央标签关系、失败反馈、预测清理和恢复所需的窄入口。
-// 角色业务资格、具体技能步骤及属性结算分别保留在对应模块。
 // 标签只描述资格；目标、距离、遮挡等实时业务仍由各能力在接纳/生效阶段分别复核。
+// 此处集中拥有者的能力关系，不是“全局规则、攻击方、受击方”任意组合的通用规则解析器。
 bool UmultiplayerCombatAbilitySystem::CheckAbilityTagRelationships(const FGameplayTagContainer& AbilityTags,
 	FGameplayTagContainer* Reasons) const
 {
@@ -20,6 +22,7 @@ bool UmultiplayerCombatAbilitySystem::CheckAbilityTagRelationships(const FGamepl
 	FGameplayTagContainer Required, Blocked, Owned;
 	Character->GetCombatConfig().GetAbilityActivationTagRequirements(AbilityTags, Required, Blocked);
 	GetOwnedGameplayTags(Owned);
+	// 资格查询只累积稳定失败原因，不在预检中取消技能或修改任何标签。
 	const auto Reject = [Reasons](FGameplayTag Reason)
 	{
 		if (Reasons) Reasons->AddTag(Reason);
@@ -89,6 +92,7 @@ void UmultiplayerCombatAbilitySystem::NotifyAbilityFailed(FGameplayAbilitySpecHa
 	Character->ClientSkillRejected(CombatAbility->GetCombatSkill(), Reason, AuthorityValue);
 }
 
+// 拦住缺失瞄准事件的远程定向激活，再让原生流程校验能力、预测键及正式激活资格。
 void UmultiplayerCombatAbilitySystem::InternalServerTryActivateAbility(FGameplayAbilitySpecHandle Handle,
 	bool InputPressed, const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData)
 {
@@ -107,6 +111,7 @@ void UmultiplayerCombatAbilitySystem::InternalServerTryActivateAbility(FGameplay
 
 // 保留 UE5.5 PlayMontage 的播放、复制和预测流程，只在认领动作前封住同步通知窗口。
 // 不能先调用 Super 再恢复记录：旧调用已绑定的预测拒绝回调仍可能误停后来的同资产动作。
+// 这是针对 5.5 Started 顺序的窄适配，升级引擎需重核；不代表所有动画回调或任意动作都可回滚。
 float UmultiplayerCombatAbilitySystem::PlayMontage(UGameplayAbility* AnimatingAbility,
 	FGameplayAbilityActivationInfo ActivationInfo, UAnimMontage* Montage, float InPlayRate,
 	FName StartSectionName, float StartTimeSeconds)
@@ -166,6 +171,7 @@ float UmultiplayerCombatAbilitySystem::PlayMontage(UGameplayAbility* AnimatingAb
 	return Duration;
 }
 
+// 权威端按句柄移除；拥有者仅移除匹配本次预测键的施法 GE，不借此开放任意客户端删效果。
 void UmultiplayerCombatAbilitySystem::EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey)
 {
 	if (IsOwnerActorAuthoritative())
@@ -191,6 +197,7 @@ void UmultiplayerCombatAbilitySystem::SetPeriodicEffectDelay(FActiveGameplayEffe
 	if (!IsOwnerActorAuthoritative()) return;
 	FActiveGameplayEffect* Effect = ActiveGameplayEffects.GetActiveGameplayEffect(Handle);
 	if (!Effect || Effect->Spec.GetPeriod() <= 0.f) return;
+	// 弱回调只推进该效果句柄，效果移除后的清理仍使用 GAS 持有的同一计时器。
 	const FTimerDelegate Callback = FTimerDelegate::CreateWeakLambda(this, [this, Handle] { ExecutePeriodicEffect(Handle); });
 	GetWorld()->GetTimerManager().SetTimer(Effect->PeriodHandle, Callback, Effect->Spec.GetPeriod(), true,
 		FMath::Max(FirstDelay, UE_SMALL_NUMBER));

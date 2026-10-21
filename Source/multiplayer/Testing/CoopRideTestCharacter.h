@@ -57,6 +57,7 @@ class UCoopRideTestMovement : public UCharacterMovementComponent
 	GENERATED_BODY()
 
 public:
+	// 清本阶段观测指标，不改变移动预测队列或服务器误差容差。
 	void ResetMetrics();
 
 	int32 CorrectionCount = 0;
@@ -72,10 +73,13 @@ public:
 	TWeakObjectPtr<AActor> ObservedPlatform;
 
 protected:
+	// 原生预测/发送完成后记录客户端 SavedMove，不取代 Super。
 	virtual void ReplicateMoveToServer(float DeltaTime, const FVector& NewAcceleration) override;
+	// 原生误差检查之前记录服务器模拟结果，随后保留引擎原有判定。
 	virtual void ServerMoveHandleClientError(float ClientTimeStamp, float DeltaTime, const FVector& Accel,
 		const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase,
 		FName ClientBaseBoneName, uint8 ClientMovementMode) override;
+	// 将校正与同一历史 Move 配对，可比坐标误差与基座变更分别统计。
 	virtual void OnClientCorrectionReceived(
 		FNetworkPredictionData_Client_Character& ClientData,
 		float TimeStamp,
@@ -99,6 +103,7 @@ class ACoopRideTestCharacter : public AmultiplayerCharacter
 	GENERATED_BODY()
 
 public:
+	// 只为实验 Pawn 安装观测型 CMC，沿用父类移动与镜头默认参数。
 	ACoopRideTestCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:

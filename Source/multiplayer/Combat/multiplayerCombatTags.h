@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 声明技能分类、请求事件、角色状态、冷却、结算数据和表现的统一标签标识。
+// 标签只表达含义；实际互斥在 Config／ASC，伤害在技能／属性集执行。
+
 #pragma once
 
 #include "NativeGameplayTags.h"
@@ -17,6 +20,7 @@ struct FmultiplayerCombatSkillTags
 // 战斗标签集中声明；技能、属性和表现使用同一组名字，避免散落的字符串。
 namespace CombatTags
 {
+	// 查询技能对应的分类／事件／冷却；治疗事件为空，无效枚举返回空集合。
 	MULTIPLAYER_API const FmultiplayerCombatSkillTags& GetSkillTags(EMultiplayerCombatSkill Skill);
 	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Combat);
 	MULTIPLAYER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Rescue);

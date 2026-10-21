@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 实现属性默认值、统一数值约束与复制通知；GE 结算只在一处消费 IncomingDamage。
+// 扣盾、扣血会同步通知外部，因此先认领本次伤害，再使用回调后的最新属性和资格。
+
 #include "Combat/multiplayerCombatAttributes.h"
 
 #include "Combat/multiplayerCombatTags.h"
@@ -84,6 +87,8 @@ void UmultiplayerCombatAttributes::ClampAttributeValue(const FGameplayAttribute&
 }
 
 // 先清空本次伤害再修改血量，血量委托即使触发死亡清理也不会重复消费旧伤害。
+// Execution 只输出待结算量，格挡和盾/血在此消费一次；技能和 Cue 不再分别扣血。
+// 这里防的是游戏线程同步属性通知重入，不是多线程锁或跨网络原子事务。
 void UmultiplayerCombatAttributes::PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data)
 {
 	Super::PostGameplayEffectExecute(Data);
@@ -95,7 +100,7 @@ void UmultiplayerCombatAttributes::PostGameplayEffectExecute(const FGameplayEffe
 		// 清空伤害也可能通知外部；先固定本次格挡结果，避免同步回调改写本次方向裁决。
 		const bool bBlockedDirectDamage = Character && Character->ShouldBlockDirectDamage(Data.EffectSpec);
 		SetIncomingDamage(0.0f);
-		// 每次外部属性通知回来都读当前资格；不能沿用通知之前的死亡或接纳快照。
+		// 每次外部属性通知后重查当前资格，不能缓存通知前的死亡或接纳状态。
 		const auto CanReceiveDamage = [&Data, Character]
 		{
 			return !Data.Target.HasMatchingGameplayTag(CombatTags::State_Dead)
@@ -178,16 +183,19 @@ namespace
 	{
 		DECLARE_ATTRIBUTE_CAPTUREDEF(AttackPower);
 		DECLARE_ATTRIBUTE_CAPTUREDEF(Armor);
+		// Spec 创建时固定来源攻击力，目标护甲在执行时读取；两者捕获时机有意不同。
+		// 普通弹体在命中时建伤害 Spec，快照不是发射时刻；灼烧则使用施加该持续效果时的来源捕获。
 		FCombatDamageCaptures()
 		{
-			// 攻击加成在创建效果时快照；护甲在效果实际命中时读取目标聚合值。
 			DEFINE_ATTRIBUTE_CAPTUREDEF(UmultiplayerCombatAttributes, AttackPower, Source, true);
 			DEFINE_ATTRIBUTE_CAPTUREDEF(UmultiplayerCombatAttributes, Armor, Target, false);
 		}
 	};
+	// 复用只读捕获定义，避免每次伤害计算重新创建定义；不缓存角色数值。
 	const FCombatDamageCaptures& DamageCaptures() { static const FCombatDamageCaptures Value; return Value; }
 }
 
+// 向 GAS 注册计算器实际需要捕获的属性，执行时按来源／目标标签参与聚合。
 UmultiplayerCombatDamageExecution::UmultiplayerCombatDamageExecution()
 {
 	RelevantAttributesToCapture.Add(DamageCaptures().AttackPowerDef);

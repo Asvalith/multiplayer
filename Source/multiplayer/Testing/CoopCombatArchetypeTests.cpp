@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归保存的小兵蓝图在出生前选择近／远程规则，以及错峰生成和共享资产不被污染。
+// 感知、BT、ASC 和投射物均使用正式实现，不用替代技能掩盖素材配置错误。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -38,6 +41,7 @@ namespace
 		TArray<TWeakObjectPtr<AmultiplayerCombatProjectile>> Projectiles;
 		bool bSuppressSpawnAI = false;
 
+		// 建立带感知和地面的真实世界，加载保存的小兵类并记录生成及弹体。
 		FCombatArchetypeWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -68,6 +72,7 @@ namespace
 			}));
 		}
 
+		// 移除生成监听并销毁世界，恢复全局帧号以隔离出生节奏用例。
 		~FCombatArchetypeWorld()
 		{
 			World->RemoveOnActorSpawnedHandler(Spawned);
@@ -77,6 +82,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 小步推进真实世界和感知系统，使出手与错峰生成按正式计时器发生。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0; Elapsed < Seconds;)
@@ -89,12 +95,14 @@ namespace
 			}
 		}
 
+		// 在限定时间内等待正式系统产生可观察结果，不自行补发感知或技能事件。
 		bool WaitFor(TFunctionRef<bool()> Condition, float Timeout = 1.5f)
 		{
 			for (float Time = 0.f; Time < Timeout && !Condition(); Time += .02f) Advance(.02f);
 			return Condition();
 		}
 
+		// 延迟完成真实小兵生成，让用例在授予技能和启动 AI 之前配置类型。
 		AmultiplayerCombatEnemy* DeferredEnemy(const FVector& Location, bool bWithAI = false)
 		{
 			if (!EnemyClass) return nullptr;
@@ -104,6 +112,7 @@ namespace
 			return Enemy;
 		}
 
+		// 创建受控的真实玩家，飞行模式隔离地面移动对射程内测试的影响。
 		AmultiplayerCombatCharacter* Player(const FVector& Location)
 		{
 			auto* Pawn = World->SpawnActor<AmultiplayerCombatCharacter>(Location, FRotator::ZeroRotator);
@@ -114,6 +123,7 @@ namespace
 			return Pawn;
 		}
 
+		// 配置正式生成器的数量和短间隔，用可观测出生时间验证错峰及类型选择。
 		AmultiplayerEnemySpawner* Spawner(const FVector& Location, int32 Count = 3, bool bIncludeRanged = true)
 		{
 			const FTransform Transform(Location);
@@ -130,6 +140,7 @@ namespace
 		}
 	};
 
+	// 从保存的小兵实例读取真实武器组件，检查变体没有误替换共享外观或挂点。
 	UStaticMeshComponent* EnemyWeapon(AmultiplayerCombatEnemy* Enemy)
 	{
 		const auto* Property = FindFProperty<FObjectPropertyBase>(Enemy->GetClass(), TEXT("EnemyWeapon"));

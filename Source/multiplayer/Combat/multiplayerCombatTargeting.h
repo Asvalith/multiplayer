@@ -1,4 +1,5 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 预览/出手共用的几何查询接口；结果只描述查询时刻，不持有权威结算或资源状态。
 #pragma once
 
 #include "CoreMinimal.h"
@@ -26,7 +27,9 @@ namespace CombatTargeting
 	constexpr float ProjectileLifetime = 3.f;
 	constexpr float AreaHalfHeight = 200.f;
 	constexpr float MeleeFrontDot = .5f;
+	// 检查敌对存活玩家的近战距离、可选朝向与遮挡。
 	bool CanMeleeHit(const AmultiplayerCombatCharacter& Source, const AmultiplayerCombatCharacter& Target, bool bCheckFacing);
+	// 检查范围圆柱中的合法敌对目标及中心到目标的视线。
 	bool CanAffectArea(const AmultiplayerCombatCharacter& Source, const AmultiplayerCombatCharacter& Target,
 		const FVector& Center, float Radius);
 	// 宽阶段只收集去重的候选，不做遮挡射线；结算必须在每个目标应用前调用 CanAffectArea。

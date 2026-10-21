@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 小兵模块将感知/黑板决策、GAS 攻击和 CMC 移动分开，客户端只显示复制结果。
+// 同文件保留少量行为树节点与分批出生器，避免基础敌人流程被过度拆分。
 
 #pragma once
 
@@ -13,7 +15,6 @@
 
 class UStaticMeshComponent;
 class UBehaviorTree;
-class UWidgetComponent;
 class UmultiplayerEnemyHealthWidgetComponent;
 class AmultiplayerGameMode;
 class UAISenseConfig_Sight;
@@ -37,16 +38,23 @@ class MULTIPLAYER_API AmultiplayerCombatEnemy : public AmultiplayerCombatCharact
 	GENERATED_BODY()
 
 public:
+	// 配置敌方 ASC、服务器 AI、移动和本地世界血条组件。
 	AmultiplayerCombatEnemy();
 	// 范围配置由 Service 和攻击任务读取，运行中的目标只保存在黑板。
 	float GetDetectionRadius() const { return DetectionRadius; }
+	// 攻击任务的接近阈值；真正出手仍由能力复核命中条件。
 	float GetAttackDistance() const { return AttackDistance; }
+	// 返回 Sight 单侧视角半角，墙后位置不会借此直接暴露给决策。
 	float GetPeripheralVisionAngle() const { return PeripheralVisionAngle; }
+	// 巡逻点围绕首次记录的出生区域选取，不跟随玩家不断平移。
 	float GetPatrolRadius() const { return PatrolRadius; }
+	// 失去可见目标后只保留有限时间的位置记忆。
 	float GetSearchDuration() const { return SearchDuration; }
+	// 服务器启动决策时解析软引用，节点不额外保存运行目标。
 	UBehaviorTree* GetCombatBehaviorTree() const;
 	// 出生前选择攻击类型，不更换小兵外观、行为树或已运行的技能实例。
 	bool ConfigureRangedArchetype();
+	// 返回非负击杀奖励，实际发奖与去重由角色成长链路负责。
 	int32 GetExperienceReward() const { return FMath::Max(0, ExperienceReward); }
 
 protected:
@@ -92,6 +100,7 @@ class MULTIPLAYER_API AmultiplayerCombatAIController : public AAIController
 	GENERATED_BODY()
 
 public:
+	// 创建 Sight 感知组件，候选阵营最终仍按项目战斗规则判断。
 	AmultiplayerCombatAIController();
 	// 自动控制与 GAS 初始化先后可能不同；两个就绪入口汇合到这里。
 	void StartCombat();
@@ -117,10 +126,11 @@ class MULTIPLAYER_API UmultiplayerBTService_UpdateCombatTarget : public UBTServi
 	GENERATED_BODY()
 
 public:
+	// 设置低频、略错峰的更新间隔，并在首次树搜索时立即填黑板。
 	UmultiplayerBTService_UpdateCombatTarget();
 
 protected:
-	// 每次选择最近的存活玩家；失去控制、死亡、销毁或超出范围时不再保留旧目标。
+	// 从 Sight 当前可见玩家中选最近者；失去目标后只保留限时位置快照。
 	virtual void TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds) override;
 };
 
@@ -131,6 +141,7 @@ class MULTIPLAYER_API UmultiplayerBTTask_RequestCombatAttack : public UBTTaskNod
 	GENERATED_BODY()
 
 public:
+	// 定义一次请求节点；冷却不在行为树另起计时器维护。
 	UmultiplayerBTTask_RequestCombatAttack();
 
 protected:
@@ -145,9 +156,11 @@ class MULTIPLAYER_API UmultiplayerBTTask_SelectPatrolLocation : public UBTTaskNo
 	GENERATED_BODY()
 
 public:
+	// 定义可达点选择节点，移动和等待仍使用原生行为树节点。
 	UmultiplayerBTTask_SelectPatrolLocation();
 
 protected:
+	// 最多尝试四个有足够间距的导航点，失败交还树处理，不逐帧重查。
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 };
 
@@ -158,6 +171,7 @@ class MULTIPLAYER_API AmultiplayerEnemySpawner : public AActor
 	GENERATED_BODY()
 
 public:
+	// 出生器不复制；它生成的敌人 Actor 自行走现有复制链路。
 	AmultiplayerEnemySpawner();
 
 	// 一次性刷怪入口，重复调用不会生成第二波。
@@ -167,6 +181,7 @@ public:
 	bool ConfigureWave(TSubclassOf<AmultiplayerCombatEnemy> InEnemyClass, int32 Count);
 	DECLARE_MULTICAST_DELEGATE_OneParam(FEnemySpawned, AmultiplayerCombatEnemy*);
 	FEnemySpawned OnEnemySpawned;
+	// 未生成名额也计入关卡容量，防止多个波次同时排队突破总上限。
 	int32 GetPendingSpawnCount() const { return PendingSpawnCount; }
 
 protected:

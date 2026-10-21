@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 服务器感知与行为树只产生目标和技能请求，GAS 负责资格与伤害，CMC 负责移动与避让。
+// 出生器只安排有限单波的错峰生成，死亡和关卡退出分别清理各自任务与订阅。
 
 #include "Combat/multiplayerCombatEnemy.h"
 
@@ -17,7 +19,6 @@
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/WidgetComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -63,11 +64,6 @@ AmultiplayerCombatEnemy::AmultiplayerCombatEnemy()
 	HealthBarWidget = CreateDefaultSubobject<UmultiplayerEnemyHealthWidgetComponent>(TEXT("HealthBarWidget"));
 	HealthBarWidget->SetupAttachment(GetCapsuleComponent());
 	HealthBarWidget->SetRelativeLocation(FVector(0, 0, 115));
-	HealthBarWidget->SetWidgetSpace(EWidgetSpace::World);
-	HealthBarWidget->SetDrawSize(FVector2D(180, 30));
-	HealthBarWidget->SetPivot(FVector2D(.5f, 1));
-	HealthBarWidget->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	HealthBarWidget->SetGenerateOverlapEvents(false);
 }
 
 // 复用保存蓝图的动作和表现，只复制本实例的攻击参数；不修改共享资产或运行中的 ASC 授予。
@@ -97,6 +93,7 @@ void AmultiplayerCombatEnemy::BeginPlay()
 	}
 }
 
+// 停止世界血条订阅后交还基类的战斗和 Actor 生命周期清理。
 void AmultiplayerCombatEnemy::EndPlay(const EEndPlayReason::Type Reason)
 {
 	HealthBarWidget->StopPresentation();
@@ -274,6 +271,7 @@ void UmultiplayerBTService_UpdateCombatTarget::TickNode(
 	AmultiplayerCombatCharacter* Target = nullptr;
 	AmultiplayerCombatCharacter* PreviousTarget = Cast<AmultiplayerCombatCharacter>(Blackboard->GetValueAsObject(CombatAIKeys::TargetActor));
 	float NearestDistanceSquared = MAX_flt;
+	// 只读筛选当前合法敌对玩家，复用于可见候选和旧目标失效判断。
 	const auto IsValidPlayer = [Enemy](const AmultiplayerCombatCharacter* Candidate)
 	{
 		return IsValid(Candidate) && Candidate->IsPlayerControlled() && Candidate->IsCombatReady() && Enemy->IsHostileTo(Candidate);
@@ -362,6 +360,7 @@ UmultiplayerBTTask_SelectPatrolLocation::UmultiplayerBTTask_SelectPatrolLocation
 	NodeName = TEXT("Choose reachable patrol point");
 }
 
+// 使用黑板出生区域和有限导航候选确定巡逻点，不在任务内自行寻路或移动。
 EBTNodeResult::Type UmultiplayerBTTask_SelectPatrolLocation::ExecuteTask(
 	UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
@@ -394,6 +393,7 @@ AmultiplayerEnemySpawner::AmultiplayerEnemySpawner()
 	EnemyClass = AmultiplayerCombatEnemy::StaticClass();
 }
 
+// 延迟生成完成前固定单波类型与数量，开始后不接受配置覆盖去重状态。
 bool AmultiplayerEnemySpawner::ConfigureWave(TSubclassOf<AmultiplayerCombatEnemy> InEnemyClass, int32 Count)
 {
 	if (GetNetMode() == NM_Client || IsActorInitialized() || HasActorBegunPlay() || !InEnemyClass) return false;
@@ -426,6 +426,7 @@ void AmultiplayerEnemySpawner::BeginPlay()
 	}
 }
 
+// 取消待生成任务并解除接纳事件，销毁出生器不会把旧波次留到下一关。
 void AmultiplayerEnemySpawner::EndPlay(const EEndPlayReason::Type Reason)
 {
 	GetWorldTimerManager().ClearTimer(SpawnTimer);
@@ -453,6 +454,7 @@ void AmultiplayerEnemySpawner::SpawnWave()
 	const int32 Count = FMath::Clamp(EnemyCount, 1, 10);
 	PendingSpawnCount = Count;
 	// 第一只立即出现，其余按间隔生成；总数与重复调用保护仍属于同一波。
+	// 错峰只摊平生成峰值，不减少存活 AI 的持续开销，也不等于敌人对象池。
 	SpawnNextEnemy(Count);
 }
 

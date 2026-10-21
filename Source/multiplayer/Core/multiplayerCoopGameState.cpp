@@ -3,12 +3,10 @@
 #include "Core/multiplayerCoopGameState.h"
 #include "Net/UnrealNetwork.h"
 
-/// <summary>
-/// 保存目标状态，并在变化时通知别人
-/// </summary>
+// 共享结果层：服务器提交目标/波次快照，客户端通过复制恢复当前结果。
+// 本类只存储和发布结果，不判断钥匙资格、出生规则或战斗命中。
 
-
-//注册要同步的状态
+// 注册目标与波次快照复制；本地委托本身不经过网络。
 void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -32,9 +30,10 @@ void AmultiplayerCoopGameState::ApplyEncounterState(const FmultiplayerCombatEnco
 	ForceNetUpdate();
 }
 
+// 各端通知本机 HUD 补读最新波次；晚加入不重放之前的刷怪事件。
 void AmultiplayerCoopGameState::OnRep_EncounterState() { OnEncounterChanged.Broadcast(); }
 
-//服务器更新状态
+// 发布当前快照而非历史增量：晚加入能直接读取已完成的目标，不依赖重播拾取 RPC。
 void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopObjectiveState& NewObjectiveState)
 {
 	if (!HasAuthority())
@@ -61,13 +60,13 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopOb
 	}
 	//更新
 	ObjectiveState = SanitizedState;
-	//广播
+	// 服务器显式调用仅通知本机监听者；远端仍通过属性复制进入各自的 OnRep。
 	OnRep_ObjectiveState();
 	//强制网络更新同步
 	ForceNetUpdate();
 }
 
-//状态变化时通知别人
+// 复制到达后通知本机订阅者；C++ 委托不跨网络，HUD 应重读快照而非自行累加进度。
 void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 {
 	//保存快照

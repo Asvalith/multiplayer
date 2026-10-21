@@ -1,8 +1,9 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 瞄准查询与本地预览生命周期：统一几何和目标筛选，不扣资源、不提交命中结果。
+// 服务器出手时仍复核当前世界；预览候选不是提前授权的命中名单。
 #include "Combat/multiplayerCombatTargeting.h"
 
 #include "Combat/multiplayerCombatCharacter.h"
-#include "Combat/multiplayerCombatCoop.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "AbilitySystemComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -16,6 +17,7 @@
 
 namespace
 {
+	// 只让场景实体阻挡查询，避免 Pawn 重叠触发盒被当作墙面。
 	FCollisionResponseParams SceneResponses()
 	{
 		FCollisionResponseParams Result(ECR_Ignore);
@@ -33,6 +35,7 @@ namespace
 		return Query;
 	}
 
+	// 沿真实弹体半径扫掠，返回首个有效敌人或阻挡位置，不在查询中施加伤害。
 	FVector ProjectileTrace(const AmultiplayerCombatCharacter& Source, const FVector& Start, const FVector& End,
 		float Radius, TWeakObjectPtr<AmultiplayerCombatCharacter>& Target)
 	{
@@ -81,6 +84,7 @@ bool CombatTargeting::CanAffectArea(const AmultiplayerCombatCharacter& Source,
 		|| Hit.GetActor() == &Target;
 }
 
+// 宽阶段仅收集去重角色；每个目标生效前还要执行完整过滤。
 TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectAreaCandidates(
 	const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius)
 {
@@ -95,6 +99,7 @@ TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectArea
 	return Targets;
 }
 
+// 在宽阶段候选上执行当前完整过滤，供预览显示，不固定未来命中对象。
 TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectAreaTargets(
 	const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius)
 {
@@ -107,11 +112,13 @@ TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CombatTargeting::CollectArea
 	return Targets;
 }
 
+// 默认使用角色视点；派生角色可提供自己的镜头起点，不改变伤害权威。
 FVector AmultiplayerCombatCharacter::GetCombatViewOrigin(const FRotator& Aim) const
 {
 	return GetPawnViewLocation();
 }
 
+// 用身体几何与本轮方向求发射点，DS 不依赖手骨更新；近墙时退回胸前扫掠。
 FVector AmultiplayerCombatCharacter::GetCombatMuzzleLocation(const FRotator* AimSnapshot) const
 {
 	// 不依赖DS骨骼刷新；起手特效、轨迹预览和真实弹体从同一位置出发。
@@ -133,12 +140,14 @@ FVector AmultiplayerCombatCharacter::GetCombatMuzzleLocation(const FRotator* Aim
 }
 
 // 客户端不提交治疗目标；服务器在接纳与实际提交时共用同一套选目标规则。
+// 单次查询无副作用，可固定射程；跨 Commit 后仍须重选，预览不锁定未来的治疗对象。
 AmultiplayerCombatCharacter* AmultiplayerCombatCharacter::GetHealTarget() const
 {
 	// 优先最低血量比例；比例相同时选更近的目标，自身也属于合法候选。
 	AmultiplayerCombatCharacter* Selected = nullptr;
 	float LowestRatio = 1.f;
-	float ClosestDistance = FMath::Square(GetSkillRule(EMultiplayerCombatSkill::Heal).Range);
+	const float RangeSquared = FMath::Square(GetSkillRule(EMultiplayerCombatSkill::Heal).Range);
+	float ClosestDistance = RangeSquared;
 	FVector EyeLocation; FRotator EyeRotation;
 	GetActorEyesViewPoint(EyeLocation, EyeRotation);
 	for (TActorIterator<AmultiplayerCombatCharacter> It(GetWorld()); It; ++It)
@@ -146,7 +155,7 @@ AmultiplayerCombatCharacter* AmultiplayerCombatCharacter::GetHealTarget() const
 		auto* Candidate = *It;
 		if (!Candidate->IsCombatReady() || IsHostileTo(Candidate) || Candidate->GetHealth() >= Candidate->GetMaxHealth()) continue;
 		const float Distance = FVector::DistSquared(GetActorLocation(), Candidate->GetActorLocation());
-		if (Distance > FMath::Square(GetSkillRule(EMultiplayerCombatSkill::Heal).Range)) continue;
+		if (Distance > RangeSquared) continue;
 		// 对自己无需射线；对队友允许射线命中目标自身，但不能穿过墙或其他遮挡。
 		FHitResult Hit;
 		if (Candidate != this && GetWorld()->LineTraceSingleByChannel(Hit, EyeLocation, Candidate->GetActorLocation(),
@@ -260,6 +269,7 @@ FmultiplayerCombatTargetPreview AmultiplayerCombatCharacter::GetSkillTargetPrevi
 	return Result;
 }
 
+// 保存已确认的落点与法线；服务器复制该快照，使施法期间的预告圈保持稳定。
 void AmultiplayerCombatCharacter::SetAreaCastTarget(const FVector& Location, const FVector& Normal)
 {
 	ConfirmedAreaTarget = Location;
@@ -268,11 +278,13 @@ void AmultiplayerCombatCharacter::SetAreaCastTarget(const FVector& Location, con
 	if (HasAuthority()) ForceNetUpdate();
 }
 
+// 将快捷槽映射为当前配装技能，再进入同一本地预览入口。
 void AmultiplayerCombatCharacter::BeginSlotTargeting(int32 Slot)
 {
 	BeginSkillTargeting(Progression->GetSlotSkill(Slot));
 }
 
+// 只在拥有者开启或替换预览；可显示拒绝原因，但此时不创建预测激活。
 void AmultiplayerCombatCharacter::BeginSkillTargeting(EMultiplayerCombatSkill Skill)
 {
 	if (!IsLocallyControlled()) return;
@@ -283,6 +295,7 @@ void AmultiplayerCombatCharacter::BeginSkillTargeting(EMultiplayerCombatSkill Sk
 	OnCombatStateChanged.Broadcast();
 }
 
+// 松键/确认时先查询资格与几何，再提交 GAS 请求；完成本次处理后才通知预览变化。
 void AmultiplayerCombatCharacter::ConfirmSkillTargeting()
 {
 	if (!bSkillTargeting) return;
@@ -304,6 +317,7 @@ void AmultiplayerCombatCharacter::ConfirmSkillTargeting()
 	ActivateSkill(Skill);
 }
 
+// 清除本地未提交预览并通知界面，不取消另一个已在执行的能力。
 void AmultiplayerCombatCharacter::CancelSkillTargeting()
 {
 	if (!bSkillTargeting) return;

@@ -28,10 +28,13 @@ class MULTIPLAYER_API AmultiplayerWinArea : public AActor
 	GENERATED_BODY()
 
 public:
+	// 建立仅 Pawn 查询的终点触发器与事件驱动人数组件，不复制 Actor 本身。
 	AmultiplayerWinArea();
 
 protected:
+	// 只在非客户端世界绑定规则，初始状态也执行一次完整评估。
 	virtual void BeginPlay() override;
+	// 对称解除人数和目标订阅，避免关卡卸载触发旧终局判定。
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	// 参数只表示触发原因；判定时重新读取完整当前状态，避免使用可能已经过期的事件参数。

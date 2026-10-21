@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归技能拒绝原因、真实冷却提示、演示豁免和治疗不播放蒙太奇的约定。
+// 使用正式角色与 GAS 状态，不把单世界提示测试说成真实网络拒绝验证。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -19,9 +22,11 @@
 
 namespace
 {
+	// 轻量真实世界用于读写 ASC 和加载正式角色，避免界面测试引入无关 AI 行为。
 	struct FSkillFeedbackWorld
 	{
 		UWorld* World;
+		// 初始化真实角色可运行的独立世界，不创建导航或自主 AI。
 		FSkillFeedbackWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -32,12 +37,14 @@ namespace
 			World->InitializeActorsForPlay(FURL());
 			World->SetBegunPlay(true);
 		}
+		// 按正式 EndPlay 结束角色与效果，并清除世界上下文。
 		~FSkillFeedbackWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
 			GEngine->DestroyWorldContext(World);
 			World->DestroyWorld(false);
 		}
+		// 按指定正式类生成角色，支持原生规则与保存动画配置分别作为对照。
 		AmultiplayerCombatCharacter* Character(UClass* Class = AmultiplayerCombatCharacter::StaticClass())
 		{
 			FActorSpawnParameters Params;

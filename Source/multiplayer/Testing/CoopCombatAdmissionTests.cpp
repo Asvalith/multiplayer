@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归无副作用预检、真实 GAS 准入与提交时复核的一致性。
+// 使用正式授予的 Spec／能力实例，不另写一份测试资格规则替代被测链路。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -24,6 +27,7 @@ namespace
 	{
 		UWorld* World;
 
+		// 建立仅支持角色与 GAS 的独立世界，排除导航和 AI 对准入结果的干扰。
 		FCombatAdmissionWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -35,6 +39,7 @@ namespace
 			World->SetBegunPlay(true);
 		}
 
+		// 结束角色和世界上下文，避免委托或活动效果泄漏到下一用例。
 		~FCombatAdmissionWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -42,6 +47,7 @@ namespace
 			World->DestroyWorld(false);
 		}
 
+		// 创建有真实控制器的玩家并启用飞行，确保移动资格不因无地面夹具而被拒绝。
 		AmultiplayerCombatCharacter* Player()
 		{
 			FActorSpawnParameters Params;
@@ -56,6 +62,7 @@ namespace
 		}
 	};
 
+	// 优先查询已授予的主实例，与运行时准入入口一致；无实例时才读取能力默认对象。
 	UGameplayAbility* GrantedAbility(const FGameplayAbilitySpec& Spec)
 	{
 		UGameplayAbility* Instance = Spec.GetPrimaryInstance();

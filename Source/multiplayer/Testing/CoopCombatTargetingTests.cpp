@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归预览几何与实际命中的一致性、真实按键确认／取消以及通知重入后的技能切换。
+// 单世界使用正式查询、输入和碰撞；双端权威一致性仍由网络场景验证。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -53,6 +56,7 @@ namespace
 		TFunction<void()> AfterTick;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 按用例准备真实地面和输入所需 GameMode，未提供地面时保留正式落点拒绝。
 		explicit FCombatTargetingWorld(bool bGround = true, bool bInput = false)
 		{
 			UWorld::InitializationValues Values;
@@ -75,6 +79,7 @@ namespace
 			if (bGround) Box(FVector(0, 0, -10), FVector(5000, 5000, 10));
 		}
 
+		// 正常结束角色与输入玩家，销毁世界并恢复帧号，避免残留确认或动画任务。
 		~FCombatTargetingWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -97,6 +102,7 @@ namespace
 			return Actor;
 		}
 
+		// 创建真实控制角色，按需选择第三人称类以验证镜头退距不改变技能有效射程。
 		AmultiplayerCombatCharacter* Player(const FVector& Location = FVector(0, 0, 100), bool bThirdPerson = false)
 		{
 			FActorSpawnParameters Spawn;
@@ -113,6 +119,7 @@ namespace
 			return Character;
 		}
 
+		// 生成关闭 AI 与移动的真实靶敌，让预览集合及实际伤害只由被测技能改变。
 		AmultiplayerCombatEnemy* Enemy(const FVector& Location)
 		{
 			const FTransform Transform(FRotator::ZeroRotator, Location);
@@ -149,6 +156,7 @@ namespace
 			return Cast<AmultiplayerCombatCharacter>(PC->GetPawn());
 		}
 
+		// 小步推进真实输入、技能与弹体，可在每帧之后采样实际预览或粒子状态。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0; Elapsed < Seconds;)
@@ -171,6 +179,7 @@ namespace
 		ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 	}
 
+	// 查询预览实际收集的弱目标集合，不重新计算另一套距离或阵营规则。
 	bool PreviewHas(const FmultiplayerCombatTargetPreview& Preview, AmultiplayerCombatCharacter* Target)
 	{
 		return Preview.AffectedTargets.Contains(TWeakObjectPtr<AmultiplayerCombatCharacter>(Target));
@@ -563,6 +572,26 @@ bool FCoopCombatHealPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Out-of-range wounded ally is not healed"), TooFar->GetHealth(), 5.f);
 	TestEqual(TEXT("Enemy never becomes a healing candidate"), Hostile->GetHealth(), 5.f);
 	TestEqual(TEXT("Valid healing consumes one configured cost"), Caster->GetEnergy(), 100.f - Caster->GetSkillRule(EMultiplayerCombatSkill::Heal).Cost);
+
+	// 第二次扣费通知使旧目标满血，生效阶段必须重新选择，而不是消费提交前的目标快照。
+	auto* ASC = Caster->GetAbilitySystemComponent();
+	ASC->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(CombatTags::Cooldown_Heal));
+	int32 CostNotifications = 0;
+	const auto Listener = ASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetEnergyAttribute())
+		.AddLambda([Selected, &CostNotifications](const FOnAttributeChangeData& Change)
+		{
+			if (Change.NewValue >= Change.OldValue) return;
+			++CostNotifications;
+			Selected->GetAbilitySystemComponent()->SetNumericAttributeBase(
+				UmultiplayerCombatAttributes::GetHealthAttribute(), Selected->GetMaxHealth());
+		});
+	Caster->Heal();
+	ASC->GetGameplayAttributeValueChangeDelegate(UmultiplayerCombatAttributes::GetEnergyAttribute()).Remove(Listener);
+	TestEqual(TEXT("The second heal commits exactly one cost notification"), CostNotifications, 1);
+	TestEqual(TEXT("Post-commit selection heals the next eligible ally"), Near->GetHealth(), 100.f);
+	TestEqual(TEXT("The cost notification filled the previous target"), Selected->GetHealth(), 100.f);
+	TestEqual(TEXT("Both heals consume only their own configured cost"), Caster->GetEnergy(),
+		100.f - 2.f * Caster->GetSkillRule(EMultiplayerCombatSkill::Heal).Cost);
 	return true;
 }
 
@@ -949,6 +978,7 @@ bool FCoopCombatProjectileConfiguredRangeTest::RunTest(const FString& Parameters
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaReleaseInputTest, "Multiplayer.Combat.Targeting.AreaReleaseInput",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 按住再松开 R 经真实输入栈确认一次，验证资源、伤害和范围 Cue。
 bool FCoopCombatAreaReleaseInputTest::RunTest(const FString& Parameters)
 {
 	return RunAreaInputCase(*this, EAreaInputCase::Release);
@@ -956,6 +986,7 @@ bool FCoopCombatAreaReleaseInputTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaConfirmReleaseInputTest, "Multiplayer.Combat.Targeting.AreaConfirmThenReleaseInput",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 已用确认键释放后再松开 R，旧 release 输入不能重复施放。
 bool FCoopCombatAreaConfirmReleaseInputTest::RunTest(const FString& Parameters)
 {
 	return RunAreaInputCase(*this, EAreaInputCase::ConfirmThenRelease);
@@ -963,6 +994,7 @@ bool FCoopCombatAreaConfirmReleaseInputTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaCancelReleaseInputTest, "Multiplayer.Combat.Targeting.AreaCancelThenReleaseInput",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 右键取消后再松开 R，旧 release 不得重新确认或结算。
 bool FCoopCombatAreaCancelReleaseInputTest::RunTest(const FString& Parameters)
 {
 	return RunAreaInputCase(*this, EAreaInputCase::CancelThenRelease);
@@ -970,6 +1002,7 @@ bool FCoopCombatAreaCancelReleaseInputTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaSlotReleaseInputTest, "Multiplayer.Combat.Targeting.AreaSwappedSlotReleaseInput",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 交换装配槽位后仍按实际槽位确认范围技能，不把键位写死为技能分类。
 bool FCoopCombatAreaSlotReleaseInputTest::RunTest(const FString& Parameters)
 {
 	return RunAreaInputCase(*this, EAreaInputCase::SwappedSlot);
@@ -977,6 +1010,7 @@ bool FCoopCombatAreaSlotReleaseInputTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaReleaseParticleTest, "Multiplayer.Combat.Targeting.AreaReleaseInputParticle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+// 在非空渲染后端检查真实输入释放后的范围粒子，不只断言 Cue 请求已发出。
 bool FCoopCombatAreaReleaseParticleTest::RunTest(const FString& Parameters)
 {
 	return RunAreaInputCase(*this, EAreaInputCase::Release, true);

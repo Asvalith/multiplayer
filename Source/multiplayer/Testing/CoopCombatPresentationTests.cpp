@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归保存的角色、动画、HUD 和 Cue 的实际配置及可观察表现状态。
+// 不修改共享素材来让断言通过；碰撞／粒子状态检查仍不代替最终实机观感验收。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -70,12 +73,13 @@
 
 namespace
 {
-	// 真实碰撞世界只验证相机计算，不创建窗口、控制器或网络连接，也不修改蓝图资产。
+	// 提供真实碰撞和保存蓝图实例，供相机、动作及特效断言使用，不创建网络连接或修改资产。
 	struct FCombatPresentationWorld
 	{
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 创建带碰撞地面的独立表现世界，保留保存资产的正式构造与运行状态。
 		FCombatPresentationWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -89,6 +93,7 @@ namespace
 			Box(FVector(0, 0, -10), FVector(5000, 5000, 10));
 		}
 
+		// 对称结束表现对象和世界，清除其计时器并恢复全局帧号。
 		~FCombatPresentationWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -97,6 +102,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 推进两个真实帧，让初始化、动画和组件更新完成后再读取断言值。
 		void Advance()
 		{
 			for (int32 Frame = 0; Frame < 2; ++Frame)
@@ -121,6 +127,7 @@ namespace
 			return Result;
 		}
 
+		// 创建真实场景阻挡，供相机避让与表现定位查询使用。
 		AActor* Box(const FVector& Location, const FVector& Extent)
 		{
 			AActor* Actor = World->SpawnActor<AActor>();

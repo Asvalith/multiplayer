@@ -6,7 +6,6 @@
 #include "GameFramework/Actor.h"
 #include "multiplayerCoopKey.generated.h"
 
-class AmultiplayerCoopKey;
 class USceneComponent;
 class USphereComponent;
 class UStaticMeshComponent;
@@ -23,6 +22,7 @@ class MULTIPLAYER_API AmultiplayerCoopKey : public AActor
 	GENERATED_BODY()
 
 public:
+	// 建立展示网格与服务器拾取触发器，默认关闭无必要的 Tick。
 	AmultiplayerCoopKey();
 
 	/** 仅服务器调用。附着失败不改变钥匙状态；成功后不可再次拾取。 */
@@ -31,13 +31,17 @@ public:
 	// 仅未安装时旋转展示网格，不修改根组件位置。
 	virtual void Tick(float DeltaSeconds) override;
 
+	// 复制安装标记，位置与附件关系继续使用 Actor 原生复制。
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
+	// 服务器绑定拾取回调，各端应用初始安装状态。
 	virtual void BeginPlay() override;
+	// 对称解绑拾取触发器，避免关卡卸载期间继续处理事件。
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	// 仅服务器接受仍可行动的玩家触碰，转交预绑定插槽执行安装。
 	UFUNCTION()
 	void HandlePickupOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -88,6 +92,7 @@ class MULTIPLAYER_API AmultiplayerKeySocket : public AActor
 	GENERATED_BODY()
 
 public:
+	// 建立插槽外观与安装展示点；不自行检测玩家碰撞。
 	AmultiplayerKeySocket();
 
 	/**

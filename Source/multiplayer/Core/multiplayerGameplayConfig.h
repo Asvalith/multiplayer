@@ -4,7 +4,10 @@
 
 #include "CoreMinimal.h"
 
-/** 启动时读取的纯 C++ 玩法参数；默认值也是配置无效时的完整回退值。 */
+/**
+ * 启动时读取的纯 C++ 玩法参数；默认值也是配置无效时的完整回退值。
+ * 本结构不保存回合状态，也不复制客户端配置来覆盖服务器规则。
+ */
 struct MULTIPLAYER_API FmultiplayerGameplayConfig
 {
 	/** 完整校验 JSON 后一次性应用；任何读取或校验失败都会恢复整套默认值。 */

@@ -35,6 +35,7 @@ class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerControlle
 public:
 	// 只表示本控制器已经过服务器接纳，不把进入 PlayingState 当作恢复完成。
 	bool HasAcceptedCombatSession() const { return bCombatSessionAccepted; }
+	// 所属客户端提交一次不透明票据；服务器负责校验与恢复，不接受客户端资源或位置。
 	UFUNCTION(Server, Reliable)
 	void ServerEstablishCombatSession(FGuid Ticket, uint64 Operation);
 
@@ -64,15 +65,18 @@ public:
 	void ReceiveCoopGameWon();
 
 protected:
+	// 保留死亡后 Enter 重开入口，具体终局资格仍由服务器复核。
 	virtual void SetupInputComponent() override;
 	// 控制器生命周期与引擎通知。
 	/** 实例进入 World 时订阅退出失败回执，与 EndPlay 对称。 */
 	virtual void BeginPlay() override;
 	/** 控制器退出当前 World 时解除请求回执订阅；界面清理由 HUD 负责。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	/** 控制状态进入 Playing 时确认本地连接就绪，不承担实例初始化。 */
+	/** 进入 Playing 时发起所属连接握手，服务器接纳回执才确认就绪。 */
 	virtual void BeginPlayingState() override;
+	// 基类销毁/解绑 Pawn 之前保存个人状态，防止 Logout 时已无 Pawn 可读。
 	virtual void Destroyed() override;
+	// 覆盖常规玩家离开时的 Pawn 销毁入口，复用同一幂等保存流程。
 	virtual void PawnLeavingGame() override;
 	/** 接收服务器的返回菜单通知，转入项目自己的退出入口。 */
 	virtual void ClientReturnToMainMenuWithTextReason_Implementation(
@@ -89,6 +93,7 @@ protected:
 
 private:
 	friend class AmultiplayerGameMode;
+	// 可靠回执只发所属连接；客户端按 Controller、World 与操作编号过滤旧结果。
 	UFUNCTION(Client, Reliable)
 	void ClientCombatSessionResult(FGuid Ticket, uint64 Operation, const FText& Error, bool bRetryable);
 	// 正常服务器切图清旧回合票据；失败恢复时服务器可重新下发仍然有效的本局票据。

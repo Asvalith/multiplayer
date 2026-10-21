@@ -1,4 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+
+// 回归会话接纳后启动波次、容量预留、终局停止以及补给一次性领取。
+// 使用真实 GameMode／GameState 和生成器；复制结构检查不冒充双端传输验收。
+
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
@@ -28,6 +32,7 @@
 
 namespace
 {
+	// 隔离波次调度与实际战斗，记录已出生及待生成名额，防止容量统计只看存活 Actor。
 	struct FEncounterFixture
 	{
 		UWorld* World;
@@ -41,6 +46,7 @@ namespace
 		TSubclassOf<AmultiplayerCombatEnemy> SpawnEnemyClass = AmultiplayerCombatEnemy::StaticClass();
 		int32 PeakReserved = 0;
 
+		// 建立正式规则世界并监听真实生成器，按用例关闭敌人决策以隔离容量断言。
 		FEncounterFixture(ENetMode Mode = NM_DedicatedServer)
 		{
 			UWorld::InitializationValues Values;
@@ -88,6 +94,7 @@ namespace
 				}
 			}));
 		}
+		// 移除生成监听并销毁世界，确保旧波次计时器不会影响后续用例。
 		~FEncounterFixture()
 		{
 			World->RemoveOnActorSpawnedHandler(SpawnHandler);
@@ -96,8 +103,11 @@ namespace
 			World->DestroyWorld(false);
 			GFrameCounter = PreviousFrame;
 		}
+		// 返回夹具的权威规则入口，不构造测试专用的接纳替代物。
 		AmultiplayerGameMode* Mode() const { return World->GetAuthGameMode<AmultiplayerGameMode>(); }
+		// 返回真实共享状态，检查波次和终局快照。
 		AmultiplayerCoopGameState* State() const { return World->GetGameState<AmultiplayerCoopGameState>(); }
+		// 计算存活敌人加待生成项的总预留，作为容量上限的独立观察值。
 		int32 Reserved() const
 		{
 			int32 Count = 0;
@@ -105,6 +115,7 @@ namespace
 			for (auto Weak : Spawners) if (auto* Spawner = Weak.Get()) Count += Spawner->GetPendingSpawnCount();
 			return Count;
 		}
+		// 小步推进正式生成计时器，同时记录全过程容量峰值，避免只检查最终数量。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0.f; Elapsed < Seconds;)
@@ -116,6 +127,7 @@ namespace
 				Elapsed += Step;
 			}
 		}
+		// 建立真实控制器／角色拥有关系，但保持未接纳，等待正式会话 Claim。
 		AmultiplayerCoopPlayerController* Player(int32 Index)
 		{
 			FActorSpawnParameters Params;
@@ -131,11 +143,13 @@ namespace
 			Pawn->GetCharacterMovement()->SetComponentTickEnabled(false);
 			return PC;
 		}
+		// 通过正式会话入口接纳控制器，不直接改 ready 标记触发波次。
 		bool Accept(AmultiplayerCoopPlayerController* PC)
 		{
 			FGuid Ticket; FText Error; bool Retryable = false;
 			return Mode()->ClaimCombatSession(PC, FGuid(), Ticket, Error, Retryable);
 		}
+		// 在正式 BeginPlay 前配置波次数量和容量，使测试走实际启动与生成链路。
 		AmultiplayerCombatEncounter* Encounter(int32 Cap = 8, TArray<int32> Sizes = {3, 4, 5})
 		{
 			const FTransform Transform(FVector(0.f, 0.f, 100.f));
@@ -151,6 +165,7 @@ namespace
 			Result->FinishSpawning(Transform);
 			return Result;
 		}
+		// 通过权威目标快照发布胜负，观察正式终局订阅者是否停止波次和技能。
 		void FinishRound(bool bWin)
 		{
 			auto Snapshot = State()->GetObjectiveState();
@@ -161,10 +176,12 @@ namespace
 			State()->ApplyAuthoritativeState(Snapshot);
 		}
 	};
+	// 读取控制器实际占有的战斗角色，避免测试保留已被替换的旧 Pawn。
 	AmultiplayerCombatCharacter* Pawn(AmultiplayerCoopPlayerController* Controller)
 	{
 		return Controller ? Cast<AmultiplayerCombatCharacter>(Controller->GetPawn()) : nullptr;
 	}
+	// 经 ASC 设置测试初值，仍触发正式属性约束与通知链。
 	void SetResources(AmultiplayerCombatCharacter* Player, float Health, float Energy)
 	{
 		auto* ASC = Player->GetAbilitySystemComponent();
@@ -175,6 +192,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopEncounterAdmissionTest, "Multiplayer.Combat.Encounter.AdmissionAndPreview",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 专服等两人、单机允许一人预览；重复接纳通知不得重复启动首波。
 bool FCoopEncounterAdmissionTest::RunTest(const FString&)
 {
 	for (ENetMode NetMode : {NM_DedicatedServer, NM_Standalone})
@@ -203,6 +221,7 @@ bool FCoopEncounterAdmissionTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopEncounterWavesTest, "Multiplayer.Combat.Encounter.ThreeWavesAndCapacity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 三波数量按配置生成，满容量时等待死亡释放名额，结束后不补出第四波。
 bool FCoopEncounterWavesTest::RunTest(const FString&)
 {
 	FEncounterFixture Fixture;
@@ -235,6 +254,7 @@ bool FCoopEncounterWavesTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopEncounterPendingTest, "Multiplayer.Combat.Encounter.PendingSpawnReservations",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 尚未出生的旧波次请求也占容量，交错计时器不能让总预留越过上限。
 bool FCoopEncounterPendingTest::RunTest(const FString&)
 {
 	FEncounterFixture Fixture;
@@ -259,6 +279,7 @@ bool FCoopEncounterPendingTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopEncounterTerminalTest, "Multiplayer.Combat.Encounter.TerminalStopsTasksAndAI",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 胜利或失败均停止真实 AI、在途技能和后续生成，晚创建的波次对象也不得重启。
 bool FCoopEncounterTerminalTest::RunTest(const FString&)
 {
 	for (bool bWin : {true, false})
@@ -313,6 +334,7 @@ bool FCoopEncounterTerminalTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatSupplyTest, "Multiplayer.Combat.Encounter.SupplyAuthorityAndReentry",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 真实补给先认领再应用 GE，重入触发只能给一人结算，倒地和终局不能绕过资格。
 bool FCoopCombatSupplyTest::RunTest(const FString&)
 {
 	FEncounterFixture Fixture;
@@ -368,6 +390,7 @@ bool FCoopCombatSupplyTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopEncounterSnapshotTest, "Multiplayer.Combat.Encounter.ReplicatedSnapshotContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 检查正式复制字段和 OnRep 契约，已领取补给晚加入时隐藏而不是重放领取事件。
 bool FCoopEncounterSnapshotTest::RunTest(const FString&)
 {
 	FEncounterFixture Fixture;

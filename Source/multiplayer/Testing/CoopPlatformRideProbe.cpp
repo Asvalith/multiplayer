@@ -13,6 +13,9 @@
 #include "Net/UnrealNetwork.h"
 #include "Testing/CoopRideTestCharacter.h"
 
+// 动态载人测试：服务器布置平台与测试角色，两端在相同阶段采样站立、行走、反向和起跳。
+// 不替代正式平台复制或 CMC 校正；输出的是运动/校正证据，不保证像素或镜头观感通过。
+
 namespace
 {
 	const FVector RideOrigin(30000, 8000, 2000);
@@ -27,6 +30,7 @@ namespace
 	}
 }
 
+// 将原场景蓝图移动参数一致应用到两端测试 Pawn，避免测试默认值差异制造伪校正。
 void FCoopRideMovementSettings::Apply(UCharacterMovementComponent* Movement) const
 {
 	Movement->MaxWalkSpeed = MaxWalkSpeed;
@@ -36,12 +40,14 @@ void FCoopRideMovementSettings::Apply(UCharacterMovementComponent* Movement) con
 	Movement->BrakingDecelerationFalling = FallingBraking;
 }
 
+// 继承测试协调字段并同步同一套实验移动参数，不复制逐帧采样数组。
 void ACoopPlatformRideProbe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ACoopPlatformRideProbe, MovementSettings);
 }
 
+// 仅开发期启用 PostPhysics 采样，确保平台与角色本帧移动均已完成。
 ACoopPlatformRideProbe::ACoopPlatformRideProbe()
 {
 #if !UE_BUILD_SHIPPING
@@ -51,6 +57,7 @@ ACoopPlatformRideProbe::ACoopPlatformRideProbe()
 #endif
 }
 
+// 按测试阶段采样本端实际基座/位移，客户端注入正常移动和跳跃输入，四秒后冻结同窗指标。
 void ACoopPlatformRideProbe::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -162,6 +169,7 @@ void ACoopPlatformRideProbe::Tick(float DeltaSeconds)
 #endif
 }
 
+// 校验样本数与真实行为完成：站稳、行走距离、反向位移或实际跳起后落回平台。
 bool ACoopPlatformRideProbe::IsSegmentValid() const
 {
 	if (Samples < 10 || Elapsed <= 0 || !Rider.IsValid()) return false;
@@ -176,6 +184,7 @@ bool ACoopPlatformRideProbe::IsSegmentValid() const
 	return true;
 }
 
+// 导出冻结采样窗口与历史 Move/校正证据，保留不可比基座变更和丢弃计数而不伪造误差。
 TSharedRef<FJsonObject> ACoopPlatformRideProbe::MakeMetrics() const
 {
 	auto Metrics = MakeShared<FJsonObject>();
@@ -402,6 +411,7 @@ void UCoopNetTestDriver::MotionServerTick(UWorld* World)
 	if (Phase == TEXT("Complete") && Receipts.Contains(TEXT("Complete"))) Finish(true);
 }
 
+// 所属客户端等真实平台基座和参数就绪后独立观察并回执，不由服务器写入运动阶段角色位置。
 void UCoopNetTestDriver::MotionClientTick(UWorld* World)
 {
 	auto* MotionProbe = Cast<ACoopPlatformRideProbe>(Probe.Get());

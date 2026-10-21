@@ -11,17 +11,18 @@
  * 网络发送由所属 Actor 负责；此处没有自行复制属性，也没有处理障碍绕行、挤压或客户端预测。
  */
 
-/** 声明组件能执行 Tick，但把默认状态设为静止，等收到有效移动目标后才开启。 */
+// 默认静止；收到有效目标且尚未到达时才开启 PrePhysics 移动。
 UmultiplayerTransporterComponent::UmultiplayerTransporterComponent()
 {
-	// 组件具备 Tick 能力，但初始关闭；只有目标端点发生变化且尚未到达时才开启。
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
 	// (*) CMC 在 PrePhysics 更新。基座移动不能晚于乘客，否则其自动 Tick 依赖会跳过本组件。
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 }
 
-//tick组件在服务器上执行匀速插值移动，客户端位置由 ReplicateMovement 复制
+// 服务器沿固定轨道匀速移动并回填基座速度，客户端只消费所属 Actor 的运动复制。
+// 设计：平台是 CMC 的移动基座，不能像门一样只复制开关；实际位移/DeltaTime 才是继承速度。
+// 轨迹和位置复制交给服务器与原生 Actor/CMC，不另建客户端平台预测或历史位置回滚。
 void UmultiplayerTransporterComponent::TickComponent(
 	float DeltaTime,
 	ELevelTick TickType,
@@ -29,7 +30,7 @@ void UmultiplayerTransporterComponent::TickComponent(
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	//移动规则只在服务器执行。客户端位置来自所属 Actor 的 ReplicateMovement，不能再计算第二份轨迹。
+	// 客户端不能再生成第二条轨迹，与服务器复制位置互相覆盖。
 	AActor* Owner = GetOwner();
 	if (Owner == nullptr || !Owner->HasAuthority())
 	{
@@ -37,26 +38,23 @@ void UmultiplayerTransporterComponent::TickComponent(
 		return;
 	}
 
-	//VInterpConstantTo 使用固定世界速度，不会因距离不同改变速度，便于关卡设计者预估到达时间。
+	// 固定世界速度不随剩余距离改变，关卡可据此预估到达时间。
 	const FVector TargetLocation = GetTargetLocation();
-	//****注意这个匀速插值函数！！！
 	const FVector NewLocation = FMath::VInterpConstantTo(
 		Owner->GetActorLocation(),
 		TargetLocation,
 		DeltaTime,
 		MoveSpeed);
 
-	//更新owner的位置，手动计算速度
 	const FVector OldLocation = Owner->GetActorLocation();
 	Owner->SetActorLocation(NewLocation, false);
 	USceneComponent* Root = Owner->GetRootComponent();
 	if (Root != nullptr)
 	{
-
-		//手动回填owner速度，避免乘客在 Tick 里读取到错误的零速度。
+		// 非物理根组件需手动回填真实位移速度，供乘客 CMC 正确继承。
 		Root->ComponentVelocity = DeltaTime > SMALL_NUMBER? (Owner->GetActorLocation() - OldLocation) / DeltaTime : FVector::ZeroVector;
 	}
-	// 到达容差内后贴合端点并结束本次运动；Tick 关闭后不再计算速度，避免乘客在 Tick 里读取到错误的零速度。
+	// 用实际移动后的坐标判断到位，再贴合端点并清零速度；不能只检查计划位置。
 	if (Owner->GetActorLocation().Equals(TargetLocation, 0.5f))
 	{
 		Owner->SetActorLocation(TargetLocation, false);
@@ -64,46 +62,42 @@ void UmultiplayerTransporterComponent::TickComponent(
 	}
 }
 
-//移动控制逻辑
+// 服务器提交期望端点：过滤重复在途目标，遵守单程配置，未对齐时恢复运动。
 void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 {
-	//玩家及服务器校验
 	AActor* Owner = GetOwner();
 	if (Owner == nullptr || !Owner->HasAuthority())
 	{
 		return;
 	}
 
-	//防重入校验
+	// 同目标在途通知不重启 Tick；静止时仍需复核实际位置。
 	if (bTransportActive == bNewActive && bMoving)
 	{
-		//已在前往同一端点时不重复重启 Tick；同值但未移动的情况仍在下面检查实际位置。
 		return;
 	}
 
-	//失活不自动返回
+	// 单程模式忽略失活，包括途中取消和到达后的释放。
 	if (!bReturnWhenInactive && !bNewActive)
 	{
-		//单程平台关闭返回功能后，失活事件不应把已经到达终点的平台拉回起点。
 		return;
 	}
 
-	//记录新状态；如果已经位于目标点，FinishMovement 会直接关闭 Tick。
+	// 先提交新端点选择，再复核位置；即使同值，外力移开后也能恢复对齐。
 	bTransportActive = bNewActive;
 	if (Owner->GetActorLocation().Equals(GetTargetLocation(), 0.5f))
 	{
-		// 同值通知只有在真实位于目标点时才是空操作；未对齐时仍会恢复移动。
 		FinishMovement();
 		return;
 	}
 
-	// 只有尚未位于目标点时才开启 Tick；已经到达的重复通知会在上面直接 FinishMovement。
+	// 未到位才开启移动，并请求尽快发送当前权威位置。
 	bMoving = true;
 	SetComponentTickEnabled(true);
 	Owner->ForceNetUpdate();
 }
 
-//初始化配置固定目标点
+// 服务器在首次运动前缓存固定世界端点与配置速度，不在 Tick 中重复查配置。
 void UmultiplayerTransporterComponent::ConfigureWorldTargets(const FVector& InStartLocation,const FVector& InActiveLocation)
 {
 	AActor* Owner = GetOwner();
@@ -111,24 +105,23 @@ void UmultiplayerTransporterComponent::ConfigureWorldTargets(const FVector& InSt
 	{
 		return;
 	}
-	//调用方在平台开始移动前传入固定世界坐标，避免附着的 Arrow 端点随 Owner 一起移动。
+	// 固定世界坐标不能继续追读附着 Arrow，否则终点会随 Owner 移动。
 	StartLocation = InStartLocation;
 	ActiveLocation = InActiveLocation;
 	MoveSpeed = FmultiplayerGameplayConfig::Get(this).PlatformMoveSpeed;
 }
 
-//停止移动：最后更新速度为零，关闭 Tick，关闭状态，避免每帧重复比较位置
+// 结束运动时先提交零基座速度，再关闭运动标记与 Tick；最终位置由调用者贴合。
 void UmultiplayerTransporterComponent::FinishMovement()
 {
 	AActor* Owner = GetOwner();
 	USceneComponent* Root = Owner != nullptr ? Owner->GetRootComponent() : nullptr;
-	//同步最终速度，更新状态，并关闭 Tick
+	// 先清零并请求最后一帧复制，乘客不能在平台停止后继续继承旧速度。
 	if (Root != nullptr)
 	{
 		Root->ComponentVelocity = FVector::ZeroVector;
 		if (bMoving) Owner->ForceNetUpdate();
 	}
-	// 关闭 Tick 是静止机关最直接的性能收益；无需每帧反复比较已经相等的位置。
 	bMoving = false;
 	SetComponentTickEnabled(false);
 }

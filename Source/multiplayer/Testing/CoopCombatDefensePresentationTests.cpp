@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归 Q 的持续防御状态、动作到期与正式蓝图／HUD 接线，不用替代界面掩盖缺失配置。
+// 状态与动画均来自保存的角色资产；本组不是实机视觉或网络传输验收。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -43,6 +46,7 @@ namespace
 		UmultiplayerCombatAnimInstance* Animation = nullptr;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 加载保存的玩家及动画图，关闭移动干扰并预热真实动画实例。
 		FDefensePresentationWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -66,6 +70,7 @@ namespace
 			Advance(.3f);
 		}
 
+		// 结束表现对象及世界，恢复帧号，不让动作和定时器跨测试残留。
 		~FDefensePresentationWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -74,6 +79,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 推进正式世界与动画更新，让持续效果自然到期而非手动删标签代替计时。
 		void Advance(float Seconds)
 		{
 			for (int32 Frame = 0; Frame < FMath::CeilToInt(Seconds / .02f); ++Frame)
@@ -83,6 +89,7 @@ namespace
 			}
 		}
 
+		// 立即从真实角色读取动画状态，断言标签变化后的姿态选择。
 		void ReadState()
 		{
 			Animation->NativeUpdateAnimation(.02f);
@@ -155,6 +162,7 @@ bool FCoopCombatDefensePoseLifecycleTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDefensePoseExpiryTest, "Multiplayer.Combat.DefensePoseExpiry",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 防御 GE 自然到期后，角色标签和动画防御姿态必须一起退出。
 bool FCoopCombatDefensePoseExpiryTest::RunTest(const FString& Parameters)
 {
 	FDefensePresentationWorld Fixture;

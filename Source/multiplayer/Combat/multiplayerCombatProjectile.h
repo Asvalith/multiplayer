@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 弹体模块只接受服务器技能发射并权威扫掠，客户端按分段直线快照重建飞行表现。
+// 弹反改变来源与轨迹段但不延寿；命中、异步特效和定时器分别在自己的生命周期清理。
 
 #pragma once
 
@@ -52,9 +54,9 @@ class MULTIPLAYER_API AmultiplayerCombatProjectile : public AActor
 	GENERATED_BODY()
 
 public:
+	// 配置复制快照和服务器扫掠组件，客户端 Tick 在发射状态就绪后才启用。
 	AmultiplayerCombatProjectile();
 
-	// 仅服务器技能调用；先初始化来源和速度，再开启投射物碰撞。
 	// 普攻的服务器出手入口：检查真实弹源并延迟生成，不接受客户端起点、命中对象或伤害 RPC。
 	static bool FireFromSkill(AmultiplayerCombatCharacter& Source, float Damage, float Speed,
 		const FRotator* AimSnapshot = nullptr);
@@ -69,9 +71,13 @@ public:
 	bool TryReflectFrom(AmultiplayerCombatCharacter* Defender, const FHitResult& Hit);
 
 protected:
+	// 服务器启用真实碰撞，客户端关闭模拟并等待轨迹和服务器时钟。
 	virtual void BeginPlay() override;
+	// 客户端只按时钟更新显示位置，不在 Tick 中命中或结算。
 	virtual void Tick(float DeltaSeconds) override;
+	// 取消重试、弹反恢复和异步加载，销毁本地特效组件。
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	// 新通道或弹反后复制最新轨迹段，不逐帧复制位置。
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	// Owner 与发射状态可能分批到达；所属角色就绪后补齐表现，不新增网络字段。
 	virtual void OnRep_Owner() override;
@@ -80,12 +86,15 @@ private:
 	// RepNotify 与 BeginPlay 汇合到一个入口，兼容状态早于 BeginPlay 或 GameState 到达。
 	UFUNCTION()
 	void OnRep_LaunchState();
+	// 时钟尚未到达时短时重试；就绪后开启客户端轨迹显示。
 	void StartClientTrajectory();
+	// 由服务器段起点、速度和弹龄定位；到期只隐藏，不自行权威销毁。
 	void UpdateClientTrajectory();
 	// 原扫掠的重叠/阻挡通知可能仍在派发；离开该栈后才恢复新轨迹，不能处理旧方向的命中。
 	void ResumeReflectedTrajectory();
 	// 已预载直接绑定，否则只发一次异步请求；不在 Tick 中查找或同步加载资产。
 	void RequestProjectileEffect();
+	// 资源到达时复查弹龄并附着特效，过期或已命中的弹体不补播。
 	void AttachProjectileEffect();
 
 	// 场景用阻挡命中，角色用重叠命中，两种引擎回调共用结算入口。
@@ -93,6 +102,7 @@ private:
 	void HandleHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
 		UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit);
 
+	// 仅敌方角色重叠进入命中入口，出生重叠用当前弹体位置补足表现上下文。
 	UFUNCTION()
 	void HandleOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
 		UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);

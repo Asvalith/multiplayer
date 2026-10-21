@@ -25,6 +25,9 @@
 #include "Player/multiplayerCoopPlayerController.h"
 #include "UObject/UnrealType.h"
 
+// 本局短线恢复联机夹具：真实断开连接后经票据握手恢复个人状态、效果剩余时间与成长。
+// 覆盖同一服务器进程的内存快照，不宣称服务器重启、永久存档或进行中半技能恢复。
+
 namespace
 {
 	const FVector ResumeLocation(0, 0, 4000);
@@ -33,10 +36,12 @@ namespace
 	constexpr float ReconnectEffectDuration = 30.f;
 	constexpr float ReconnectDownedDuration = 45.f;
 
+	// 以成长身份标识连接前后是否同一档案，不把不透明会话票据写进日志。
 	FString ReconnectProfileMarker(const AmultiplayerCombatCharacter* Character)
 	{
 		return TEXT("ReconnectProfile:") + Character->GetProgressionComponent()->GetState().ProfileId.ToString(EGuidFormats::Digits);
 	}
+	// 校验成长状态、属性与真正授予的能力等级一起恢复，避免只恢复界面数字。
 	bool HasReconnectGrowth(AmultiplayerCombatCharacter* Character)
 	{
 		const auto& Growth = Character->GetProgressionComponent()->GetState();
@@ -45,6 +50,7 @@ namespace
 			&& Growth.PassiveLevels[0] == 1 && Growth.EquippedPassive == EMultiplayerCombatPassive::Fortitude
 			&& Character->GetMaxHealth() == 125.f && Dash && Dash->Level == 1;
 	}
+	// 新 Pawn 不能继承旧施法、救援或冲刺任务，持续效果恢复与半技能续跑分开验收。
 	bool NoReconnectHalfAction(AmultiplayerCombatCharacter* Character)
 	{
 		return !Character->IsCasting() && !Character->GetCoopComponent()->IsRescuing()
@@ -76,6 +82,7 @@ namespace
 		return Found;
 	}
 
+	// 服务器准备真实冷却 GE，供断线后验证剩余时间递减，而非恢复时重新免费计时。
 	bool ApplyReconnectCooldowns(AmultiplayerCombatCharacter* Character)
 	{
 		UAbilitySystemComponent* ASC = Character->GetAbilitySystemComponent();
@@ -93,10 +100,12 @@ namespace
 
 	// 只在服务器同一帧创建并销毁临时夹具；直接测试权威入口，不新增业务测试 RPC，票据不进入日志。
 	struct FTicketChecks { bool Active = false, Invalid = false, AckLost = false, RotatedAlias = false; };
+	// 用临时权威控制器检验在线互斥、无效票据和回执丢失轮换；不暴露生产测试 RPC。
 	FTicketChecks CheckReconnectTickets(UWorld* World)
 	{
 		FTicketChecks Result;
 		auto* Mode = World->GetAuthGameMode<AmultiplayerGameMode>();
+		// 只为当前同步用例建立未登录控制器/Pawn，销毁时不得干扰真实玩家登录计数。
 		const auto NewController = [World]()
 		{
 			FActorSpawnParameters Params; Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -139,6 +148,7 @@ namespace
 	}
 }
 
+// DS 准备个人快照和持续效果、关闭真实连接，再核对新 Pawn 恢复、离线结算与终局。
 void UCoopNetTestDriver::ReconnectServerTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING
@@ -372,6 +382,7 @@ void UCoopNetTestDriver::ReconnectServerTick(UWorld* World)
 #endif
 }
 
+// 客户端经历实际断线/重连握手后独立核对恢复；不上传血量、冷却或效果作为权威来源。
 void UCoopNetTestDriver::ReconnectClientTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING

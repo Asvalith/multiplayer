@@ -35,8 +35,12 @@
 #include "Particles/ParticleSystemComponent.h"
 #include "UObject/UObjectIterator.h"
 
+// 基础战斗三进程夹具：覆盖权威命中、所属预测与拒绝、旁观状态和实际预览/特效接线。
+// 属性暂缓、固定站位和数值准备仅为暴露竞态；不进入正式游戏，也不人工伪造客户端回滚。
+
 namespace
 {
+	// 固定数值夹具使用的能力/效果映射；不作为正式技能配置来源。
 	struct FCombatPredictionSkill
 	{
 		TSubclassOf<UGameplayAbility> Ability;
@@ -46,6 +50,7 @@ namespace
 		float EnergyCost;
 	};
 
+	// 将测试技能名映射为真实能力和成本/冷却效果，供核对原生预测 GE。
 	FCombatPredictionSkill PredictionSkill(const FString& Name)
 	{
 		if (Name == TEXT("Attack")) return { UmultiplayerAttackAbility::StaticClass(), UmultiplayerAttackCooldownEffect::StaticClass(),
@@ -74,6 +79,7 @@ namespace
 		{ TEXT("FreshHeal"), TEXT("Heal"), TEXT("Fresh") }
 	};
 
+	// 收集基础战斗夹具的临时状态，死亡/清理断言据此检查不能遗留的效果。
 	FGameplayTagContainer CombatTransientTags()
 	{
 		FGameplayTagContainer Tags(CombatTags::State_Defending);
@@ -86,6 +92,7 @@ namespace
 		return Tags;
 	}
 
+	// 服务器能力实例必须持有真正从客户端收到的预测键，不能只看技能结果已发生。
 	bool HasReceivedPredictionKey(AmultiplayerCombatCharacter* Character, const FString& Skill)
 	{
 		const FGameplayAbilitySpec* Spec = Character->GetAbilitySystemComponent()->FindAbilitySpecFromClass(PredictionSkill(Skill).Ability);
@@ -223,6 +230,7 @@ namespace
 		return true;
 	}
 
+	// 只读核对正式查询返回的枪口、弹体半径、R 半径/目标和防御方向，避免提示与结算几何脱节。
 	bool CombatPreviewsMatchGeometry(AmultiplayerCombatCharacter* Character, AmultiplayerCombatCharacter* Enemy, FString* Details = nullptr)
 	{
 		const FRotator Aim = FRotator(0, (Enemy->GetActorLocation() - Character->GetActorLocation()).Rotation().Yaw, 0);
@@ -251,9 +259,11 @@ namespace
 			&& Area.bValid && bAreaRadius && bAreaTarget && Defend.bValid && bDefenseDirection;
 	}
 
+	// 等两端真实碰撞体、队伍、固定站位与地面均完成复制，不能以延迟固定秒数冒充就绪。
 	bool CombatPreviewFixtureReady(AmultiplayerCombatCharacter* Local, AmultiplayerCombatCharacter* Enemy,
 		bool bPartner, FString& Details)
 	{
+		// 活跃角色与已注册查询碰撞必须同时就绪，否则射线/范围观察没有比较意义。
 		const auto CapsuleReady = [](const AmultiplayerCombatCharacter* Character)
 		{
 			const auto* Capsule = Character ? Character->GetCapsuleComponent() : nullptr;
@@ -301,6 +311,7 @@ namespace
 		return bLocalTransform && bOtherTransform && bEnemyTransform && bTeams && bLocalCapsule && bOtherCapsule && bEnemyCapsule && bGround;
 	}
 
+	// 从正式只读入口获取当前技能冷却，仅用于预览/输入测试等待条件。
 	float TargetingCooldown(const AmultiplayerCombatCharacter* Character, EMultiplayerCombatSkill Skill)
 	{
 		switch (Skill)

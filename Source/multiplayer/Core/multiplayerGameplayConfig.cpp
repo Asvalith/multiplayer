@@ -12,9 +12,10 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
-/// <summary>
-/// **写入口**—— 从外部 JSON 文件加载配置，做层层严格校验，成功则原子生效，失败则回退默认值
-/// </summary>
+// 启动配置层：JSON 只解析一次，运行时读取 GameInstance 中的只读配置。
+// 各进程分别加载；服务器规则以服务器配置为准，本结构不承担运行期状态复制。
+
+// 写入口：完整验证后一次替换配置，失败回退整套默认值，不能混合新旧字段。
 bool FmultiplayerGameplayConfig::LoadFromFile(const FString& FilePath)
 {
 	//失败路径集中记录一次警告，并清除旧配置，避免混用新旧字段。
@@ -151,9 +152,7 @@ bool FmultiplayerGameplayConfig::LoadFromFile(const FString& FilePath)
 	return true;
 }
 
-/// <summary>
-/// 读入口：获取当前世界的游戏配置；如果无法获取则返回默认配置
-/// </summary>
+// 读入口：获取当前世界所属实例的配置，无有效实例时返回只读默认值。
 const FmultiplayerGameplayConfig& FmultiplayerGameplayConfig::Get(const UObject* WorldContext)
 {
 	if (const UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr)

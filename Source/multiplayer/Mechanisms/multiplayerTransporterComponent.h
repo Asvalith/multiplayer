@@ -25,8 +25,10 @@ class MULTIPLAYER_API UmultiplayerTransporterComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
+	// 在 PrePhysics 具备 Tick 能力但默认停用，让移动基座先于乘客 CMC 更新。
 	UmultiplayerTransporterComponent();
 
+	// 仅服务器沿固定世界轨道匀速移动所属 Actor，并回填基座速度；客户端消费 Actor 位置复制。
 	virtual void TickComponent(
 		float DeltaTime,
 		ELevelTick TickType,

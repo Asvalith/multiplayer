@@ -11,6 +11,9 @@
 #include "TimerManager.h"
 #include "UObject/UObjectGlobals.h"
 
+// 本地连接流程层：跨 World 维护连接、有限重试、票据和取消意图。
+// 服务器只通过所属 Controller 校验票据与恢复状态；本实例不接受客户端上传战斗快照。
+
 // 进程初始化：加载本进程配置，并订阅网络失败、跳转失败和地图加载通知。
 void UmultiplayerGameInstance::Init()
 {
@@ -94,6 +97,8 @@ bool UmultiplayerGameInstance::ConnectToServer(const FString& Address)
 }
 
 // 统一提交本地状态与提示，再通知监听者；返回本次提交的编号，不是广播后的最新编号。
+// 设计：OperationRevision 标识本机连接操作，过滤旧 Timer/回执，也隔离广播中的同步取消。
+// 它不对底层网络包排序，不替代服务器的票据和接纳校验。
 uint64 UmultiplayerGameInstance::SetConnectionState(EMultiplayerConnectionState State, const FText& Message)
 {
 	ConnectionState = State;
@@ -150,6 +155,7 @@ void UmultiplayerGameInstance::HandleConnectTimeout(uint64 Revision)
 	if (GetWorld() && GetWorld()->GetNetMode() == NM_Client) ReturnToMainMenu();
 }
 
+// 所属客户端在 PlayingState 准备票据与操作编号，重置握手期限但不提前宣告连接成功。
 bool UmultiplayerGameInstance::PrepareCombatHandshake(AmultiplayerCoopPlayerController* Controller,
 	FGuid& OutTicket, uint64& OutOperation)
 {
@@ -175,6 +181,7 @@ bool UmultiplayerGameInstance::PrepareCombatHandshake(AmultiplayerCoopPlayerCont
 	return true;
 }
 
+// 只消费当前 Controller/World/操作的回执；成功记住轮换票据，失败按服务器原因终止或有限重试。
 bool UmultiplayerGameInstance::CompleteCombatHandshake(AmultiplayerCoopPlayerController* Controller,
 	uint64 Operation, const FGuid& Ticket, const FText& Error, bool bRetryable)
 {
@@ -195,6 +202,7 @@ bool UmultiplayerGameInstance::CompleteCombatHandshake(AmultiplayerCoopPlayerCon
 	return false;
 }
 
+// 接收所属控制器的票据更新：正常切图清除，旧 World 重开失败时可恢复原票据。
 void UmultiplayerGameInstance::SetReconnectTicket(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket)
 {
 	if (!Controller || Controller != GetFirstLocalPlayerController() || Controller->GetWorld() != GetWorld()
@@ -203,7 +211,7 @@ void UmultiplayerGameInstance::SetReconnectTicket(AmultiplayerCoopPlayerControll
 	else ReconnectTickets.Remove(LastServerAddress);
 }
 
-// 本地 Controller 进入 PlayingState 后确认连接；不代表全部复制对象和 UI 已经就绪。
+// 本地 Controller 收到服务器接纳并完成个人恢复后确认连接；不保证所有机关复制和 UI 已就绪。
 void UmultiplayerGameInstance::NotifyClientConnected()
 {
 	UWorld* World = GetWorld();
@@ -337,6 +345,7 @@ void UmultiplayerGameInstance::FailConnection(const FString& Reason)
 }
 
 // 安排下一次重连等待：按配置间隔有限尝试，重复断线通知不重复创建等待。
+// 取舍：只为允许重试的掉线保留有限预算；主动退出不连回，不用无限后台重试掩盖接纳失败。
 void UmultiplayerGameInstance::ScheduleReconnect()
 {
 	// 已经安排等待时保持原计时器，避免重复通知推迟或叠加尝试。
@@ -355,6 +364,7 @@ void UmultiplayerGameInstance::ScheduleReconnect()
 		NSLOCTEXT("Multiplayer", "ReconnectWaiting", "连接中断，等待重试……"));
 	// 等待通知也可能同步触发退出，操作未被替换才真正注册计时器。
 	if (Revision != OperationRevision) return;
+	// 弱绑定实例并检查操作编号，主动退出或新的连接意图会使旧等待失效。
 	GetTimerManager().SetTimer(ReconnectTimerHandle, FTimerDelegate::CreateWeakLambda(this, [this, Revision]
 	{
 		if (Revision == OperationRevision) TryReconnect();

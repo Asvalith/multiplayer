@@ -29,6 +29,9 @@
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
+// 技能生命周期联机夹具：从真实输入/预测到服务器出手，覆盖取消、控制、旧瞄准和移动恢复。
+// 服务器只在准备阶段隔离场景，两客户端独立观察；测试断言不替代正式整局视觉验收。
+
 namespace
 {
 	const FVector LifecycleOrigin(0, 0, 4000);

@@ -17,6 +17,9 @@
 #include "Combat/multiplayerCombatCoop.h"
 #include "Combat/multiplayerCombatPresentation.h"
 
+// 第三人称输入与镜头适配层：本地输入进入父类 GAS 或 CharacterMovement，远端只消费复制。
+// 角色不结算机关与胜负；观察方向、移动朝向和具体施法朝向各按对应系统规则处理。
+
 /*
  * 构造阶段只搭建角色的固定组件和默认移动参数，不读取 World，也不执行任何联网规则。
  * 这些子对象会同时存在于服务器和客户端；真正属于本地玩家的输入映射要等控制器确定后再安装。
@@ -101,7 +104,7 @@ void AmultiplayerCharacter::NotifyControllerChanged()
 
 /*
  * 将 Enhanced Input 的动作绑定到角色行为。调用前提是 Pawn 已被本地控制器接管；
- * 本函数只产生移动输入和视角输入，位置上传、预测与校正仍由 CharacterMovement 负责。
+ * 移动/视角使用 Enhanced Input，技能按键转入父类 GAS 入口；位置预测与校正由 CMC 负责。
  */
 void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
@@ -199,18 +202,22 @@ void AmultiplayerCharacter::ReleaseDefense()
 {
 	ReleaseTargetSlot(1);
 }
+// E 松键仅确认治疗槽位仍在进行的本地预览，不直接应用治疗。
 void AmultiplayerCharacter::ReleaseHeal()
 {
 	ReleaseTargetSlot(2);
 }
+// R 松键确认当前范围槽位预览，范围锁定与服务器校验仍由父类负责。
 void AmultiplayerCharacter::ReleaseArea()
 {
 	ReleaseTargetSlot(3);
 }
+// Shift 松键确认当前冲刺槽位预览，位移仍走 GAS 任务与 CMC。
 void AmultiplayerCharacter::ReleaseDash()
 {
 	ReleaseTargetSlot(4);
 }
+// 松键只属于当前槽位；切换预览或右键取消之后，不允许旧松键确认新技能。
 void AmultiplayerCharacter::ReleaseTargetSlot(int32 Slot)
 {
 	if (IsTargetingSkill() && GetTargetingSkill() == GetProgressionComponent()->GetSlotSkill(Slot)) ConfirmSkillTargeting();

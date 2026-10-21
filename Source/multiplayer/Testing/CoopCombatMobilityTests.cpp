@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归 GAS 冲刺的提交、方向快照、CMC 根运动及中断清理。
+// 本组单世界检查真实移动与生命周期，客户端预测纠正由双端场景另行验证。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -28,6 +31,7 @@ namespace
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 创建可行走和碰撞的真实地面，避免用手动改坐标代替 CMC 冲刺。
 		FCombatMobilityWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -41,6 +45,7 @@ namespace
 			Box(FVector(0, 0, -10), FVector(10000, 10000, 10));
 		}
 
+		// 结束任务和移动组件，销毁世界并恢复全局帧号。
 		~FCombatMobilityWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -49,6 +54,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 小步推进正式 CMC、根运动任务和冷却，观察自然结束或中断后的残留。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0.f; Elapsed < Seconds;)
@@ -60,6 +66,7 @@ namespace
 			}
 		}
 
+		// 创建真实地面或墙体碰撞，让距离与阻挡断言经 CMC 实际扫掠产生。
 		AActor* Box(const FVector& Location, const FVector& Extent)
 		{
 			auto* Actor = World->SpawnActor<AActor>();
@@ -72,6 +79,7 @@ namespace
 			return Actor;
 		}
 
+		// 创建受控玩家并经正式成长入口学习冲刺，不绕过默认未学习规则授予能力。
 		AmultiplayerCombatCharacter* Character(const FVector& Location = FVector(0, 0, 110))
 		{
 			auto* Player = World->SpawnActor<AmultiplayerCombatCharacter>(Location, FRotator::ZeroRotator);
@@ -83,11 +91,13 @@ namespace
 		}
 	};
 
+	// 查询正式冲刺冷却 GE，用句柄数量与剩余时间检查重复扣费和冷却重置。
 	FGameplayEffectQuery DashCooldownQuery()
 	{
 		return FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(CombatTags::Cooldown_Dash));
 	}
 
+	// 通过真实定向事件提交方向，并故意附带无关远坐标验证服务器不信任客户端位置。
 	void SendDashAim(AmultiplayerCombatCharacter* Character, const FRotator& Rotation)
 	{
 		auto* Aim = new FGameplayAbilityTargetData_LocationInfo();

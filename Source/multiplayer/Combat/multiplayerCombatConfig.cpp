@@ -1,10 +1,17 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+
+// 实现静态默认关系、技能查表和资产数值规范化，不承担运行时战斗调度。
+// 关系查询只追加到调用者容器，使项目规则与原生／蓝图规则共同生效。
+
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatTags.h"
 
 // 旧资产未序列化关系字段时也继承这些默认值；不重写地图配置、数值或表现资源。
+// 借鉴 Lyra 的关系映射来减少各技能重复判断，不引入 Experience/GameFeature 或另一套活动能力管理器。
+// 关系只管拥有者准入、阻断与替换；目标是否仍在范围内、被遮挡等条件留在生效时复核。
 UmultiplayerCombatConfig::UmultiplayerCombatConfig()
 {
+	// 只用于构造默认关系行；不在运行中根据活动能力增删映射。
 	const auto Add = [this](FGameplayTag AbilityTag) -> FmultiplayerAbilityTagRelationship&
 	{
 		auto& Relationship = AbilityRelationships.AddDefaulted_GetRef();
@@ -53,6 +60,7 @@ void UmultiplayerCombatConfig::GetAbilityBlockAndCancelTags(const FGameplayTagCo
 		}
 }
 
+// 返回资产中的基础规则引用；角色的成长修正和一次提交快照不保存在此处。
 const FmultiplayerCombatSkillRule& UmultiplayerCombatConfig::GetSkill(EMultiplayerCombatSkill Skill) const
 {
 	switch (Skill)
@@ -65,6 +73,7 @@ const FmultiplayerCombatSkillRule& UmultiplayerCombatConfig::GetSkill(EMultiplay
 	}
 }
 
+// 在资产边界统一限制数值，避免技能执行链反复校验不变配置。
 void UmultiplayerCombatConfig::NormalizeRules()
 {
 	for (FmultiplayerCombatSkillRule* Rule : {&Attack, &Defend, &Heal, &Area, &Dash})
@@ -80,7 +89,6 @@ void UmultiplayerCombatConfig::NormalizeRules()
 	AreaRadius = FMath::Clamp(AreaRadius, 10.f, 1000.f);
 	AreaEffectReferenceRadius = FMath::Clamp(AreaEffectReferenceRadius, 10.f, 5000.f);
 	ProjectileSpeed = FMath::Clamp(ProjectileSpeed, 100.f, 10000.f);
-	DefenseDamageMultiplier = FMath::Clamp(DefenseDamageMultiplier, 0.f, 1.f);
 	DefenseShieldAmount = FMath::Clamp(DefenseShieldAmount, 0.f, 1000.f);
 	BurningDamagePerTick = FMath::Clamp(BurningDamagePerTick, 0.f, 1000.f);
 	BurningDuration = FMath::Clamp(BurningDuration, .05f, 120.f);
@@ -94,8 +102,10 @@ void UmultiplayerCombatConfig::NormalizeRules()
 	RescueRange = FMath::Clamp(RescueRange, 50.f, 500.f);
 }
 
+// 加载完成后规范化已序列化数值，保留资产的对象引用及关系配置。
 void UmultiplayerCombatConfig::PostLoad() { Super::PostLoad(); NormalizeRules(); }
 #if WITH_EDITOR
+// 编辑器改值后立即修正支持范围，使保存的配置可供服务器与预测端共同读取。
 void UmultiplayerCombatConfig::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
 	Super::PostEditChangeProperty(Event);

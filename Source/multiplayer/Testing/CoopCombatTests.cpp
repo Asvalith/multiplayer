@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 战斗基础回归覆盖伤害、技能、弹体、AI 行为和保存地图的真实导航链路。
+// 独立世界与实际地图用例分别声明验收范围，不把资产／状态检查代替真人视觉结论。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -60,6 +63,7 @@ namespace
 		uint64 PreviousFrame = GFrameCounter;
 		TArray<double> ShotTimes;
 		FDelegateHandle SpawnedHandle;
+		// 初始化真实 AI 和碰撞世界并记录发弹时刻，但不为独立夹具创建导航。
 		FCombatTestWorld()
 		{
 			// 原生敌人现在运行真实行为树，独立测试世界也需提供 BTManager 所属的 AISystem。
@@ -76,6 +80,7 @@ namespace
 				if (Actor->IsA<AmultiplayerCombatProjectile>()) ShotTimes.Add(World->GetTimeSeconds());
 			}));
 		}
+		// 移除统计回调，再结束真实 Actor、GAS 和世界，恢复全局帧号。
 		~FCombatTestWorld()
 		{
 			World->RemoveOnActorSpawnedHandler(SpawnedHandle);
@@ -99,6 +104,7 @@ namespace
 			}
 		}
 
+		// 在有限时间内推进正式世界和感知，等待可观察业务结果而非手动调用任务。
 		bool WaitFor(TFunctionRef<bool()> Condition, float Timeout = 1.5f)
 		{
 			for (float Elapsed = 0; Elapsed < Timeout; Elapsed += .02f)
@@ -109,6 +115,7 @@ namespace
 			return Condition();
 		}
 
+		// 正常解除旧 AI 后交给真实玩家控制器，保留阵营与拥有关系的正式判定。
 		APlayerController* Control(AmultiplayerCombatCharacter* Character)
 		{
 			// 阵营筛选用例会将同阵营敌人交给玩家控制，先正常解除它原来的 AI。
@@ -124,6 +131,7 @@ namespace
 			return PC;
 		}
 
+		// 生成真实静止玩家，按用例选择是否接管，隔离未控制角色的资格边界。
 		AmultiplayerCombatCharacter* SpawnPlayer(const FVector& Location, bool bControlled = true)
 		{
 			FActorSpawnParameters Parameters;
@@ -135,6 +143,7 @@ namespace
 			return Player;
 		}
 
+		// 生成正式敌人与其 AI，关闭移动用于射程内决策及攻击节奏测试。
 		AmultiplayerCombatEnemy* SpawnEnemy(const FVector& Location = FVector(0, 0, 100))
 		{
 			FActorSpawnParameters Parameters;
@@ -792,8 +801,10 @@ namespace
 	class FCombatMapAICommand : public IAutomationLatentCommand
 	{
 	public:
+		// 保存自动化断言出口，后续采样由真实地图每帧异步推进。
 		explicit FCombatMapAICommand(FAutomationTestBase* InTest) : Test(InTest) {}
 
+		// 有界检查正式地图的导航、追击、近战与目标失效；返回 true 表示本用例完成。
 		bool Update() override
 		{
 			UWorld* World = AutomationCommon::GetAnyGameWorld();

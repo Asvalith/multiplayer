@@ -48,23 +48,30 @@
 #include "ShaderCompiler.h"
 #endif
 
+// 原地图闯关联机验收与共用截图支持：客户端通过真实输入沿导航游玩，服务器检查原玩法闭环。
+// 视觉夹具辅助只核对既有资产/保存画面，隔离数值夹具通过不等同于原地图整局通过。
+
 namespace
 {
+	// 按关卡稳定实例名读取原有机关，不生成替代 Actor 来绕过场景布局。
 	template<class T> T* EscapeActor(UWorld* World, const TCHAR* Name)
 	{
 		for (TActorIterator<T> It(World); It; ++It) if (It->GetFName() == FName(Name)) return *It;
 		return nullptr;
 	}
+	// 只读反射查询现有机关状态，避免为了测试给业务类增加查询后门。
 	bool EscapeBool(const UObject* Object, const TCHAR* Name)
 	{
 		const auto* Property = Object ? FindFProperty<FBoolProperty>(Object->GetClass(), Name) : nullptr;
 		return Property && Property->GetPropertyValue_InContainer(Object);
 	}
+	// 标记哪些验收阶段需要客户端按真实输入沿导航路线移动。
 	bool EscapeMoveCommand(const FString& Command)
 	{
 		return Command == TEXT("EscapeContact") || Command == TEXT("EscapeClear") || Command == TEXT("EscapeSupply") || Command == TEXT("EscapeKeys12")
 			|| Command == TEXT("EscapeKeys34") || Command == TEXT("EscapeGate") || Command == TEXT("EscapeExit");
 	}
+	// 输出当前输入、地面、禁行与根运动状态，诊断无法行走但不修改移动结果。
 	FString EscapeMovementSnapshot(const AmultiplayerCombatCharacter* Character)
 	{
 		const auto* Movement=Character->GetCharacterMovement();
@@ -125,6 +132,7 @@ bool UCoopNetTestDriver::SetEscapeMove(UWorld* World, const FString& Command,
 #endif
 }
 
+// 通过正式 W 按下/松开切换行走，同值不重复注入；速度与朝向继续由生产输入/CMC 决定。
 void UCoopNetTestDriver::SetEscapeWalking(APlayerController* Controller, bool bWalk)
 {
 	if (bEscapeWalking == bWalk || !Controller) return;
@@ -132,6 +140,7 @@ void UCoopNetTestDriver::SetEscapeWalking(APlayerController* Controller, bool bW
 	bEscapeWalking = bWalk;
 }
 
+// 释放本夹具按住的键、出生观察与碰撞监听，并恢复临时打开的碰撞通知开关。
 void UCoopNetTestDriver::ClearEscapeInput()
 {
 	if (Mode != TEXT("CoopEscape") && !bVisualAcceptance) return;
@@ -155,6 +164,7 @@ void UCoopNetTestDriver::ClearEscapeInput()
 	bEscapeRescueHeld = bEscapeEnterHeld = false;
 }
 
+// 仅显式移动诊断模式绑定胶囊阻挡观察，保存原开关供统一清理，不改变碰撞响应。
 void UCoopNetTestDriver::BindEscapeHitDiagnostics(AmultiplayerCombatCharacter* Character)
 {
 #if !UE_BUILD_SHIPPING
@@ -179,6 +189,7 @@ void UCoopNetTestDriver::BindEscapeHitDiagnostics(AmultiplayerCombatCharacter* C
 #endif
 }
 
+// 限频记录阻挡几何、导航和移动参数，辅助区分真实碰撞与状态禁行，不替玩家解除限制。
 void UCoopNetTestDriver::HandleEscapeCapsuleHit(UPrimitiveComponent* HitComponent,AActor* OtherActor,
 	UPrimitiveComponent* OtherComponent,FVector NormalImpulse,const FHitResult& Hit)
 {
@@ -200,6 +211,7 @@ void UCoopNetTestDriver::HandleEscapeCapsuleHit(UPrimitiveComponent* HitComponen
 #endif
 }
 
+// 等本轮唯一 token 目录内实际 PNG 落盘才确认截图；无渲染时明确记录缺少视觉证据。
 bool UCoopNetTestDriver::CaptureEscapeView(const FString& Name)
 {
 #if !UE_BUILD_SHIPPING
@@ -248,6 +260,7 @@ bool UCoopNetTestDriver::CaptureEscapeView(const FString& Name)
 #endif
 }
 
+// 只校验当前保存的正式地图/角色/HUD/配置与成本开关，不用替代资产制造视觉通过。
 bool UCoopNetTestDriver::PrepareVisualFixture(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING
@@ -316,6 +329,7 @@ bool UCoopNetTestDriver::PrepareVisualFixtureSurface(UWorld* World, Amultiplayer
 #endif
 }
 
+// 视觉验收使用保存的敌人蓝图，纯数值夹具沿用原生类，避免将两种证据混称。
 UClass* UCoopNetTestDriver::CombatFixtureEnemyClass() const
 {
 #if !UE_BUILD_SHIPPING
@@ -324,6 +338,7 @@ UClass* UCoopNetTestDriver::CombatFixtureEnemyClass() const
 	return AmultiplayerCombatEnemy::StaticClass();
 }
 
+// 各客户端核对自己实际角色、HUD、动画/特效配置并等待资源编译，不能只查服务器 CDO。
 bool UCoopNetTestDriver::ValidateVisualFixturePawn(AmultiplayerCombatCharacter* Character)
 {
 #if !UE_BUILD_SHIPPING
@@ -434,6 +449,7 @@ bool UCoopNetTestDriver::CaptureSkillView(const FString& Name, AActor* Subject, 
 	return true;
 }
 
+// 服务器观察原地图战斗、补给、钥匙、机关、撤离与重开，按双端回执推进而非直接写胜负。
 void UCoopNetTestDriver::EscapeServerTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING
@@ -617,6 +633,7 @@ void UCoopNetTestDriver::EscapeServerTick(UWorld* World)
 #endif
 }
 
+// 两客户端依据复制路线使用真实输入移动/施法/救援，独立记录当前状态和截图证据。
 void UCoopNetTestDriver::EscapeClientTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING

@@ -14,6 +14,9 @@
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
+// 合作门规则层：服务器合并不同压力板的状态/玩家与可选钥匙条件，只复制最终开关。
+// 各端根据同一端点配置播放网格过渡，不发送逐帧门位置，也不负责平台承载预测。
+
 //构造函数：初始化组件与配置
 AmultiplayerCoopGate::AmultiplayerCoopGate()
 {
@@ -162,11 +165,13 @@ void AmultiplayerCoopGate::UnbindRequiredPlate(AmultiplayerPressurePlate* Plate)
 	Plate->OnDestroyed.RemoveDynamic(this, &AmultiplayerCoopGate::HandleRequiredPlateDestroyed);
 }
 
+// 压力板开关只是重算触发原因；统一读取当前依赖集合，避免缓存旧事件参数。
 void AmultiplayerCoopGate::HandleRequiredPlateChanged(AmultiplayerPressurePlate* Plate, bool bIsActive)
 {
 	EvaluateGateState();
 }
 
+// 即便板开关未变，人数/成员变化仍可能改变跨板不同玩家数，必须重新评估。
 void AmultiplayerCoopGate::HandleRequiredPlateOccupancyChanged(
 	AmultiplayerPressurePlate* Plate, int32 PlayerCount)
 {
@@ -203,7 +208,7 @@ void AmultiplayerCoopGate::EvaluateGateState()
 	}
 
 	int32 ActivePlateCount = 0;
-	// 跨板按角色去重；内联容量 4 只减少小额分配，不限制人数。
+	// 跨板按角色去重，同一角色触碰两块板不能算两人；内联容量 4 只减少小额分配，不限制人数。
 	TSet<ACharacter*, DefaultKeyFuncs<ACharacter*>, TInlineSetAllocator<4>> DistinctPlayers;
 	TArray<ACharacter*> PlateOccupants;
 	for (const AmultiplayerPressurePlate* Plate : RuntimeRequiredPlates)
@@ -241,6 +246,8 @@ void AmultiplayerCoopGate::EvaluateGateState()
 }
 
 //Replicated函数：当门的状态发生变化时，启用Actor的Tick以更新门的位置
+// 取舍：复制开关、各端按固定端点插值，保证最终状态可恢复，不发送逐帧网格位置。
+// 未同步过渡起始时刻，弱网下两端动画进度可能不同；不将它用于需要精确承载速度的平台。
 void AmultiplayerCoopGate::OnRep_GateOpen()
 {
 	SetActorTickEnabled(true);

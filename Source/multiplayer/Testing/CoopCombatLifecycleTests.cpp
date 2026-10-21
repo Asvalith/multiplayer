@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归起手、出手、收招及取消／死亡后的资源、效果和任务边界。
+// 独立权威世界推进真实 GAS 与 Timer，不将其结果称为弱网预测或完整视觉验收。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -23,6 +26,7 @@ namespace
 		UWorld* World = nullptr;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 建立带真实施法地面的独立世界，使技能仍经正式落点查询和 GE 链路。
 		FCombatLifecycleWorld()
 		{
 			UWorld::InitializationValues Values;

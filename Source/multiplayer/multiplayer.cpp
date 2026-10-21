@@ -5,13 +5,18 @@
 #include "Modules/ModuleManager.h"
 #include "Misc/CoreDelegates.h"
 #include "Testing/CoopNetTestDriver.h"
+
+// 模块入口只注册统一日志，并按测试驱动自身开关启动开发期联机验证。
+// 不持有玩法状态；测试订阅必须在 UObject 清理之前释放，正式规则留在各运行时模块。
+
 // 日志分类只在一个实现文件中定义；各模块引用头文件声明，方便按 LogMultiplayer 筛选双端记录。
 DEFINE_LOG_CATEGORY(LogMultiplayer);
 
-//测试安全性
+// 对称管理开发测试驱动与引擎退出订阅，不替代 GameInstance 的连接生命周期。
 class FMultiplayerModule : public FDefaultGameModuleImpl
 {
 public:
+	// 模块就绪后安装提前退出钩子，再让测试驱动自行判断命令行是否要求运行。
 	virtual void StartupModule() override
 	{
 		FDefaultGameModuleImpl::StartupModule();
@@ -19,6 +24,7 @@ public:
 		TestShutdownHandle = FCoreDelegates::OnEnginePreExit.AddStatic(&StopCoopNetTests);
 		StartCoopNetTests();
 	}
+	// 正常退出或运行中卸载均解除订阅并幂等停止测试，避免遗留根引用和 Tick。
 	virtual void ShutdownModule() override
 	{
 		FCoreDelegates::OnEnginePreExit.Remove(TestShutdownHandle);

@@ -7,6 +7,9 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 
+// 区域人数基础组件：服务器记录物理重叠与玩家资格，供门、压力板、平台和终点复用。
+// 不判断关卡规则、不复制人数；多碰撞体计数和外部订阅只在事件中维护。
+
 //构造函数组件配置
 UmultiplayerPlayerOccupancyComponent::UmultiplayerPlayerOccupancyComponent()
 {
@@ -57,7 +60,7 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(UPrimitiveComponent* InTr
 			}
 		}
 	}
-	//客户端则关闭触发体碰撞，避免重复计数；客户端的玩家资格由 Possess/UnPossess 事件维护。
+	// 客户端关闭触发体碰撞且不维护人数；服务器通过控制器变化事件刷新原地 Possess/UnPossess 资格。
 	else if (BoundTrigger != nullptr && Owner != nullptr)
 	{
 		BoundTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -126,7 +129,7 @@ int32 UmultiplayerPlayerOccupancyComponent::GetPlayerCount() const
 	return PlayerCount;
 }
 
-//查询函数：返回所有有效的玩家角色
+// 查询函数：追加所有有效不同玩家角色，不清空已有输出，供门跨多个区域合并。
 void UmultiplayerPlayerOccupancyComponent::GetOccupyingCharacters(
 	TArray<ACharacter*>& OutCharacters) const
 {
@@ -138,12 +141,14 @@ void UmultiplayerPlayerOccupancyComponent::GetOccupyingCharacters(
 		}
 	}
 }
+// 组件卸载时对称解除触发器与角色订阅，避免长期存在的外部对象再回调旧组件。
 void UmultiplayerPlayerOccupancyComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindTrigger();
 	Super::EndPlay(EndPlayReason);
 }
 
+// 服务器每个物理重叠项增加一次引用，仅不同玩家总数实际改变时通知机关。
 void UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap(
 	UPrimitiveComponent* OverlappedComponent,
 	AActor* OtherActor,
@@ -163,6 +168,7 @@ void UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap(
 	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
 }
 
+// 单个组件离开只递减重叠数；最后一项离开才移除整名角色并解除其外部订阅。
 void UmultiplayerPlayerOccupancyComponent::HandleEndOverlap(
 	UPrimitiveComponent* OverlappedComponent,
 	AActor* OtherActor,

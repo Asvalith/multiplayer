@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归同进程断线恢复的持续效果、离线结算及周期相位，不代替真实网络握手测试。
+// 夹具使用真实 ASC／GE／Timer，恢复资格和断线期间结果由正式业务入口处理。
+
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "AbilitySystemComponent.h"
@@ -20,6 +23,7 @@ namespace
 	{
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
+		// 创建可推进 GAS 与计时器的独立世界，关闭与恢复规则无关的导航和 AI。
 		FCombatRecoveryWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -28,6 +32,7 @@ namespace
 			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
 			World->InitializeActorsForPlay(FURL()); World->SetBegunPlay(true);
 		}
+		// 对称结束测试世界并还原全局帧号，避免周期用例相互影响。
 		~FCombatRecoveryWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
@@ -42,6 +47,7 @@ namespace
 				++GFrameCounter; World->Tick(LEVELTICK_All, Step); Elapsed += Step;
 			}
 		}
+		// 生成禁用决策和移动的真实角色，让恢复用例只观察状态与效果。
 		AmultiplayerCombatCharacter* Character(bool bEnemy = false)
 		{
 			const FTransform Transform(FVector(bEnemy ? -1000 : 1000, 0, 100));
@@ -50,6 +56,7 @@ namespace
 			Pawn->AutoPossessAI = EAutoPossessAI::Disabled; Pawn->FinishSpawning(Transform);
 			Pawn->GetCharacterMovement()->DisableMovement(); return Pawn;
 		}
+		// 先关闭接纳门再经正式入口恢复，不让重建过程临时开放战斗资格。
 		AmultiplayerCombatCharacter* Restore(const FmultiplayerCombatResumeState& Snapshot, float Offline)
 		{
 			auto* Pawn = Character(); Pawn->SetCombatSessionReady(false); Pawn->RestoreResumeState(Snapshot, Offline); return Pawn;
@@ -63,6 +70,7 @@ namespace
 		auto Spec = ASC->MakeOutgoingSpec(Class, 1.f, ASC->MakeEffectContext()); Spec.Data->SetDuration(Duration, true);
 		ASC->ApplyGameplayEffectSpecToTarget(*Spec.Data.Get(), Target->GetAbilitySystemComponent());
 	}
+	// 按真实效果定义统计活动句柄，检查独立来源没有被错误合并或重复恢复。
 	int32 CountRecoveryEffects(AmultiplayerCombatCharacter* Pawn, TSubclassOf<UGameplayEffect> Class)
 	{
 		FGameplayEffectQuery Query; Query.EffectDefinition = Class;

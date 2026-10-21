@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 成长提交遵循“验证快照 → 写状态 → 更新能力与 GE → 通知”的单一路径。
+// 临时战斗状态不在本模块保存；复制、短时重连和长期存档复用相同成长校验。
 
 #include "Combat/multiplayerCombatProgression.h"
 #include "AbilitySystemComponent.h"
@@ -194,6 +196,7 @@ void UmultiplayerCombatProgressionComponent::RefreshBonuses()
 	auto* ASC = Character()->GetAbilitySystemComponent();
 	// 同一装配提交先换完两份 GE，再通知最终聚合值；不能按移除旧 GE 的中间上限扣血。
 	// 最终资源上限统一由 AttributeSet 钳制，成长层不再重复写生命。
+	// 仅合并 GAS 聚合通知，不提供退款事务；换装既不免费回血，也不保留超出最终上限的资源。
 	FScopedAggregatorOnDirtyBatch ReplacingBonuses;
 	if (AppliedLevel != State.Level)
 	{
@@ -249,14 +252,17 @@ void UmultiplayerCombatProgressionComponent::RequestLearnSkill(EMultiplayerComba
 {
 	if (CanRequest()) ServerLearnSkill(Skill);
 }
+// 客户端只提出槽位交换，实际映射由服务器提交后复制回来。
 void UmultiplayerCombatProgressionComponent::RequestEquipSkill(int32 Slot, EMultiplayerCombatSkill Skill)
 {
 	if (CanRequest()) ServerEquipSkill(Slot, Skill);
 }
+// 学习请求只携带被动枚举，不允许客户端提交等级或点数。
 void UmultiplayerCombatProgressionComponent::RequestLearnPassive(EMultiplayerCombatPassive Passive)
 {
 	if (CanRequest()) ServerLearnPassive(Passive);
 }
+// 装配请求与学习分开，服务器负责撤销旧被动和应用新效果。
 void UmultiplayerCombatProgressionComponent::RequestEquipPassive(EMultiplayerCombatPassive Passive)
 {
 	if (CanRequest()) ServerEquipPassive(Passive);

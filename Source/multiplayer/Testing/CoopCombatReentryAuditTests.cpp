@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归真实动画开始、转向通知和激活标签回调中的同步取消／替换。
+// 使用保存角色与实际 ASC，重点保证旧调用栈、旧预测拒绝不接管或终止新一轮动作。
+
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
@@ -34,6 +37,7 @@ namespace
 		FDelegateHandle SpawnObserver;
 		int32 ProjectileCount = 0;
 
+		// 建立可施法地面并记录所有真实弹体出生，取消后立即销毁也不能掩盖错误发弹。
 		FCombatReentryAuditWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -57,6 +61,7 @@ namespace
 			}));
 		}
 
+		// 先移除生成观察者，再结束世界与还原帧号，防止回调跨用例存活。
 		~FCombatReentryAuditWorld()
 		{
 			World->RemoveOnActorSpawnedHandler(SpawnObserver);
@@ -66,6 +71,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 加载保存玩家、真实控制器及持续动画更新，让重入发生在正式蒙太奇通知中。
 		AmultiplayerCombatCharacter* Player()
 		{
 			auto* Class = LoadClass<AmultiplayerCombatCharacter>(nullptr,
@@ -83,6 +89,7 @@ namespace
 			return Character;
 		}
 
+		// 继续推进真实任务，检查取消后不会迟到发弹、伤害或重新启动旧动作。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0; Elapsed < Seconds;)
@@ -138,6 +145,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaMontageStartCancelAudit,
 	"Multiplayer.Combat.ReentryAudit.AreaMontageStartCancel",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// R 动画开始通知内取消时，返回旧播放栈不能残留动作、施法锁或后续范围结算。
 bool FCoopCombatAreaMontageStartCancelAudit::RunTest(const FString& Parameters)
 {
 	FCombatReentryAuditWorld Fixture;

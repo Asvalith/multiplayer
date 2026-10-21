@@ -8,6 +8,9 @@
 #include "Core/multiplayerGameplayConfig.h"
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 
+// 终点条件汇合层：服务器收集当前人数与目标变化，交由 GameMode 一次性判胜。
+// 触发区域不复制，客户端只消费 GameState 终局结果，不能靠本地 Authority 执行规则。
+
 //构造函数：初始化碰撞与组件
 AmultiplayerWinArea::AmultiplayerWinArea()
 {
@@ -27,6 +30,7 @@ AmultiplayerWinArea::AmultiplayerWinArea()
 }
 
 
+// 仅非客户端世界绑定人数与目标事件，覆盖玩家先到终点或钥匙先完成两种顺序。
 void AmultiplayerWinArea::BeginPlay()
 {
 	Super::BeginPlay();

@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 波次只负责何时生成和最多生成多少，敌人能力不在关卡编排中结算。
+// 补给先提交消费状态再修改属性，外部同步通知不能重入领取。
 #include "Combat/multiplayerCombatEncounter.h"
 #include "AbilitySystemComponent.h"
 #include "Combat/multiplayerCombatAttributes.h"
@@ -22,6 +24,7 @@
 UE_DEFINE_GAMEPLAY_TAG_STATIC(SupplyHealth, "Data.Supply.Health");
 UE_DEFINE_GAMEPLAY_TAG_STATIC(SupplyEnergy, "Data.Supply.Energy");
 
+// 默认引用现有小兵蓝图；关卡编排本身无逐帧工作和独立客户端生成。
 AmultiplayerCombatEncounter::AmultiplayerCombatEncounter()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -48,6 +51,7 @@ void AmultiplayerCombatEncounter::BeginPlay()
 	TryStart();
 }
 
+// 接纳事件可重复到达，只有满足人数且尚未启动时才推进第一波。
 void AmultiplayerCombatEncounter::TryStart()
 {
 	if (bStarted || bStopped || !EnemyClass || WaveSizes.IsEmpty()) return;
@@ -59,6 +63,7 @@ void AmultiplayerCombatEncounter::TryStart()
 	StartNextWave();
 }
 
+// 每次从弱引用和真实生命状态重算，避免重复死亡/销毁通知造成计数漂移。
 int32 AmultiplayerCombatEncounter::GetLivingEnemyCount() const
 {
 	int32 Count = 0;
@@ -96,6 +101,7 @@ void AmultiplayerCombatEncounter::StartNextWave()
 		GetWorldTimerManager().SetTimer(WaveTimer, this, &ThisClass::StartNextWave, FMath::Max(5.f, WaveInterval));
 }
 
+// 出生后才登记实体并监听状态，终局不再接收晚到的出生回调。
 void AmultiplayerCombatEncounter::RegisterEnemy(AmultiplayerCombatEnemy* Enemy)
 {
 	if (bStopped || !IsValid(Enemy)) return;
@@ -104,7 +110,9 @@ void AmultiplayerCombatEncounter::RegisterEnemy(AmultiplayerCombatEnemy* Enemy)
 	Enemy->OnDestroyed.AddUniqueDynamic(this, &ThisClass::HandleEnemyDestroyed);
 	PublishState();
 }
+// 属性或生命阶段变化只触发一次当前快照重算，不直接增减计数。
 void AmultiplayerCombatEncounter::HandleEnemyChanged() { PublishState(); }
+// 移除销毁对象及其他已失效引用，之后发布同一权威计数。
 void AmultiplayerCombatEncounter::HandleEnemyDestroyed(AActor* Actor)
 {
 	Enemies.RemoveAll([Actor](auto Weak) { return !Weak.IsValid() || Weak.Get() == Actor; });
@@ -145,6 +153,7 @@ void AmultiplayerCombatEncounter::StopEncounter()
 	if (bStarted) PublishState();
 }
 
+// 退出先停出生和战斗，再解除所有本关卡订阅，不让旧关卡继续发布状态。
 void AmultiplayerCombatEncounter::EndPlay(EEndPlayReason::Type Reason)
 {
 	StopEncounter();
@@ -162,6 +171,7 @@ void AmultiplayerCombatEncounter::EndPlay(EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
+// 一个即时 GE 同时定义生命和能量加法，最终上限约束仍在 AttributeSet。
 UmultiplayerCombatSupplyEffect::UmultiplayerCombatSupplyEffect()
 {
 	for (bool bHealth : {true, false})
@@ -173,6 +183,7 @@ UmultiplayerCombatSupplyEffect::UmultiplayerCombatSupplyEffect()
 	}
 }
 
+// 触发器只识别 Pawn 重叠，视觉网格不参与碰撞或权威领取判定。
 AmultiplayerCombatSupply::AmultiplayerCombatSupply()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -200,6 +211,7 @@ AmultiplayerCombatSupply::AmultiplayerCombatSupply()
 	Label->SetHiddenInGame(true);
 }
 
+// 只有服务器安装领取回调，各端立即按已知消费状态校正表现。
 void AmultiplayerCombatSupply::BeginPlay()
 {
 	Super::BeginPlay();
@@ -223,16 +235,19 @@ void AmultiplayerCombatSupply::HandleOverlap(UPrimitiveComponent*, AActor* Other
 	Spec.Data->SetSetByCallerMagnitude(SupplyEnergy, FMath::Max(0.f, EnergyAmount));
 	ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 }
+// 以消费位统一驱动隐藏和碰撞，客户端永远不保留领取触发器。
 void AmultiplayerCombatSupply::OnRep_Consumed()
 {
 	SetActorHiddenInGame(bConsumed);
 	Trigger->SetCollisionEnabled(HasAuthority() && !bConsumed ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 }
+// 只同步一次性消费结果，补给资源由角色属性的现有复制链路传递。
 void AmultiplayerCombatSupply::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AmultiplayerCombatSupply, bConsumed);
 }
+// 解绑服务器重叠回调后交还 Actor 生命周期，不追加任何领取结算。
 void AmultiplayerCombatSupply::EndPlay(EEndPlayReason::Type Reason)
 {
 	Trigger->OnComponentBeginOverlap.RemoveDynamic(this, &ThisClass::HandleOverlap);

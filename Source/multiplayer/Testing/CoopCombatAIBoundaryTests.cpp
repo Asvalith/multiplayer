@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归感知、行为树、近战技能与控制状态之间的职责边界。
+// 夹具推进真实系统并记录生成行为；无导航用例不声称已经验收寻路追击画面。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -41,6 +44,7 @@ namespace
 		int32 ProjectileCount = 0;
 		TArray<double> EnemySpawnTimes;
 
+		// 创建带感知和碰撞的世界，同时记录真实弹体及敌人生成时间。
 		FCombatAIBoundaryWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -58,6 +62,7 @@ namespace
 			}));
 		}
 
+		// 先解除生成监听，再结束世界和还原帧号，防止测试统计串到下一用例。
 		~FCombatAIBoundaryWorld()
 		{
 			World->RemoveOnActorSpawnedHandler(SpawnedHandle);
@@ -81,6 +86,7 @@ namespace
 			}
 		}
 
+		// 有界推进真实 AI／GAS，等待业务可观察条件，不直接调用被测决策回调。
 		bool WaitFor(TFunctionRef<bool()> Condition, float Timeout = 1.5f)
 		{
 			for (float Elapsed = 0; Elapsed < Timeout; Elapsed += .02f)
@@ -91,6 +97,7 @@ namespace
 			return Condition();
 		}
 
+		// 创建带控制器和 PlayerState 的真实目标，固定移动以隔离感知与近战判定。
 		AmultiplayerCombatCharacter* SpawnPlayer()
 		{
 			FActorSpawnParameters Spawn;
@@ -136,6 +143,7 @@ namespace
 			return true;
 		}
 
+		// 创建真实阻挡碰撞，检查出手阶段是否重新验证视线，而非伪造判定结果。
 		AActor* BlockMeleeLine(const FVector& Location)
 		{
 			AActor* Actor = World->SpawnActor<AActor>();

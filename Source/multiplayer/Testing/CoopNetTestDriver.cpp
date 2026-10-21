@@ -24,12 +24,17 @@
 #include "Player/multiplayerCoopPlayerController.h"
 #include "Serialization/JsonSerializer.h"
 
+// 开发期三进程测试协调器：Probe 只复制测试阶段/对象并回传断言，业务仍走正式入口。
+// 受命令行与非 Shipping 开关约束；夹具、超时和自动退出不属于正常游戏运行逻辑。
+
 namespace
 {
 	UCoopNetTestDriver* Driver = nullptr;
+	// 测试阶段使用进程单调墙钟，不把客户端本地 World 时间当服务器时间。
 	double Now() { return FPlatformTime::Seconds(); }
 }
 
+// 开发期探针始终相关，确保两条连接能观察测试协调状态；普通玩法不生成它。
 ACoopNetTestProbe::ACoopNetTestProbe()
 {
 #if !UE_BUILD_SHIPPING
@@ -39,6 +44,7 @@ ACoopNetTestProbe::ACoopNetTestProbe()
 #endif
 }
 
+// 仅注册测试阶段、观察对象与自动行走路线，不代替正式玩法状态复制。
 void ACoopNetTestProbe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -48,6 +54,7 @@ void ACoopNetTestProbe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ACoopNetTestProbe, EscapeRoute);
 }
 
+// Owned Probe 将所属客户端断言交给服务器协调器，后者仍核对回执来源并去重。
 void ACoopNetTestProbe::ServerReceipt_Implementation(const FString& Name, bool bPassed, const FString& Detail)
 {
 #if !UE_BUILD_SHIPPING
@@ -55,6 +62,7 @@ void ACoopNetTestProbe::ServerReceipt_Implementation(const FString& Name, bool b
 #endif
 }
 
+// 模块启动入口：只有显式命令行选择才创建并 Root 测试驱动，技能展示另有独立开关。
 void StartCoopNetTests()
 {
     StartCoopSkillPresentationReview();
@@ -69,6 +77,7 @@ void StartCoopNetTests()
 #endif
 }
 
+// 引擎预退出或模块卸载时幂等清理驱动，释放 Tick、委托、按键和 Root。
 void StopCoopNetTests()
 {
     StopCoopSkillPresentationReview();
@@ -82,6 +91,7 @@ void StopCoopNetTests()
 #endif
 }
 
+// 读取本次模式、角色、唯一 token 与时限并校验组合，再安装测试轮询；不接管正式连接规则。
 void UCoopNetTestDriver::Start()
 {
 #if !UE_BUILD_SHIPPING
@@ -122,6 +132,7 @@ void UCoopNetTestDriver::Start()
 #endif
 }
 
+// 无论成功、失败或外部退出都解除测试自己的监听与输入，不留下暂缓复制或按住按键。
 void UCoopNetTestDriver::Stop()
 {
 	ClearCombatSelfHealFixture();
@@ -146,6 +157,7 @@ void UCoopNetTestDriver::Stop()
 	bCombatMovementInputHeld = false;
 }
 
+// 在本进程选取已 BeginPlay 的 Game 世界，避开编辑器预览和尚未初始化的地图。
 UWorld* UCoopNetTestDriver::FindWorld() const
 {
 	if (GEngine) for (const FWorldContext& Context : GEngine->GetWorldContexts())
@@ -156,6 +168,7 @@ UWorld* UCoopNetTestDriver::FindWorld() const
 	return nullptr;
 }
 
+// 输出携带模式、端角色、token 和阶段的结构化记录，外层脚本据此核对三进程证据。
 void UCoopNetTestDriver::Emit(const FString& Status, const FString& Detail, TSharedPtr<FJsonObject> Extra) const
 {
 	TSharedRef<FJsonObject> Event = Extra.IsValid() ? Extra.ToSharedRef() : MakeShared<FJsonObject>();
@@ -171,6 +184,7 @@ void UCoopNetTestDriver::Emit(const FString& Status, const FString& Detail, TSha
 	UE_LOG(LogTemp, Display, TEXT("COOP_TEST %s"), *Json);
 }
 
+// 提交本进程测试阶段并重置阶段时钟，不改变任何正式玩法状态。
 void UCoopNetTestDriver::SetPhase(const FString& Value)
 {
 	Phase = Value;
@@ -178,6 +192,7 @@ void UCoopNetTestDriver::SetPhase(const FString& Value)
 	Emit(TEXT("STAGE"));
 }
 
+// 服务器更新阶段后同步两个 Probe，客户端再按各自观察结果回执。
 void UCoopNetTestDriver::SetCommand(const FString& Command)
 {
 	SetPhase(Command);
@@ -185,6 +200,7 @@ void UCoopNetTestDriver::SetCommand(const FString& Command)
 	if (PartnerProbe.IsValid()) { PartnerProbe->Stage = Command; PartnerProbe->ForceNetUpdate(); }
 }
 
+// 记录一个可定位的断言，失败立即结束测试流程而不是继续产生伪成功。
 void UCoopNetTestDriver::Assert(const FString& Name, bool bPassed, const FString& Detail)
 {
 	TSharedRef<FJsonObject> Extra = MakeShared<FJsonObject>();
@@ -194,6 +210,7 @@ void UCoopNetTestDriver::Assert(const FString& Name, bool bPassed, const FString
 	if (!bPassed) Finish(false, Name + TEXT(": ") + Detail);
 }
 
+// 客户端对每个名称只提交一次真实观察，同时记录本地断言；不代替另一端观察。
 void UCoopNetTestDriver::SendReceipt(const FString& Name, bool bPassed, const FString& Detail)
 {
 	if (!Probe.IsValid() || SentReceipts.Contains(Name)) return;
@@ -202,6 +219,7 @@ void UCoopNetTestDriver::SendReceipt(const FString& Name, bool bPassed, const FS
 	Probe->ServerReceipt(Name, bPassed, Detail);
 }
 
+// 服务器按 Probe 所属连接验证回执来源并去重，禁止一端重复回执冒充双端成功。
 void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FString& Detail, ACoopNetTestProbe* Source)
 {
 	if (!bServer || bDone) return;
@@ -213,6 +231,7 @@ void UCoopNetTestDriver::Receipt(const FString& Name, bool bPassed, const FStrin
 	if (!bPassed) Assert(Name, false, Detail);
 }
 
+// 仅结束一次测试，先释放临时观察/输入，再记录最终结果；进程退出由后续 Tick 延迟处理。
 void UCoopNetTestDriver::Finish(bool bPassed, const FString& Detail)
 {
 	if (bDone) return;
@@ -244,6 +263,7 @@ void UCoopNetTestDriver::Finish(bool bPassed, const FString& Detail)
 	Emit(TEXT("DONE"), Detail, Extra);
 }
 
+// 开发期轮询等待游戏世界、约束总体/视觉时限，再按本进程角色分派场景，完成后延迟退出。
 bool UCoopNetTestDriver::Tick(float)
 {
 #if !UE_BUILD_SHIPPING
@@ -266,6 +286,7 @@ bool UCoopNetTestDriver::Tick(float)
 	return true;
 }
 
+// 按首次 Partner 的稳定网络 ID 查控制器，避免重开后靠登录顺序误认玩家。
 APlayerController* UCoopNetTestDriver::PartnerPlayer(UWorld* World) const
 {
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
@@ -274,6 +295,7 @@ APlayerController* UCoopNetTestDriver::PartnerPlayer(UWorld* World) const
 	return nullptr;
 }
 
+// 等 Partner 身份已建立后选择另一名拥有角色的远端玩家作为主测试端。
 APlayerController* UCoopNetTestDriver::PrimaryPlayer(UWorld* World) const
 {
 	APlayerController* Partner = PartnerPlayer(World);
@@ -283,6 +305,7 @@ APlayerController* UCoopNetTestDriver::PrimaryPlayer(UWorld* World) const
 	return nullptr;
 }
 
+// DS 等待两名玩家实际接纳与各自 Probe 就绪，再运行所选场景；测试清场不属于正常玩法。
 void UCoopNetTestDriver::ServerTick(UWorld* World)
 {
 	if (Phase == TEXT("Boot"))
@@ -352,6 +375,7 @@ void UCoopNetTestDriver::ServerTick(UWorld* World)
 	if (bDone && PartnerProbe.IsValid()) { PartnerProbe->Stage = TEXT("Complete"); PartnerProbe->ForceNetUpdate(); }
 }
 
+// 第一客户端独立连接、观察复制并回执，不能只凭服务器或另一客户端成功代判通过。
 void UCoopNetTestDriver::PartnerTick(UWorld* World)
 {
 	if (World->GetNetMode() != NM_Client)
@@ -390,6 +414,7 @@ void UCoopNetTestDriver::PartnerTick(UWorld* World)
 	}
 }
 
+// 主测试客户端经正式连接入口入场，重连后重新取得自己拥有的 Probe，再分派当前场景。
 void UCoopNetTestDriver::ClientTick(UWorld* World)
 {
 	if (World->GetNetMode() != NM_Client)

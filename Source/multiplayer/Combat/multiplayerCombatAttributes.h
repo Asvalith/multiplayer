@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 声明持续属性、复制通知与伤害计算器，不保存输入、技能阶段或界面状态。
+// cpp 统一约束属性范围，并消费服务器伤害；GAS 负责聚合值和预测核对。
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -14,7 +17,7 @@
 	GAMEPLAYATTRIBUTE_VALUE_SETTER(PropertyName) \
 	GAMEPLAYATTRIBUTE_VALUE_INITTER(PropertyName)
 
-// 血量和能量是持续状态；IncomingDamage 仅用于服务器一次伤害结算，不向客户端复制。
+// 血量、能量和护盾是持续状态；IncomingDamage 是一次性伤害入口，不向客户端复制。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerCombatAttributes : public UAttributeSet
 {
@@ -31,10 +34,10 @@ public:
 	virtual void PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue) override;
 	// 基础值与聚合值使用同一份范围规则，直接设置属性也不能把越界基础值留在聚合器中。
 	virtual void PreAttributeBaseChange(const FGameplayAttribute& Attribute, float& NewValue) const override;
-	// 上限已提交后再压回现有护盾；直接 Base setter 与 GE 修改上限走同一个收尾。
+	// 上限提交后钳制对应生命、能量或护盾，直接 setter 与持续 GE 移除走同一收尾。
 	virtual void PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue) override;
 
-	// 效果执行后消费伤害、应用防御减伤并约束治疗结果。
+	// 效果执行后一次性消费伤害，先判正面格挡再扣盾／血，并约束直接属性效果。
 	virtual void PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data) override;
 
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Health, Category = "Combat|Attributes")
@@ -94,6 +97,7 @@ private:
 	// 护盾及上限都通过 GAS RepNotify 更新订阅者与预测账本。
 	UFUNCTION()
 	void OnRep_Shield(const FGameplayAttributeData& OldShield);
+	// 护盾上限的复制也交 GAS 核对，不在 HUD 单独保存上限。
 	UFUNCTION()
 	void OnRep_MaxShield(const FGameplayAttributeData& OldMaxShield);
 };
@@ -104,7 +108,9 @@ class MULTIPLAYER_API UmultiplayerCombatDamageExecution : public UGameplayEffect
 {
 	GENERATED_BODY()
 public:
+	// 注册来源攻击力快照与目标实时护甲捕获，不在构造阶段执行伤害。
 	UmultiplayerCombatDamageExecution();
+	// 输出有限、非负的 IncomingDamage，具体格挡和属性消耗留给属性集提交。
 	virtual void Execute_Implementation(const FGameplayEffectCustomExecutionParameters& Parameters,
 		FGameplayEffectCustomExecutionOutput& Output) const override;
 };

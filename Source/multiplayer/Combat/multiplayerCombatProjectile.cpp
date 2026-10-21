@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 服务器生成、碰撞和结算，客户端只重建直线轨迹并加载表现，不接管命中结果。
+// 命中先关碰撞再广播伤害；弹反等旧扫掠通知退出后才恢复新方向。
 
 #include "Combat/multiplayerCombatProjectile.h"
 

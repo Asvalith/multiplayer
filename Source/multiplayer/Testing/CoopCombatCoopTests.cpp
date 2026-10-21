@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归倒地、救援独占、引导打断和终局规则，并检查正式倒地动作的生命周期。
+// 单世界用例验证业务与 RepNotify 契约；实际传输另由双客户端场景验收。
+
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
@@ -36,6 +39,7 @@ namespace
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 按用例选择真实 GameMode 和端类型，建立可推进救援与动作计时的独立世界。
 		FCombatCoopWorld(bool bWithGameMode = false,ENetMode NetMode=NM_Standalone)
 		{
 			UWorld::InitializationValues Values;
@@ -59,6 +63,7 @@ namespace
 			if (NetMode!=NM_Standalone) World->WorldType=EWorldType::PIE;
 		}
 
+		// 对称结束世界和对象生命周期，并恢复测试前帧号。
 		~FCombatCoopWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -67,6 +72,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 小步推进正式 GAS 任务、倒地计时和表现更新，不直接调用完成回调。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0.f; Elapsed < Seconds;)
@@ -78,6 +84,7 @@ namespace
 			}
 		}
 
+		// 生成受控角色并使用独立短时配置，避免修改共享资产或等待完整线上时长。
 		AmultiplayerCombatCharacter* Character(const FVector& Location, bool bEnableDowned = false,UClass* Class=nullptr)
 		{
 			auto* Character = World->SpawnActor<AmultiplayerCombatCharacter>(Class ? Class : AmultiplayerCombatCharacter::StaticClass(),Location, FRotator::ZeroRotator);
@@ -94,6 +101,7 @@ namespace
 			return Character;
 		}
 
+		// 创建真实视线阻挡，验证救援过程会复核遮挡而不是只检查初始距离。
 		AActor* Wall(const FVector& Location)
 		{
 			auto* Actor = World->SpawnActor<AActor>();
@@ -107,6 +115,7 @@ namespace
 		}
 	};
 
+	// 经正式伤害 GE 造成致死结果，让倒地与死亡按属性通知链触发。
 	void LethalDamage(AmultiplayerCombatCharacter* Character)
 	{
 		auto* ASC = Character->GetAbilitySystemComponent();
@@ -115,6 +124,7 @@ namespace
 		ASC->ApplyGameplayEffectSpecToSelf(*Damage.Data.Get());
 	}
 
+	// 同时观察救援组件和 GAS 标签，防止结束后只清理了其中一份状态。
 	bool HasRescueState(AmultiplayerCombatCharacter* Character)
 	{
 		return Character->GetCoopComponent()->IsRescuing()
@@ -429,6 +439,7 @@ bool FCoopCombatTeamDefeatTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDownedPresentationTest,"Multiplayer.Combat.Coop.DownedPresentation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 正式角色倒地、获救、死亡及 EndPlay 均正确维护同一动作实例，不残留延迟表现回调。
 bool FCoopCombatDownedPresentationTest::RunTest(const FString&)
 {
 	FCombatCoopWorld Fixture;
@@ -510,6 +521,7 @@ bool FCoopCombatDownedPresentationTest::RunTest(const FString&)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDownedPresentationServerTest,"Multiplayer.Combat.Coop.DownedPresentationDedicatedServer",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// 专服仍执行真实倒地／死亡规则，但不启动仅供画面使用的倒地蒙太奇。
 bool FCoopCombatDownedPresentationServerTest::RunTest(const FString&)
 {
 	FCombatCoopWorld Fixture(false,NM_DedicatedServer);

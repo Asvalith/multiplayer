@@ -1,3 +1,5 @@
+// 编辑器离线构建与窄修复工具：生成项目表现副本，明确区分只读验证和显式保存。
+// 动画、HUD、特效与行为树只做资产接线；运行时技能、伤害和网络规则仍由生产代码负责。
 #include "Testing/CombatAssetBuildCommandlet.h"
 
 #if WITH_EDITOR
@@ -158,8 +160,11 @@ const TCHAR* MontageNames[] = { TEXT("AM_Attack"), TEXT("AM_Heal"), TEXT("AM_Dea
 
 // 编译蓝图与动画构建可能执行 GC，本次输入和输出都显式保持存活。
 TArray<TStrongObjectPtr<UObject>> References;
+// 保持输入与输出对象跨编译 GC 存活，离线操作结束后集中释放。
 template<typename T> T* Keep(T* Object) { if (Object) References.Emplace(Object); return Object; }
+// 从长包名构造同名资产对象路径，避免各构建步骤手工拼接规则不一致。
 FString ObjectPath(const FString& Package) { return Package + TEXT(".") + FPackageName::GetLongPackageAssetName(Package); }
+// 加载并保留对象供本次离线操作使用，不在这里保存或改写源包。
 template<typename T> T* Load(const FString& Package) { return Keep(LoadObject<T>(nullptr, *ObjectPath(Package))); }
 
 // 只保存调用方显式传入的新包，不 SaveAll，不保存源动画、原骨架或地图。
@@ -177,6 +182,7 @@ bool Save(UObject* Object)
 		*FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension()), Args);
 }
 
+// 只编译并报告错误/警告，不自动保存；调用方决定允许写入的目标包。
 bool Compile(UBlueprint* Blueprint)
 {
 	FCompilerResultsLog Results;
@@ -192,6 +198,7 @@ bool FixCombatInput()
 {
 	const FString HUDPackage = TEXT("/Game/Combat/UI/BP_CombatHUD");
 	UBlueprint* HUD = Load<UBlueprint>(HUDPackage);
+	// 明确失败原因并停止保存，遇到未知蓝图结构不猜测接线。
 	const auto Fail = [](const TCHAR* Reason)
 	{
 		UE_LOG(LogCombatAssetBuild, Error, TEXT("COMBAT_INPUT_FIX %s; existing HUD was not saved."), Reason);
@@ -228,6 +235,7 @@ bool FixCombatInput()
 		return Fail(TEXT("Expected one connected, existing BeginPlay execution chain"));
 	UEdGraph* Graph = Begin->GetGraph();
 	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	// 验证唯一路径而不修改连线，重复执行时只接受工具上次留下的结构。
 	const auto Linked = [](const UEdGraphPin* A, const UEdGraphPin* B)
 	{
 		return A && B && A->LinkedTo.Num() == 1 && A->LinkedTo.Contains(B);
@@ -256,6 +264,7 @@ bool FixCombatInput()
 	UFunction* InputFunction = UWidgetBlueprintLibrary::StaticClass()->FindFunctionByName(TEXT("SetInputMode_GameOnly"));
 	UFunction* OwnerFunction = AHUD::StaticClass()->FindFunctionByName(TEXT("GetOwningPlayerController"));
 	if (!InputFunction || !OwnerFunction) return Fail(TEXT("Required engine input functions are unavailable"));
+	// 创建固定名称的引擎调用节点，只放在已确认的 BeginPlay 前缀。
 	const auto AddCall = [Graph, Begin](FName Name, UFunction* Function, int32 OffsetX, int32 OffsetY)
 	{
 		UK2Node_CallFunction* Node = NewObject<UK2Node_CallFunction>(Graph, Name);
@@ -326,6 +335,7 @@ UIKRetargeter* PrepareRetargeter(USkeletalMesh* SourceMesh, USkeletalMesh* Targe
 	return Processor->IsInitialized() && Processor->GetFKChainPairs().Num() >= 6 ? Retargeter : nullptr;
 }
 
+// 烘焙真实重定向骨轨；已有副本只核验，不通过改 Skeleton 指针冒充兼容。
 UAnimSequence* Bake(int32 Index, USkeletalMesh* SourceMesh, USkeletalMesh* TargetMesh, UIKRetargeter* Retargeter)
 {
 	UAnimSequence* Source = Load<UAnimSequence>(Sources[Index]);
@@ -398,6 +408,7 @@ UAnimMontage* Montage(int32 Index, USkeleton* Skeleton, const TArray<UAnimSequen
 	return Save(Result) ? Result : nullptr;
 }
 
+// 逐 Pin 验证移动缓存、上半身动作槽和骨骼过滤的真实连通，不只依赖节点存在。
 bool HasCombatUpperBodyLayer(const UAnimGraphNode_LayeredBoneBlend* Layer)
 {
 	if (!Layer || Layer->Node.LayerSetup.Num() != 1 || Layer->Node.LayerSetup[0].BranchFilters.Num() != 1
@@ -590,6 +601,7 @@ bool InsertDefensePose(UAnimBlueprint* Blueprint)
 	return bConnected;
 }
 
+// 受保护表现字段统一通过反射赋值，声明供前面的窄修复复用。
 bool SetAsset(UObject* Owner, FName Field, UObject* Asset, bool bRequired);
 
 // 只校准本项目副本：原火焰素材的长网格尾焰不等于弹道，不能靠转轴掩盖数米长的后掠。
@@ -598,6 +610,7 @@ bool RepairCombatVfx()
 	const FString Effects = Folder / TEXT("Effects");
 	const FString Fire = TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/DemoAssets/IggyVFX/Particles/Primary/");
 	IAssetTools& Assets = FAssetToolsModule::GetModule().Get();
+	// 修复只编辑本项目命名副本，已有副本复用，第三方源效果保持不变。
 	auto Copy = [&](const FString& Name, const FString& Source) -> UObject*
 	{
 		if (auto* Existing = Keep(LoadObject<UObject>(nullptr, *ObjectPath(Effects / Name)))) return Existing;
@@ -610,18 +623,21 @@ bool RepairCombatVfx()
 		TEXT("/Game/Pack_Effects_2/Water_Magic/VFX_Niagara/NS_Water_Magic_Shield")));
 	auto* Config = Load<UmultiplayerCombatConfig>(ConfigPackage);
 	if (!Projectile || !Attack || !Shield || !Config) return false;
+	// 用归属正确的常量分布替换向量通道，并刷新分布查找数据。
 	auto Vector = [](UObject* Owner, FRawDistributionVector& Raw, const FVector& Value)
 	{
 		auto* Constant = NewObject<UDistributionVectorConstant>(Owner);
 		Constant->Constant = Value; Constant->bIsDirty = true;
 		Raw.Distribution = Constant; Raw.Initialize();
 	};
+	// 标量通道与向量通道一样重建分布，不留下旧随机范围。
 	auto Float = [](UObject* Owner, FRawDistributionFloat& Raw, float Value)
 	{
 		auto* Constant = NewObject<UDistributionFloatConstant>(Owner);
 		Constant->Constant = Value; Constant->bIsDirty = true;
 		Raw.Distribution = Constant; Raw.Initialize();
 	};
+	// 按起手/飞行职责校准副本的发射器、方向和寿命，完成后才保存。
 	auto Calibrate = [&](UParticleSystem* System, bool bProjectile)
 	{
 		System->Modify();
@@ -720,6 +736,7 @@ bool RepairSkillPresentation(const FString& Params)
 	if (!HUD || !HUD->ParentClass || !HUD->ParentClass->IsChildOf(AHUD::StaticClass()) || !Animation
 		|| !Animation->GetPackage()->GetName().StartsWith(Folder + TEXT("/"))) return false;
 	TArray<FString> Bindings;
+	// 只识别已由原生技能入口接管的按键，移动与其他蓝图输入不得被删除。
 	const auto SupersededKey = [](const FKey& Key)
 	{
 		return Key == EKeys::Q || Key == EKeys::E || Key == EKeys::R || Key == EKeys::LeftShift || Key == EKeys::RightShift
@@ -791,6 +808,7 @@ bool SetAsset(UObject* Owner, FName Field, UObject* Asset, bool bRequired = true
 	return true;
 }
 
+// 初建独立角色表现蓝图并接上配置与蒙太奇；已有蓝图不在此通用入口重建。
 UBlueprint* CharacterBlueprint(const TCHAR* Name, UClass* Parent, USkeletalMesh* Mesh, UClass* AnimClass,
 	UAnimMontage* const* Montages, UmultiplayerCombatConfig* Config, const ACharacter* PlayerTemplate, bool bEnemy)
 {
@@ -832,6 +850,7 @@ UmultiplayerCombatConfig* CreateConfig()
 	const FString Water = TEXT("/Game/Pack_Effects_2/Water_Magic/VFX_Niagara/");
 	const FString Poison = TEXT("/Game/Pack_Effects_2/Poison_Magic/VFX_Niagara/");
 	const FString Audio = Folder / TEXT("Audio");
+	// 将表现引用写入配置，不向 Cue 蓝图增加伤害或目标规则。
 	auto SetFeedback = [&](FmultiplayerCombatFeedback& Feedback, const FString& Effect, const TCHAR* Sound)
 	{
 		if (!Effect.IsEmpty()) Feedback.Effect = TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(ObjectPath(Effect)));
@@ -910,6 +929,7 @@ bool CreateUI(bool bUpdateOnly = false)
 		Tree->RootWidget = Canvas;
 		// 项目沿用 UE 默认 1080p DPI 曲线；按两倍设计单位布局，540p 时落到清晰的实际像素尺寸。
 		constexpr float DesignScale = 2.f;
+		// 创建适配项目 DPI 的文字控件，变量名用于原生事件刷新绑定。
 		const auto Text = [Tree](const TCHAR* Name, const TCHAR* Value, int32 Size, FLinearColor Color, bool bVariable = false)
 		{
 			UTextBlock* Label = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), FName(Name));
@@ -919,6 +939,7 @@ bool CreateUI(bool bUpdateOnly = false)
 			Label->SetShadowOffset(FVector2D(0, 1)); Label->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .65f));
 			return Label;
 		};
+		// 按统一设计缩放设置锚点和尺寸，不写入运行时状态逻辑。
 		const auto Panel = [Tree, Canvas](const TCHAR* Name, FVector2D Anchor, FVector2D Position, FVector2D Size, FVector2D Alignment)
 		{
 			UBorder* Border = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), FName(Name));
@@ -929,6 +950,7 @@ bool CreateUI(bool bUpdateOnly = false)
 			Slot->SetPosition(Position * DesignScale); Slot->SetSize(Size * DesignScale);
 			return Border;
 		};
+		// 创建命名进度条及高度容器，数值更新仍由原生 Widget 事件处理。
 		const auto Bar = [Tree](UVerticalBox* Lines, const TCHAR* Name, FLinearColor Color, float Percent, float Height, FMargin Padding)
 		{
 			UProgressBar* Value = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), FName(Name));
@@ -1054,6 +1076,7 @@ bool ConnectARPGHUD()
 	Tree->RootWidget = Canvas;
 	constexpr float Scale = 2.f;
 	const FLinearColor White(.94f, .95f, .98f), Muted(.66f, .7f, .76f), Gold(.95f, .78f, .45f);
+	// 生成带描边的标题或数值文字，绑定入口保持项目原生字段名称。
 	const auto Text = [Tree](const TCHAR* Name, const TCHAR* Value, int32 Size, FLinearColor Color, bool bVariable = false)
 	{
 		UTextBlock* Label = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), FName(Name));
@@ -1064,12 +1087,14 @@ bool ConnectARPGHUD()
 		Label->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .9f));
 		return Label;
 	};
+	// 所有子区使用同一设计缩放和 Canvas 布局，避免不同控件各算一套坐标。
 	const auto Place = [Canvas](UWidget* Child, FVector2D Anchor, FVector2D Position, FVector2D Size, FVector2D Alignment)
 	{
 		UCanvasPanelSlot* Slot = Canvas->AddChildToCanvas(Child);
 		Slot->SetAnchors(FAnchors(Anchor.X, Anchor.Y)); Slot->SetAlignment(Alignment);
 		Slot->SetPosition(Position * Scale); Slot->SetSize(Size * Scale);
 	};
+	// 创建临时提示区容器并复用布局入口，不影响原 HUD 控件树之外的内容。
 	const auto Panel = [Tree, Place](const TCHAR* Name, FVector2D Anchor, FVector2D Position, FVector2D Size, FVector2D Alignment)
 	{
 		UBorder* Border = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), FName(Name));
@@ -1078,6 +1103,7 @@ bool ConnectARPGHUD()
 		Place(Border, Anchor, Position, Size, Alignment);
 		return Border;
 	};
+	// 仅复用素材纹理样式，血量和冷却百分比由项目事件订阅更新。
 	const auto Bar = [Tree, Empty](const TCHAR* Name, UTexture2D* Fill, FLinearColor Color)
 	{
 		UProgressBar* Value = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), FName(Name));
@@ -1279,6 +1305,7 @@ bool ConnectARPGEnemyHealth()
 	if (!SourceOuter || !SourceOuter->WidgetTree || !SourceBar || !SourceBar->WidgetTree || !Enemy || !Enemy->GeneratedClass) return false;
 	UWidget* SourceHealth = SourceOuter->WidgetTree->FindWidget(TEXT("Health"));
 	if (!SourceHealth) return false;
+	// 拷贝控件外观到本项目原生父类，并移除源委托，避免带入第二套属性和计时逻辑。
 	const auto CopyLayout = [](UWidgetBlueprint* Source, const TCHAR* Name)
 	{
 		const FString Package = Folder / TEXT("UI") / Name;
@@ -1399,6 +1426,7 @@ bool UpdateEnemyWorldHealth()
 	return true;
 }
 
+// 顺序构建重定向动画、动作层、配置、Cue、UI 和角色副本，任一步失败即停止。
 bool Create()
 {
 	USkeletalMesh* SourceMesh = Load<USkeletalMesh>(TEXT("/Game/Mage/Demo/Mannequins/Meshes/SKM_Manny_Simple"));
@@ -1714,6 +1742,7 @@ bool ConnectARPGAnimations()
 	UAnimBlueprint* EnemyAnimation = MakeAnimBlueprint(TEXT("ABP_ARPGEnemyLocomotion"), EnemyLocomotion);
 	if (!PlayerAnimation || !EnemyAnimation) return false;
 
+	// 单段素材按自然速率构建动作，可选出手分段只对齐时序，不恢复源包业务通知。
 	const auto MakeMontage = [&](const TCHAR* Name, UAnimSequence* Sequence, FName Slot, float ReleaseTime = 0) -> UAnimMontage*
 	{
 		UAnimMontage* Result = Load<UAnimMontage>(ARPGFolder / Name);
@@ -1767,8 +1796,7 @@ bool ConnectARPGAnimations()
 		Blueprint->Modify(); Character->Modify(); Character->GetMesh()->Modify();
 		if (Index == 0)
 		{
-			// 玩家朝向跟随镜头，横移/后退由四向动画表示；不修改 Co-op 基础角色或敌人的 AI 朝向。
-			// 更新转向规则：镜头独立观察，身体随移动或接纳的攻击转身；不再使用上面的跟镜头方案。
+			// 镜头独立观察，身体随移动或接纳的攻击转身；不修改基础角色或敌人的 AI 朝向。
 			Character->bUseControllerRotationYaw = false;
 			Character->GetCharacterMovement()->bOrientRotationToMovement = true;
 		}
@@ -2063,6 +2091,7 @@ bool UpdateCombatAI(bool bValidateOnly)
 		Blackboard->PostEditChange();
 		Tree->BlackboardAsset = Blackboard; Tree->RootDecorators.Reset(); Tree->RootDecoratorOps.Reset();
 		bool bConfigured = true;
+		// 按已构建黑板解析键 ID，字段或业务键不匹配就标记构建失败。
 		auto SetKey = [&](UObject* Node, FName Key)
 		{
 			const FStructProperty* Property = FindFProperty<FStructProperty>(Node->GetClass(), TEXT("BlackboardKey"));
@@ -2071,11 +2100,13 @@ bool UpdateCombatAI(bool bValidateOnly)
 			Selector->SelectedKeyName = Key; Selector->ResolveSelectedKey(*Blackboard);
 			bConfigured &= Selector->GetSelectedKeyID() != FBlackboard::InvalidKey;
 		};
+		// 统一设置编辑器保护枚举属性，缺字段时不默默保留引擎默认值。
 		auto SetByte = [&](UObject* Node, FName Name, uint8 Value)
 		{
 			FByteProperty* Property = FindFProperty<FByteProperty>(Node->GetClass(), Name);
 			if (Property) Property->SetPropertyValue_InContainer(Node, Value); else bConfigured = false;
 		};
+		// 原生 Wait 限制每个分支的请求频率，不额外创建 Pawn 定时器。
 		auto NewWait = [&](UBTCompositeNode* Parent, float Time, float Deviation)
 		{
 			auto* Wait = NewObject<UBTTask_Wait>(Tree, NAME_None, RF_Transactional);
@@ -2154,6 +2185,7 @@ bool UpdateCombatAI(bool bValidateOnly)
 	if (!TargetType || TargetType->BaseClass != AmultiplayerCombatCharacter::StaticClass() || !Root || Root->Children.Num() != 5
 		|| Root->Services.Num() != 1 || !Root->Services[0] || !Root->Services[0]->IsA<UmultiplayerBTService_UpdateCombatTarget>()) return false;
 	const UBlackboardComponent* NoBlackboard = nullptr;
+	// 冷加载验证实际序列化的固定等待值，不能把尚未接线的黑板引用当成常量通过。
 	auto CheckWait = [NoBlackboard](const UBTTaskNode* Node, float Time, float Deviation)
 	{
 		const auto* Wait = Cast<UBTTask_Wait>(Node);
@@ -2382,6 +2414,7 @@ bool Validate()
 }
 #endif
 
+// 每次只执行一个显式模式；只读验证不混入重建，结束后释放全部临时强引用并返回退出码。
 int32 UCombatAssetBuildCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR

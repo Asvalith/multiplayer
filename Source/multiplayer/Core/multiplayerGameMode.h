@@ -27,8 +27,11 @@ public:
 	// 在接收玩家前设置实际登录容量；地图直接启动或重开时同样使用 JSON 人数上限。
 	// GameSession 和 GameState 创建后，统一应用内存中的配置并初始化目标快照。
 	virtual void InitGameState() override;
+	// 登录后为尚未接纳的控制器安排握手期限。
 	virtual void PostLogin(APlayerController* NewPlayer) override;
+	// 只为未接纳玩家走引擎出生流程，不提供已接纳角色的免费复活。
 	virtual void RestartPlayer(AController* NewPlayer) override;
+	// 退出时补存个人快照，再交还引擎清理连接。
 	virtual void Logout(AController* Exiting) override;
 
 	// 接纳只校验服务器签发的票据；个人状态始终来自本局服务器快照，不收客户端数值。
@@ -64,7 +67,7 @@ public:
 
 	// 当前回合重开与失败恢复。
 	/**
-	 * 仅在比赛已经胜利时接受一次重开请求，并使用 AGameMode::RestartGame 重新加载当前 URL。
+	 * 仅在胜利或失败终局接受一次重开请求，并使用 AGameMode::RestartGame 重新加载当前 URL。
 	 * 这不会选择或自动切换到另一张玩法地图。
 	 */
 	bool RequestRestartCurrentRound(AController* RequestingController);
@@ -73,10 +76,13 @@ public:
 	bool RecoverFailedRestart(const FString& FailureReason);
 
 protected:
+	// 跨越引擎 Possess/Restart 过程保持未接纳 Pawn 禁行，接纳后才由握手开放。
 	virtual void FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation) override;
+	// 向客户端发送 Travel 前清旧回合票据，失败恢复时再由原 GameMode 下发。
 	virtual APlayerController* ProcessClientTravel(FString& URL, bool bSeamless, bool bAbsolute) override;
 
 private:
+	// 单个服务器会话：在线弱引用、票据别名和个人快照共享同一接纳锁。
 	struct FCombatSession
 	{
 		TWeakObjectPtr<AmultiplayerCoopPlayerController> Controller;

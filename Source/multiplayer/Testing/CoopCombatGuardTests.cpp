@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归正面完全格挡、身体与镜头解耦，以及弹道方向和无方向伤害的差异。
+// 使用真实 Q、伤害 GE 与弹体扫掠，禁用敌人自主攻击以保持每次伤害来源明确。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -26,6 +29,7 @@ namespace
 	{
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
+		// 创建可扫掠的独立世界和地面，支持实际弹体接触而非直接伪造命中。
 		FCombatGuardWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -44,6 +48,7 @@ namespace
 			Floor->RegisterComponent();
 			Ground->SetActorLocation(FVector(0, 0, -10));
 		}
+		// 结束效果、弹体和世界，恢复全局帧号以隔离持续时间断言。
 		~FCombatGuardWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -51,6 +56,7 @@ namespace
 			World->DestroyWorld(false);
 			GFrameCounter = PreviousFrame;
 		}
+		// 推进防御到期与真实弹体运动，不直接调用碰撞或效果结束函数。
 		void Advance(float Seconds)
 		{
 			for (float Time = 0.f; Time < Seconds;)
@@ -61,6 +67,7 @@ namespace
 				Time += Step;
 			}
 		}
+		// 在 BeginPlay 前应用实例配置并禁用决策／移动，保留正式角色与 GAS 结算。
 		AmultiplayerCombatCharacter* Character(bool bEnemy, const FVector& Location, UmultiplayerCombatConfig* Config = nullptr)
 		{
 			const FTransform Transform(FRotator::ZeroRotator, Location);
@@ -73,6 +80,7 @@ namespace
 			Pawn->GetCharacterMovement()->DisableMovement();
 			return Pawn;
 		}
+		// 初始化并发射真实弹体，来向由实际运动携带，不以攻击者后续位置替代。
 		AmultiplayerCombatProjectile* Fire(AmultiplayerCombatCharacter* Source, const FVector& Location, const FVector& Direction)
 		{
 			const FTransform Transform(Direction.Rotation(), Location);
@@ -83,6 +91,7 @@ namespace
 			return Projectile;
 		}
 	};
+	// 建立独立且带护盾的配置，同时观察格挡是否错误消耗盾或溢出血量。
 	UmultiplayerCombatConfig* GuardConfig()
 	{
 		auto* Config = NewObject<UmultiplayerCombatConfig>();
@@ -94,6 +103,7 @@ namespace
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatGuardFacingTest, "Multiplayer.Combat.Guard.FacingAndExpiry",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 只有仍生效的正面直接攻击被完全格挡，侧后、过期及无方向攻击照常先盾后血。
 bool FCoopCombatGuardFacingTest::RunTest(const FString&)
 {
 	for (int32 Case = 0; Case < 7; ++Case)
@@ -120,6 +130,7 @@ bool FCoopCombatGuardFacingTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatGuardBodyFacingTest, "Multiplayer.Combat.Guard.BodyFacingIgnoresCamera",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 格挡读取角色身体朝向，镜头转到相反方向不会悄悄改变防御正面。
 bool FCoopCombatGuardBodyFacingTest::RunTest(const FString&)
 {
 	FCombatGuardWorld Fixture;
@@ -147,6 +158,7 @@ bool FCoopCombatGuardBodyFacingTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatGuardProjectileDirectionTest, "Multiplayer.Combat.Guard.ProjectileDirectionSnapshot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 弹体按接触时保存的入射方向判格挡，发射者移动不能改写本次来向。
 bool FCoopCombatGuardProjectileDirectionTest::RunTest(const FString&)
 {
 	for (bool bFront : {true, false})
@@ -174,6 +186,7 @@ bool FCoopCombatGuardProjectileDirectionTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatGuardUndirectedDamageTest, "Multiplayer.Combat.Guard.UndirectedAndBurningDamage",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+// 无方向直接伤害与燃烧不走正面格挡，仍通过统一护盾／血量路径结算。
 bool FCoopCombatGuardUndirectedDamageTest::RunTest(const FString&)
 {
 	FCombatGuardWorld Fixture;

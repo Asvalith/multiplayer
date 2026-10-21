@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 在模块启动时注册原生标签，并定义技能到分类／事件／冷却的只读对应关系。
+// 此文件不授予标签，不判断当前可用性，也不因查询而激活技能。
+
 #include "Combat/multiplayerCombatTags.h"
 #include "Combat/multiplayerCombatConfig.h"
 
@@ -67,6 +70,7 @@ namespace CombatTags
 	UE_DEFINE_GAMEPLAY_TAG(Cue_Stun, "GameplayCue.Combat.Stun");
 	UE_DEFINE_GAMEPLAY_TAG(Cue_Failure, "GameplayCue.Combat.Failure");
 
+	// 返回静态配对，避免输入、准入和冷却各维护一张表；治疗不需要定向事件。
 	const FmultiplayerCombatSkillTags& GetSkillTags(EMultiplayerCombatSkill Skill)
 	{
 		static const TArray<FmultiplayerCombatSkillTags> Tags = {

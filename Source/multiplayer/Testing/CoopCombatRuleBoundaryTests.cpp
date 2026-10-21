@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归配置成本、网络瞄准数据形状和出手时目标合法性的边界。
+// 实际碰撞、投射物和 GE 都走生产代码，不为测试暴露绕过校验的接口。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -31,6 +34,7 @@ namespace
 		UWorld* World;
 		uint64 PreviousFrame = GFrameCounter;
 
+		// 创建真实施法地面及查询碰撞，保留完整目标与枪口验证。
 		FCombatRuleBoundaryWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -44,6 +48,7 @@ namespace
 			Box(FVector(0, 0, -10), FVector(5000, 5000, 10), ECC_WorldStatic);
 		}
 
+		// 结束活动技能和世界，再恢复全局帧号，避免旧任务跨用例运行。
 		~FCombatRuleBoundaryWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
@@ -52,6 +57,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 小步推进真实技能阶段和弹体，而不是直接调用出手或伤害函数完成流程。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0.0f; Elapsed < Seconds;)
@@ -80,6 +86,7 @@ namespace
 			return Character;
 		}
 
+		// 生成关闭自主 AI 与移动的真实敌人，避免额外攻击干扰边界断言。
 		AmultiplayerCombatEnemy* Enemy(const FVector& Location)
 		{
 			const FTransform Transform(FRotator::ZeroRotator, Location);
@@ -91,6 +98,7 @@ namespace
 			return Character;
 		}
 
+		// 创建指定碰撞分类的实际场景对象，用于枪口、地面和遮挡校验。
 		AActor* Box(const FVector& Location, const FVector& Extent, ECollisionChannel ObjectType)
 		{
 			AActor* Actor = World->SpawnActor<AActor>();

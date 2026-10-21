@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 技能资格与失败说明：只读查询实际能力，角色仅补充接纳、生命和学习前提。
+// 正式激活仍走 GAS；失败提示使用本次真实原因，不再重复推断成本或冷却。
+
 #include "Combat/multiplayerCombatCharacter.h"
 
 #include "AbilitySystemComponent.h"
@@ -10,11 +13,13 @@
 
 namespace
 {
+	// 将技能种类映射到集中定义的冷却标签，供提示读取剩余时间。
 	FGameplayTag SkillCooldownTag(EMultiplayerCombatSkill Skill)
 	{
 		return CombatTags::GetSkillTags(Skill).Cooldown;
 	}
 
+	// 优先取项目可读的拒绝标签；原生未知原因由调用者使用通用说明兜底。
 	FGameplayTag SpecificFailure(const FGameplayTagContainer& Reasons)
 	{
 		const FGameplayTag FailureRoot = FGameplayTag::RequestGameplayTag(TEXT("Failure.Combat"));
@@ -50,6 +55,7 @@ bool AmultiplayerCombatCharacter::CheckSkillBusinessRequirements(EMultiplayerCom
 			return Reject(CombatTags::Failure_MovementBlocked);
 	}
 	// PreActivate 先标记实例活动并广播 owned tag，最后才增加 Spec.ActiveCount；两者均须拒绝复入。
+	// 同线程标签通知可能立即再次请求技能；只防同能力重复，不把本可替换的其他技能一并拒绝。
 	const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
 	if (Spec->IsActive() || (Instance && Instance->IsActive()))
 		return Reject(CombatTags::Failure_AlreadyActive);
@@ -57,7 +63,8 @@ bool AmultiplayerCombatCharacter::CheckSkillBusinessRequirements(EMultiplayerCom
 	return true;
 }
 
-// 预览只读查询真实能力，包括派生技能的特殊资格；正式激活和提交仍会重新校验当时状态。
+// 预览与正式激活共用真实 CanActivate；提交只重查成本/冷却，目标及角色资格在出手时另验。
+// 查询没有副作用，只说明本地此刻状态；服务器仍独立检查，预检成功不等于已接纳或已命中。
 bool AmultiplayerCombatCharacter::CheckSkillAvailable(EMultiplayerCombatSkill Skill, FGameplayTagContainer* OutReasons) const
 {
 	if (!AbilitySystem || !AbilitySystem->AbilityActorInfo.IsValid())
@@ -115,6 +122,7 @@ FText AmultiplayerCombatCharacter::GetSkillFailureText(EMultiplayerCombatSkill S
 	return FText::GetEmpty();
 }
 
+// 供 HUD 主动查询不可用原因；可用时返回空文本，不产生提示或效果。
 FText AmultiplayerCombatCharacter::GetSkillFailureReason(EMultiplayerCombatSkill Skill) const
 {
 	FGameplayTagContainer Reasons;
@@ -124,6 +132,7 @@ FText AmultiplayerCombatCharacter::GetSkillFailureReason(EMultiplayerCombatSkill
 	return GetSkillFailureText(Skill, Reason.IsValid() ? Reason : CombatTags::Failure_Requirements);
 }
 
+// 本地显示已有拒绝结果并播放失败 Cue；只有没有结果时才主动查询资格。
 void AmultiplayerCombatCharacter::ReportSkillFailure(EMultiplayerCombatSkill Skill, const FGameplayTagContainer* Reasons)
 {
 	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
@@ -135,6 +144,7 @@ void AmultiplayerCombatCharacter::ReportSkillFailure(EMultiplayerCombatSkill Ski
 }
 
 // 服务器指定的原因直接显示，不能在此重新预检尚未纠正的客户端预测状态而覆盖真正原因。
+// 当前提示按技能反馈，未携带请求编号；动作/效果的 Key 隔离不等于旧提示也能逐次精确过滤。
 void AmultiplayerCombatCharacter::ClientSkillRejected_Implementation(EMultiplayerCombatSkill Skill, FGameplayTag Reason, float AuthorityValue)
 {
 	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
@@ -142,6 +152,7 @@ void AmultiplayerCombatCharacter::ClientSkillRejected_Implementation(EMultiplaye
 	AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
 }
 
+// 接收 GAS 正式激活失败，区分战斗技能与救援提示，不再次激活或修改资源。
 void AmultiplayerCombatCharacter::HandleAbilityFailed(const UGameplayAbility* Ability, const FGameplayTagContainer& Reasons)
 {
 	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;

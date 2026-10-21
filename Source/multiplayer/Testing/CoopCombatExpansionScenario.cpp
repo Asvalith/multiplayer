@@ -23,6 +23,9 @@
 #include "Player/multiplayerCoopPlayerController.h"
 #include "UObject/UnrealType.h"
 
+// 扩展能力联机夹具：检验冲刺预测/取消、成长装配与倒地救援的双端契约。
+// 只在显式测试中延长观察窗口，正式请求仍走拥有者业务入口，不改正式资产或增加权限后门。
+
 namespace
 {
 	const FVector ExpansionOrigin(0, 0, 4000);
@@ -39,17 +42,20 @@ namespace
 		Copy->RescueDuration = 4.f; Copy->BleedoutDuration = FMath::Max(45.f, Copy->BleedoutDuration);
 		Property->SetObjectPropertyValue_InContainer(Character, Copy); return true;
 	}
+	// 读取真实授予的冲刺主实例，不能通过新建能力对象代替运行中状态。
 	UGameplayAbility* DashInstance(AmultiplayerCombatCharacter* Character)
 	{
 		const auto* Spec = Character->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerDashAbility::StaticClass());
 		return Spec ? Spec->GetPrimaryInstance() : nullptr;
 	}
+	// 能力、状态标签和 CMC 根运动源全部退出才算冲刺收尾完成。
 	bool NoDashMotion(AmultiplayerCombatCharacter* Character)
 	{
 		const auto* Ability = DashInstance(Character);
 		return (!Ability || !Ability->IsActive()) && !Character->GetAbilitySystemComponent()->HasMatchingGameplayTag(CombatTags::State_Dashing)
 			&& !Character->GetCharacterMovement()->HasRootMotionSources();
 	}
+	// 仅服务器夹具在用例之间重置资源/位置和旧效果，客户端预测断言不走此准备入口。
 	void ResetExpansionDash(AmultiplayerCombatCharacter* Character)
 	{
 		auto* ASC = Character->GetAbilitySystemComponent(); ASC->CancelAllAbilities();

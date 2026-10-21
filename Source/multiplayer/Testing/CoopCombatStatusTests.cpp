@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 回归统一伤害结算、护盾溢出、持续伤害和多来源控制限制的叠加／解除。
+// 真实 GE 和属性委托覆盖同步重入，靶敌关闭自主行为以隔离每次结算。
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -29,6 +32,7 @@ namespace
 		FDelegateHandle SpawnedHandle;
 		int32 Projectiles = 0;
 
+		// 建立真实施法地面和 GAS 世界，记录弹体出生用于检测中断后的迟到出手。
 		FCombatStatusWorld()
 		{
 			UWorld::InitializationValues Values;
@@ -53,6 +57,7 @@ namespace
 			}));
 		}
 
+		// 移除观察者再结束真实世界，清除旧效果和任务并恢复全局帧号。
 		~FCombatStatusWorld()
 		{
 			World->RemoveOnActorSpawnedHandler(SpawnedHandle);
@@ -62,6 +67,7 @@ namespace
 			GFrameCounter = PreviousFrame;
 		}
 
+		// 小步推进真实效果周期、控制到期和能力任务，不手动触发业务完成回调。
 		void Advance(float Seconds)
 		{
 			for (float Elapsed = 0.f; Elapsed < Seconds;)
@@ -73,6 +79,7 @@ namespace
 			}
 		}
 
+		// 创建指定阵营的静止真实角色，关闭 AI 以排除额外伤害和状态来源。
 		AmultiplayerCombatCharacter* Character(bool bEnemy = false, const FVector& Location = FVector(0, 0, 100))
 		{
 			const FTransform Transform(FRotator::ZeroRotator, Location);
@@ -108,12 +115,14 @@ namespace
 		ASC->ApplyGameplayEffectSpecToSelf(FGameplayEffectSpec(Effect, ASC->MakeEffectContext(), 1.f));
 	}
 
+	// 经真实瞬时 GE 设置足够上限及护盾，保留正式属性约束与通知链。
 	void GiveShield(AmultiplayerCombatCharacter* Character, float Value)
 	{
 		OverrideAttribute(Character, UmultiplayerCombatAttributes::GetMaxShieldAttribute(), Value);
 		OverrideAttribute(Character, UmultiplayerCombatAttributes::GetShieldAttribute(), Value);
 	}
 
+	// 按效果定义统计真实句柄，区分刷新同源效果和独立多来源效果。
 	int32 CountEffects(AmultiplayerCombatCharacter* Character, TSubclassOf<UGameplayEffect> Class)
 	{
 		FGameplayEffectQuery Query;
@@ -121,6 +130,7 @@ namespace
 		return Character->GetAbilitySystemComponent()->GetActiveEffects(Query).Num();
 	}
 
+	// 从指定来源施加正式禁锢 GE，验证各句柄独立结束且共享禁行计数仍正确。
 	FActiveGameplayEffectHandle RootFrom(AmultiplayerCombatCharacter* Source, AmultiplayerCombatCharacter* Target, float Duration)
 	{
 		UAbilitySystemComponent* ASC = Source->GetAbilitySystemComponent();

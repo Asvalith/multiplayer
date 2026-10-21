@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 只读审计正式特效配置、Cascade 原始轴／分布及 Niagara 公开参数。
+// 输出用于校准的证据，不修改第三方素材，也不把配置检查通过等同于渲染观感正确。
+
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
@@ -30,6 +33,7 @@ namespace
 			*Min.ToCompactString(), *Max.ToCompactString());
 	}
 
+	// 检查素材分布范围没有非法向量，不通过初始化缓存或改资产掩盖问题。
 	bool FiniteVector(const FRawDistributionVector& Raw)
 	{
 		if (!Raw.Distribution) return true;
@@ -38,6 +42,7 @@ namespace
 		return !Min.ContainsNaN() && !Max.ContainsNaN();
 	}
 
+	// 遍历有效发射器的原始位置、速度、空间和寿命，记录轴向诊断而非推定实际渲染轨迹。
 	void AuditCascade(FAutomationTestBase& Test, const TCHAR* Role, UParticleSystem* System)
 	{
 		if (!System) return;
@@ -119,6 +124,7 @@ namespace
 		}
 	}
 
+	// 读取 Niagara 已公开的参数默认值，为位置与缩放校准保留素材侧证据。
 	void AuditNiagara(FAutomationTestBase& Test, const TCHAR* Role, UNiagaraSystem* System)
 	{
 		if (!System) return;

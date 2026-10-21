@@ -1,4 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// 冲刺沿用技能的预测、扣费和冷却流程，移动实现交给原生能力任务。
+// 预览可达距离与本次位移共用一次查询；取消后不再向 CMC 添加推进源。
 
 #include "Combat/multiplayerCombatMobility.h"
 
@@ -10,6 +12,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 
+// 只定义能量修改通道，负成本由通用提交入口通过 SetByCaller 写入。
 UmultiplayerDashCostEffect::UmultiplayerDashCostEffect()
 {
 	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
@@ -19,6 +22,7 @@ UmultiplayerDashCostEffect::UmultiplayerDashCostEffect()
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
 }
 
+// 用持续 GE 持有冲刺冷却标签，实际时长由本次技能规则覆盖。
 UmultiplayerDashCooldownEffect::UmultiplayerDashCooldownEffect()
 {
 	DurationPolicy = EGameplayEffectDurationType::HasDuration;
@@ -30,6 +34,7 @@ UmultiplayerDashCooldownEffect::UmultiplayerDashCooldownEffect()
 	Tags->SetAndApplyTargetTagChanges(GrantedTags);
 }
 
+// 只配置冲刺特有事件和效果，预测策略及准入规则继续由战斗基类提供。
 UmultiplayerDashAbility::UmultiplayerDashAbility()
 {
 	Skill = EMultiplayerCombatSkill::Dash;
@@ -41,6 +46,7 @@ UmultiplayerDashAbility::UmultiplayerDashAbility()
 	CooldownGameplayEffectClass = UmultiplayerDashCooldownEffect::StaticClass();
 }
 
+// 本轮输入、胶囊预览和提交均有效后创建原生位移任务；版本号隔离同步取消后的旧调用栈。
 void UmultiplayerDashAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData)
 {
@@ -71,6 +77,7 @@ void UmultiplayerDashAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle,
 	Character->SetActorRotation(FRotator(0, Aim.Yaw, 0));
 	if (Revision != ActivationRevision || !IsActive()) return;
 	// 沿预览同一次胶囊扫掠的可达距离推进，静态斜墙前也不持续推入再滑向另一终点。
+	// 位移交给原生 RootMotion/CMC，取消由任务清掉自己的推进源；不另做坐标快照回滚。
 	const float Distance = FVector::Dist2D(Preview.Origin, Preview.End);
 	auto* Motion = UAbilityTask_ApplyRootMotionConstantForce::ApplyRootMotionConstantForce(this, TEXT("CombatDash"),
 		Direction, Distance / Rule.Duration, Rule.Duration, false, nullptr,
@@ -79,6 +86,7 @@ void UmultiplayerDashAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle,
 	Motion->ReadyForActivation();
 }
 
+// 自然结束交还 GAS 生命周期；客户端不自行纠正坐标或返还能量。
 void UmultiplayerDashAbility::FinishDash()
 {
 	// 结束与取消都沿用 GAS 销毁本轮任务；原生任务按自己的 source ID 清理，不影响其他位移来源。

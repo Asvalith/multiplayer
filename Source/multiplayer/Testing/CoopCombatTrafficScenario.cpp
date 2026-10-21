@@ -15,6 +15,9 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 
+// 流量对照夹具：在固定墙钟采样窗执行相同负载，服务器统计发送字节/包数，两端验证实际到达。
+// 这里的准备、自动发射和采样是开发实验，不属于正常玩家技能循环或整局性能结论。
+
 // 前后对照使用固定负载，不逐次发送测试 RPC；发射和属性修改仍走真实服务器路径。
 void UCoopNetTestDriver::TrafficServerTick(UWorld* World)
 {
@@ -126,6 +129,7 @@ void UCoopNetTestDriver::TrafficServerTick(UWorld* World)
 #endif
 }
 
+// 双端观察真实初始弹道状态与最终公开属性，采样结束才回执，避免测试 RPC 污染窗口。
 void UCoopNetTestDriver::TrafficClientTick(UWorld* World)
 {
 #if !UE_BUILD_SHIPPING

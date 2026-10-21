@@ -1,5 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+// 声明共享的静态技能数值、标签关系与表现资源；不保存本局冷却、余额或效果句柄。
+// cpp 提供默认关系、只读查询及加载／编辑时规范化，角色另行计算成长后的有效数值。
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -20,7 +23,9 @@ USTRUCT(BlueprintType)
 struct FmultiplayerCombatSkillRule
 {
 	GENERATED_BODY()
+	// 为反射和资产序列化保留字段默认值，不在构造中创建运行时效果。
 	FmultiplayerCombatSkillRule() = default;
+	// 供默认资产紧凑声明一组规则，参数仍只是配置值而不是本次施法的状态。
 	FmultiplayerCombatSkillRule(float InCost, float InCooldown, float InAmount, float InRange,
 		float InDuration = 0, float InWindup = 0, float InRecovery = 0)
 		: Cost(InCost), Cooldown(InCooldown), Amount(InAmount), Range(InRange), Duration(InDuration),
@@ -34,6 +39,7 @@ struct FmultiplayerCombatSkillRule
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.05")) float Recovery = .4f;
 };
 
+// 只关联可选特效与声音资源；何时播放由 Cue／表现模块决定，不在配置中产生伤害。
 USTRUCT(BlueprintType)
 struct FmultiplayerCombatFeedback
 {
@@ -67,12 +73,15 @@ class MULTIPLAYER_API UmultiplayerCombatConfig : public UDataAsset
 {
 	GENERATED_BODY()
 public:
+	// 为新资产及未保存关系字段的旧资产建立兼容默认规则，不重写已有地图布局。
 	UmultiplayerCombatConfig();
 	// 配置在角色生命周期中只读；不能在活动能力持有阻断计数时替换关系表。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Ability Relationships")
 	TArray<FmultiplayerAbilityTagRelationship> AbilityRelationships;
+	// 汇总父分类和具体能力的拥有者准入要求，仅追加到调用者给出的容器。
 	void GetAbilityActivationTagRequirements(const FGameplayTagContainer& AbilityTags,
 		FGameplayTagContainer& OutRequired, FGameplayTagContainer& OutBlocked) const;
+	// 汇总活动期间阻断及激活时取消的能力分类，引用计数继续由原生 ASC 管理。
 	void GetAbilityBlockAndCancelTags(const FGameplayTagContainer& AbilityTags,
 		FGameplayTagContainer& OutBlock, FGameplayTagContainer& OutCancel) const;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatSkillRule Attack{0, .5f, 25, 0};
@@ -96,8 +105,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100")) float ProjectileSpeed = 1600;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UNiagaraSystem> ProjectileEffect;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UParticleSystem> ProjectileCascadeEffect;
-	// 保留旧资产字段兼容；正面完全格挡及无方向伤害已不再使用全向减伤倍率。
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", ClampMax = "1")) float DefenseDamageMultiplier = .5f;
 	// 新规则可按角色配置启用，默认保留原关卡的技能数值；剩余盾和效果时长不写回配置。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float DefenseShieldAmount = 0;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float BurningDamagePerTick = 0;
@@ -111,12 +118,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatFeedback AreaFeedback;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatFeedback StunFeedback;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FmultiplayerCombatFeedback FailureFeedback;
+	// 读取技能基础规则；等级修正在角色侧完成，不能在调用点写回资产。
 	const FmultiplayerCombatSkillRule& GetSkill(EMultiplayerCombatSkill Skill) const;
 	// 仅资产编辑/加载时检查一次；技能执行不反复校验同一份静态配置。
 	virtual void PostLoad() override;
 #if WITH_EDITOR
+	// 编辑器修改属性后规范化静态数值，不在每次技能查询中重复清洗配置。
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;
 #endif
 private:
+	// 只钳制资产数值到本项目支持范围，不授予技能、不调整正在运行的效果。
 	void NormalizeRules();
 };

@@ -11,8 +11,10 @@
 #include "Net/UnrealNetwork.h"
 
 
-/////仅用于检测玩家，视觉表现，提交插槽
-//构造函数初始化组件
+// 钥匙/插槽交互层：服务器检测玩家并提交一次安装，GameMode 统一登记共享目标。
+// bInstalled 复制使用状态，原生附件复制恢复位置；客户端不单独重放拾取业务。
+
+// 搭建视觉网格和拾取范围；旋转只影响展示网格，不生成第二份根位移。
 AmultiplayerCoopKey::AmultiplayerCoopKey()
 {
 	//有tick函数，默认不启用
@@ -132,8 +134,8 @@ bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
 		bInstalled = false;
 		return false;
 	}
-	//设置所有者为插槽的拥有者，便于权限管理和网络同步
-	//设置归属后立即调用复制属性回调，更新旋转展示和拾取触发器状态
+	// 记录安装后的 Actor 归属；SetOwner 不改变网络 Authority，也不替代附件复制。
+	// 两端共用状态刷新，关闭旋转展示和拾取触发器。
 	SetOwner(SocketPoint->GetOwner());
 	OnRep_Installed();
 	ForceNetUpdate();
@@ -175,7 +177,7 @@ AmultiplayerKeySocket::AmultiplayerKeySocket()
 	KeyDisplayPoint->SetRelativeLocation(FVector(0.0f, 0.0f, 75.0f));
 }
 
-//存入钥匙，仅服务端调用，返回是否成功登记
+// 安装是事实来源，成功后才登记目标；客户端不能提交“进度 +1”，失败仍允许原钥匙重试。
 bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 {
 	//非服务端、插槽已激活、钥匙无效或销毁中，均不登记
@@ -189,8 +191,9 @@ bool AmultiplayerKeySocket::StoreCollectedKey(AmultiplayerCoopKey* Key)
 	{
 		return false;
 	}
-	//先标记激活，避免重入；注册回调，若安装失败则不再尝试
+	// 先占用插槽防同步重入；GameMode 同步调用安装，失败则把 bActivated 恢复为 false 允许重试。
 	bActivated = true;
+	// 回调只在当前调用栈内执行：安装成功后 GameMode 才推进目标，不保存 this/Key 供异步使用。
 	bActivated = CoopGameMode->RegisterActivatedKey([this, Key]()
 	{
 		return Key->InstallAtSocket(KeyDisplayPoint);

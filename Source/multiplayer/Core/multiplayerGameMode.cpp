@@ -18,7 +18,10 @@
 #include "Misc/Parse.h"
 #endif
 
-//获取类
+// 服务器规则层：集中处理接纳/短线恢复、目标结算、终局与回合重开。
+// 机关提供事实，战斗角色提供个人快照；GameState 复制共享结果，本类不驱动客户端界面。
+
+// 设置原生默认类并优先采用现有角色、GameState、HUD 蓝图，保留关卡配置入口。
 AmultiplayerGameMode::AmultiplayerGameMode()
 {
 	GameStateClass = AmultiplayerCoopGameState::StaticClass();
@@ -72,6 +75,7 @@ void AmultiplayerGameMode::RestartPlayer(AController* NewPlayer)
 	Super::RestartPlayer(NewPlayer);
 }
 
+// 在 Possess 前后关闭未接纳 Pawn 的行动资格，避免引擎 Restart 恢复移动绕过握手。
 void AmultiplayerGameMode::FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation)
 {
 	// Pawn 已创建、Possess/PlayingState 尚未通知；本地权威玩家的同步握手也不会被随后重新关门。
@@ -83,11 +87,13 @@ void AmultiplayerGameMode::FinishRestartPlayer(AController* NewPlayer, const FRo
 		if (auto* Character = Cast<AmultiplayerCombatCharacter>(Controller->GetPawn())) Character->SetCombatSessionReady(false);
 }
 
+// 新连接登录后启动一次握手期限；尚未收到接纳请求的玩家不能无限占用未就绪 Pawn。
 void AmultiplayerGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
 	AmultiplayerCoopPlayerController* Controller = Cast<AmultiplayerCoopPlayerController>(NewPlayer);
 	if (!Controller || Controller->HasAcceptedCombatSession()) return;
+	// 弱绑定 Controller 生命周期；超时只拒绝仍未接纳的连接，不影响已经完成恢复的玩家。
 	GetWorldTimerManager().SetTimer(Controller->CombatHandshakeTimer, FTimerDelegate::CreateWeakLambda(Controller, [Controller]
 	{
 		if (!Controller->HasAcceptedCombatSession())
@@ -100,6 +106,8 @@ void AmultiplayerGameMode::PostLogin(APlayerController* NewPlayer)
 }
 
 // 验证、消费票据和恢复集中在同一权威入口；票据只在内存与所属 Controller RPC 中传递。
+// 设计：票据定位本局快照，在线 Controller 占用阻止同一状态被重复接入；不是账号认证系统。
+// 轮换兼容保留客户端实际持有的旧票据别名，但别名仍共享同一个在线占用。
 bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket,
 	FGuid& OutTicket, FText& OutError, bool& bRetryable)
 {
@@ -171,6 +179,8 @@ bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* 
 	return true;
 }
 
+// 断线前保存服务器个人状态并释放在线锁，快照只在本 GameMode 内保留 120 秒。
+// 取舍：使用单调实时时钟扣除离线时间；缓存随本局 GameMode 消失，不承担服务器重启持久化。
 void AmultiplayerGameMode::SaveCombatSession(AmultiplayerCoopPlayerController* Controller)
 {
 	if (!Controller || !Controller->HasAcceptedCombatSession()) return;
@@ -184,12 +194,14 @@ void AmultiplayerGameMode::SaveCombatSession(AmultiplayerCoopPlayerController* C
 	Character->SetCombatSessionReady(false);
 }
 
+// 补足普通退出路径的保存；Controller 提前保存后，此处不会重复覆盖已释放的会话。
 void AmultiplayerGameMode::Logout(AController* Exiting)
 {
 	SaveCombatSession(Cast<AmultiplayerCoopPlayerController>(Exiting));
 	Super::Logout(Exiting);
 }
 
+// 整局切图前清除各所属客户端的旧回合票据；新 GameMode 不继承旧会话缓存。
 APlayerController* AmultiplayerGameMode::ProcessClientTravel(FString& URL, bool bSeamless, bool bAbsolute)
 {
 	// 新回合的 GameMode 没有旧票据缓存；清理 RPC 必须先于引擎发送 ClientTravel。
@@ -220,7 +232,7 @@ void AmultiplayerGameMode::NotifyCombatPlayerDeath()
 	}
 }
 
-//装钥匙
+// 安装成功才发布共享进度；避免附件安装失败却已增加目标数量，两份事实必须按此顺序提交。
 bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 {
 	//防重入与状态校验

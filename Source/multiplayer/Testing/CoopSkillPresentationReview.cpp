@@ -1,3 +1,5 @@
+// 显式开发模式下录制真实技能输入、双方表现和截图落盘结果。
+// 执行证据与视觉通过分开记录，工具不会把组件状态或截图成功当成画面验收。
 #include "Testing/CoopSkillPresentationReview.h"
 
 #if !UE_BUILD_SHIPPING
@@ -32,6 +34,7 @@
 
 namespace
 {
+	// 一条时间轴动作既可注入按键，也可只检查预览或角色朝向。
 	struct FReviewAction
 	{
 		double At = 0;
@@ -43,6 +46,7 @@ namespace
 		bool bCheckBody = false;
 	};
 
+	// 单进程录制会话持有全部订阅和按键，结束时统一释放，避免影响手动操作。
 	struct FSkillPresentationReview
 	{
 		FString Role, Directory, Failure;
@@ -64,8 +68,10 @@ namespace
 		bool bObserverPrepared = false;
 		bool bDone = false;
 
+		// 连接准备不计入技能时间轴，正式录制开始前统一返回零。
 		double Elapsed() const { return RecordingStarted < 0 ? 0 : FPlatformTime::Seconds() - RecordingStarted; }
 
+		// 汇总原始证据与执行错误；视觉结果固定待人工判断，不自动宣称画面通过。
 		void Write(bool bComplete)
 		{
 			auto Report = MakeShared<FJsonObject>();
@@ -92,6 +98,7 @@ namespace
 			if (bComplete) FFileHelper::SaveStringToFile(Json, *FPaths::Combine(Directory, TEXT("complete.json")), FFileHelper::EEncodingOptions::ForceUTF8);
 		}
 
+		// 补发所有已注入按键的松开事件，结束或异常中止都不遗留持续输入。
 		void ReleaseKeys()
 		{
 			if (auto* PC = Controller.Get())
@@ -99,6 +106,7 @@ namespace
 			HeldKeys.Empty();
 		}
 
+		// 只完成一次：松键、确认最后截图、解绑回调，再输出最终清单。
 		void Finish(const FString& Reason = FString())
 		{
 			if (bDone) return;
@@ -116,6 +124,7 @@ namespace
 				*Role, Errors.Num(), Frames.Num(), *Reason);
 		}
 
+		// 主动停止保留中止原因，并移除会话持有的全局 Ticker 与截图委托。
 		void Stop()
 		{
 			if (!bDone) Finish(TEXT("Review stopped before completion"));
@@ -124,6 +133,7 @@ namespace
 			FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 		}
 
+		// 采集当前端真正可见的角色状态；观察端不假装可读取拥有者私有能量。
 		void Snapshot(const FString& Name)
 		{
 			const auto* Pawn = Role == TEXT("Observer") ? Other.Get() : Player.Get();
@@ -150,6 +160,7 @@ namespace
 			Observations.Add(MakeShared<FJsonValueObject>(State));
 		}
 
+		// 按实际技能时长编排普通释放、切换和取消，不缩短技能或绕过正式输入。
 		void BuildSequence()
 		{
 			const auto* Pawn = Player.Get();
@@ -159,14 +170,17 @@ namespace
 			const auto* Heal = Pawn->GetActionMontage(EMultiplayerCombatAnimation::Heal);
 			const double HealWait = Heal ? Heal->GetPlayLength() + .3 : 1.5;
 			double At = .8;
+			// 记录未来的真实输入，不在编排阶段执行技能。
 			auto Key = [&](double Time, const TCHAR* Name, const FKey& Input, EInputEvent Event)
 			{
 				FReviewAction Action; Action.At = Time; Action.Name = Name; Action.Key = Input; Action.Event = Event; Steps.Add(Action);
 			};
+			// 插入只读预览检查，验证实际按键是否选择到对应技能。
 			auto Check = [&](double Time, const TCHAR* Name, EMultiplayerCombatSkill Skill)
 			{
 				FReviewAction Action; Action.At = Time; Action.Name = Name; Action.CheckSkill = int32(Skill); Steps.Add(Action);
 			};
+			// 统一安排按住预览与可选松开确认，让取消用例保留原按键状态。
 			auto Preview = [&](const TCHAR* Name, const FKey& Input, EMultiplayerCombatSkill Skill, bool bRelease = true)
 			{
 				Key(At, Name, Input, IE_Pressed); Check(At + .3, Name, Skill);
@@ -209,6 +223,7 @@ namespace
 			Steps.Sort([](const auto& A, const auto& B) { return A.At < B.At; });
 		}
 
+		// 等待双客户端角色、HUD 和所需特效就绪；场景含 AI 时明确拒绝，不删除世界内容。
 		bool FindPlayers()
 		{
 			for (const FWorldContext& Context : GEngine->GetWorldContexts())
@@ -235,6 +250,7 @@ namespace
 			return false;
 		}
 
+		// 观察端只调整自己的镜头观察远端角色，不改远端位置或施法方向。
 		void ObserveOther()
 		{
 			if (Role != TEXT("Observer") || !Controller.IsValid() || !Other.IsValid()) return;
@@ -242,11 +258,13 @@ namespace
 			Controller->SetControlRotation(FRotator(-12.f, Yaw, 0));
 		}
 
+		// 用真实 S+D 输入拉开观察距离，位移不足则报告不可覆盖，不瞬移伪造机位。
 		bool PrepareObserver(double Now)
 		{
 			if (Role != TEXT("Observer") || bObserverPrepared) return true;
 			auto* PC = Controller.Get();
 			PC->SetControlRotation(FRotator(-12.f, 0, 0));
+			// 准备阶段同样记录实际输入及接纳结果，并纳入结束松键清理。
 			const auto MovementInput = [&](const FKey& Key, EInputEvent Event)
 			{
 				const bool bAccepted = PC->InputKey(FInputKeyParams(Key, Event, Event == IE_Pressed ? 1. : 0.));
@@ -297,6 +315,7 @@ namespace
 			return true;
 		}
 
+		// 拥有者执行时间轴动作，观察端仅记证据；朝向检查不改变角色权威状态。
 		void Run(const FReviewAction& Action)
 		{
 			APlayerController* PC = Controller.Get();
@@ -344,6 +363,7 @@ namespace
 			Snapshot(Action.Name);
 		}
 
+		// 截图回调按实际文件确认落盘，失败计入执行错误而非忽略。
 		void ScreenshotWritten()
 		{
 			if (!PendingFrame) return;
@@ -356,6 +376,7 @@ namespace
 			PendingFrame.Reset();
 		}
 
+		// 等待合法场景后推进真实输入和限频截图，连接丢失或超时立即统一结束。
 		bool Tick(float)
 		{
 			if (bDone) return false;
@@ -408,6 +429,7 @@ namespace
 			return true;
 		}
 
+		// 只接受显式渲染演示和绝对输出目录，通过后才注册截图与 Ticker。
 		void Start()
 		{
 			FParse::Value(FCommandLine::Get(), TEXT("CoopSkillReviewRole="), Role);
@@ -432,6 +454,7 @@ namespace
 }
 #endif
 
+// 仅显式非 Shipping 开关创建唯一会话，不自动启用无限资源或创建敌人。
 void StartCoopSkillPresentationReview()
 {
 #if !UE_BUILD_SHIPPING
@@ -443,6 +466,7 @@ void StartCoopSkillPresentationReview()
 #endif
 }
 
+// 模块关闭时先清理外部回调，再释放会话对象，Shipping 下为空操作。
 void StopCoopSkillPresentationReview()
 {
 #if !UE_BUILD_SHIPPING

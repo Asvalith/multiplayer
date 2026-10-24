@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-24",
+  "scope": "Co-op architecture-only source organization; no gameplay or protocol changes",
+  "baselineCommit": "9b4105cce8fc7a638fb28b9822127a24112cf3f2",
+  "sourceEquivalence": {
+    "cppBodiesUnchanged": 69,
+    "newRuntimeClasses": 0,
+    "reflectedClassNamesUnchanged": true,
+    "resumeDataMovedWithoutFieldChanges": true
+  },
+  "builds": [
+    {
+      "target": "multiplayerEditor",
+      "configuration": "Development",
+      "result": "passed",
+      "exitCode": 0
+    },
+    {
+      "target": "multiplayer",
+      "configuration": "Shipping",
+      "result": "passed",
+      "exitCode": 0
+    }
+  ],
+  "automation": {
+    "succeeded": 174,
+    "succeededWithWarnings": 0,
+    "failed": 0,
+    "notRun": 0,
+    "totalDuration": 10.590754508972168
+  },
+  "automationConditions": {
+    "engine": "UE5.5 Editor",
+    "filter": "Multiplayer.Combat.",
+    "renderer": "DX12 offscreen",
+    "packagedRuntime": false
+  },
+  "assetContracts": {
+    "result": "passed",
+    "assets": 42,
+    "errors": 0,
+    "warnings": 0,
+    "unchangedPackages": 43,
+    "saveRequested": false
+  },
+  "notRetested": [
+    "multi-process network matrix",
+    "full-map playthrough",
+    "continuous video",
+    "public network",
+    "packaged runtime",
+    "performance baseline"
+  ],
+  "reports": [
+    {
+      "path": "Saved/Architecture_20261024/BuildEditor_R1.log",
+      "sha256": "ac3e463b5a52297f818a97cf16e8f504633cd8a85f63cf4959576adb3d763508"
+    },
+    {
+      "path": "Saved/Architecture_20261024/BuildShipping_R1.log",
+      "sha256": "ed5b9f0db67ed14e6133e2ed708c834fb5d0334f262e49e368d51e71d23c4a5c"
+    },
+    {
+      "path": "Saved/Architecture_20261024/Automation_R1/index.json",
+      "sha256": "ff8f68f64015b43cf7eb5ebdeac5ff187e1bb09e99858c30cb272ca95ab811a6"
+    },
+    {
+      "path": "Saved/Architecture_20261024/Contracts_R1.json",
+      "sha256": "41414818be1dbac566b4a31cfeb60d6cb9f59529d0b704062b13213d0799979f"
+    }
+  ],
+  "sourceCommit": "7477ca913b58e297ab40fc380bbe6027da4f7a0e",
+  "sourceTree": "460ae0744de653a314a59a8bcac5dea6080430f3",
+  "runtimeEnvironment": "Validated in complete authorized development checkout; main is a source-only snapshot and was not independently run."
+}

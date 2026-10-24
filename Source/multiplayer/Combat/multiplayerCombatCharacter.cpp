@@ -1,9 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 // 战斗角色协调层：初始化 ASC、接收操作意图、监听生命与控制状态，并保存短时恢复快照。
-// 技能准入见 SkillStatus，瞄准查询见 Targeting；执行步骤与属性结算不在角色中重复实现。
+// 技能准入见 CharacterSkillStatus，瞄准查询见 Targeting；执行步骤与属性结算不在角色中重复实现。
 
 #include "Combat/multiplayerCombatCharacter.h"
+#include "Combat/multiplayerCombatAbilitySystem.h"
 
 #include "AbilitySystemComponent.h"
 #include "Abilities/GameplayAbilityTargetTypes.h"

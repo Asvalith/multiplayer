@@ -4,7 +4,7 @@
 
 ## 保留
 
-- Source 与开发提交 `9b4105cce8fc7a638fb28b9822127a24112cf3f2` 一致，树标识 `ad3b684dd74b3f9b61b2cc4d0a27b8a78fa4f437`；没有为展示另写一套技能或取消逻辑。
+- Source 与开发提交 `7477ca913b58e297ab40fc380bbe6027da4f7a0e` 一致，树标识 `460ae0744de653a314a59a8bcac5dea6080430f3`；没有为展示另写一套技能或取消逻辑。本次只整理头依赖与文件归属，原 69 个 cpp 执行正文不变。
 - UE 配置、uproject 与构建目标；独立的玩法 JSON 示例不含凭据或素材。
 - 本地启动、网络回归、平台 Move 配对、只读资产审计与资源生成入口；它们需要完整授权环境，不是随源码附送资源。
 - 当前实现链、174项自动化/8轮网络专项摘录，以及已公开的历史机关/平台实验。
@@ -19,4 +19,6 @@
 
 Automation 只保留汇总、逐项名称/状态/警告/错误数及构建日志指纹。网络报告只保留原 case 状态、所需断言、显式 ASSERT/DONE/FAIL 事件的非身份字段；不上传 token、detail、启动命令或日志。状态直接来自已结束报告，不由服务器结果补写客户端通过。原文件未修改，公开文件带原报告相对路径及 SHA-256。
 
-推荐顺序：[实现链](INTERVIEW_GUIDE.md) → CombatAbility/AbilitySystem/Attributes → GameMode/GameInstance → [当前证据](../Tests/README.md)。历史实验必须按其旧构建和拓扑理解。
+本次结构整理的编译、174 项回归与资产契约独立摘录在 [architecture.json](../Tests/Evidence/2026-10-24/architecture.json)；原网络矩阵未重跑，不把历史证据改写为新构建联网通过。
+
+推荐顺序：[当前架构](ARCHITECTURE.md) → [实现链](INTERVIEW_GUIDE.md) → CombatAbility/AbilitySystem/Attributes → GameMode/GameInstance → [当前证据](../Tests/README.md)。历史实验必须按其旧构建和拓扑理解。

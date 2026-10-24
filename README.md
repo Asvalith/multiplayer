@@ -2,7 +2,7 @@
 
 个人项目，基于 UE5.5、C++ 与蓝图实现双人联机合作：钥匙安装、压力板合作门、移动平台、波次战斗、倒地救援与撤离结算。当前使用独立 Dedicated Server 和两个客户端，重点实践服务器权威、GAS 技能生命周期及断线后的状态恢复。
 
-> `main` 为源码展示快照，不是开箱即玩的资源包。源码取自 `9b4105c`；地图、蓝图、模型、动画等 Content 不在当前快照分发，测试数据来自具备授权资源的完整开发环境。[公开范围](Docs/SHOWCASE_SCOPE.md)与[资源依赖](Docs/ASSET_REQUIREMENTS.md)说明可审阅和可运行的边界。
+> `main` 为源码展示快照，不是开箱即玩的资源包。源码取自 `7477ca9`；地图、蓝图、模型、动画等 Content 不在当前快照分发，测试数据来自具备授权资源的完整开发环境。[公开范围](Docs/SHOWCASE_SCOPE.md)与[资源依赖](Docs/ASSET_REQUIREMENTS.md)说明可审阅和可运行的边界。
 
 ## 三条实现主线
 
@@ -15,7 +15,7 @@
 - C++ 管规则和状态，蓝图接动画、特效与 UMG；客户端范围预览不成为权威命中名单。
 - GameMode 管对局、接纳和恢复；GameState 复制共享事实；GameInstance 管地址连接、取消和有限重试；机关与能力各自拥有业务状态。
 - 战斗参数、表现资源与能力关系使用 Data Asset；机关/网络实验参数使用已有 JSON 配置。前者适合 UE 资产引用，后者便于外部实验；不重复维护同一字段。
-- ASC/AttributeSet 当前在战斗 Character 上，不宣传为 PlayerState 常驻架构。角色重建后的恢复通过显式快照完成。
+- ASC/AttributeSet 当前在战斗 Character 上，不宣传为 PlayerState 常驻架构。ASC 独立声明在 `multiplayerCombatAbilitySystem.h`；恢复数据合同在 `Network/multiplayerCombatResumeState.h`，GameMode 不再依赖完整角色头。
 
 参数例子见 [Examples/Gameplay.json](Examples/Gameplay.json)，只展示配置结构；运行时需要恢复到资源环境对应位置，不是第二套配置源。
 
@@ -26,12 +26,12 @@
 | Editor / Shipping | 原生编译通过，不等于新发布包运行 |
 | 完整 Automation | 174/174，0 测试警告、0 failed/notRun |
 | 资产契约 | 42 条审计，43 个所查包内容未改变；战斗/AI 资产校验通过 |
-| 战斗联机专项 | Combat、Lifecycle、Expansion、Reconnect，Normal/Harsh 共 8/8 通过 |
+| 战斗联机专项 | `9b4105c` 的 Combat、Lifecycle、Expansion、Reconnect，Normal/Harsh 共 8/8 通过；本次结构整理未重跑 |
 | 验证边界 | 本机 Editor DS + 双客户端、CombatTest、NullRHI；没有据此宣称正式地图画面、完整通关、公网或发布包验收通过 |
 
 Harsh 的三端参数为 PktLag=200、Variance=50、Loss=5，不是实测 RTT。历史机关规模实验与平台对照保留原构建条件，不是当前整局带宽或 GAS 优化收益。
 
-直接核对：[174项逐条摘要](Tests/Evidence/2026-10-24/automation.json)、[8轮战斗/恢复摘录](Tests/Evidence/2026-10-24/network.json)。保留原报告 SHA-256、原状态和显式断言，不上传测试 token、启动命令或原始日志。
+本次结构整理后的构建、174 项回归与资产契约见 [架构验证摘要](Tests/Evidence/2026-10-24/architecture.json)。以下是 `9b4105c` 的历史同日证据：[174项逐条摘要](Tests/Evidence/2026-10-24/automation.json)、[8轮战斗/恢复摘录](Tests/Evidence/2026-10-24/network.json)。保留原报告 SHA-256、原状态和显式断言，不上传测试 token、启动命令或原始日志。
 
 ## 运行与阅读
 
@@ -44,6 +44,7 @@ Harsh 的三端参数为 PktLag=200、Variance=50、Loss=5，不是实测 RTT。
 
 正式入口是 `/Game/Combat/Maps/CoopEscape`；`CombatTest` 用于技能专项。技能为左键攻击、Q 防御/弹反、E 治疗、R 范围、Shift 冲刺；F 引导救援，B 成长菜单。预览与释放操作、专项模式限制见脚本和历史说明。不要省略 `-Play` 后把旧机关原型的自动验证当成当前地图完整通关。
 
+- [当前架构：目录、状态所有者与三条调用链](Docs/ARCHITECTURE.md)
 - [面试讲解：背景、架构、GAS 链路与真实踩坑](Docs/INTERVIEW_GUIDE.md)
 - [GAS 能力实现](Source/multiplayer/Combat/multiplayerCombatAbility.cpp) / [属性结算](Source/multiplayer/Combat/multiplayerCombatAttributes.cpp)
 - [网络同步设计](Docs/NetworkDesign.md) / [公开范围](Docs/SHOWCASE_SCOPE.md)

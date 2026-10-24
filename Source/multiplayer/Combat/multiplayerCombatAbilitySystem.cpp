@@ -3,6 +3,8 @@
 // 实现项目 ASC 的标签关系扩展、正式失败反馈、动画预测及重连所需窄入口。
 // 不代管输入或技能步骤；生命周期、复制和效果账本仍以 GAS 为主。
 
+#include "Combat/multiplayerCombatAbilitySystem.h"
+
 #include "Combat/multiplayerCombatAbility.h"
 
 #include "Animation/AnimInstance.h"

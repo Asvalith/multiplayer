@@ -2,6 +2,7 @@
 // 倒地状态由组件提交，救援时序由服务器 GAS 能力持有。
 // 所有外部通知都读取已提交的状态；结束流程统一释放占用和定时器。
 #include "Combat/multiplayerCombatCoop.h"
+#include "Combat/multiplayerCombatAbilitySystem.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatAttributes.h"

@@ -2,6 +2,18 @@
 
 ## 当前验收入口（2026-10-24）
 
+### 同日后续：架构整理验证
+
+本次仅整理现有类的声明、依赖与源码归属：ASC 独立头、恢复数据合同从 Character 头提取到 Network、角色技能状态实现明确命名。没有新增运行时类、修改技能规则或网络协议，69 个 cpp 的原执行正文对比不变。当前结构见 [ARCHITECTURE](../Docs/ARCHITECTURE.md)。
+
+本轮原始记录在 `Saved/Architecture_20261024/`：
+
+- `BuildEditor_R1.log`、`BuildShipping_R1.log`：Editor/Shipping 首轮编译退出 0。
+- `Automation_R1/index.json`：`Multiplayer.Combat.` 共 174 clean，0 warned/failed/notRun；DX12 离屏条件，运行进程退出 0。
+- `Contracts_R1.json`：42 项蓝图/保存图契约审计，0 错误/警告，43 个所查包磁盘内容不变，未保存资产，进程退出 0。
+
+本次没有重跑多进程网络矩阵、完整地图通关、画面录制或性能基线。下方原八轮联网与旧性能实验保留原构建口径，不移称为本次新结果。
+
 当前项目介绍见 [README](../README.md)，面试讲解见 [INTERVIEW_GUIDE](../Docs/INTERVIEW_GUIDE.md)。下方保留各版本原始记录；不要把旧地图、Listen 拓扑、166 项测试或历史百分比拼成当前结果。
 
 - 完整自动化 `Saved/Refactor_20261024/Automation_R3/index.json`：174 clean，0 warned/failed/notRun。

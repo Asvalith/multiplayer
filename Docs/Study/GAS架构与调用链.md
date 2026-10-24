@@ -8,13 +8,15 @@
 
 ## 职责与阅读顺序
 
+当前目录与连接、机关、战斗边界见 [ARCHITECTURE](../ARCHITECTURE.md)。ASC 已从能力聚合头独立声明；服务器恢复结构位于 `Network/multiplayerCombatResumeState.h`，不是新组件或通用持久化框架。
+
 以下文件均位于 `Source/multiplayer/`。头文件保留相关 GAS 类型声明，按职责拆实现不改变蓝图父类和资产引用。
 
 | 阅读顺序 | 文件及入口 | 负责的事情 |
 | --- | --- | --- |
 | 1 | `Combat/multiplayerCombatCharacter.cpp` 的 `ActivateSkill`、`ActivateAimedSkill` | 接收玩家意图，选择 GAS 请求入口，协调角色生命周期 |
-| 2 | `Combat/multiplayerCombatSkillStatus.cpp` 的 `CheckSkillAvailable`、`CheckSkillBusinessRequirements` | 查询真实能力资格、补充角色业务条件、把失败原因转换为提示 |
-| 3 | `Combat/multiplayerCombatAbilitySystem.cpp` | 将配置关系接入 GAS 阻断与取消机制，处理服务器拒绝和有限的预测清理 |
+| 2 | `Combat/multiplayerCombatCharacterSkillStatus.cpp` 的 `CheckSkillAvailable`、`CheckSkillBusinessRequirements` | 查询真实能力资格、补充角色业务条件、把失败原因转换为提示 |
+| 3 | `Combat/multiplayerCombatAbilitySystem.h/.cpp` | 将配置关系接入 GAS 阻断与取消机制，处理服务器拒绝和有限的预测清理 |
 | 4 | `Combat/multiplayerCombatAbility.cpp` 的能力基类及具体技能 | 提交成本和冷却；组织起手、出手、收招与取消；定义对应 GE |
 | 5 | `Combat/multiplayerCombatTargeting.cpp` | 查询方向、落点、目标、距离与遮挡，不提交战斗结果 |
 | 6 | `Combat/multiplayerCombatProjectile.cpp`、`Combat/multiplayerCombatAttributes.cpp` | 权威弹体与命中、伤害计算、格挡、护盾和生命结算 |

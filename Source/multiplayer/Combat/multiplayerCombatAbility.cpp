@@ -4,6 +4,7 @@
 // GAS 管生命周期与预测，服务器管目标和结果；这里不处理输入、HUD 或机关规则。
 
 #include "Combat/multiplayerCombatAbility.h"
+#include "Combat/multiplayerCombatAbilitySystem.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"

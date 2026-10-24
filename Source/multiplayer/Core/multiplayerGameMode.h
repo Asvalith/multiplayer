@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Combat/multiplayerCombatCharacter.h"
+#include "Network/multiplayerCombatResumeState.h"
 #include "GameFramework/GameMode.h"
 #include "multiplayerGameMode.generated.h"
 

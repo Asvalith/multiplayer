@@ -13,7 +13,7 @@
 - C++ 管规则和状态，蓝图接动画、特效与 UMG；客户端范围预览不成为权威命中名单。
 - GameMode 管对局、接纳和恢复；GameState 复制共享事实；GameInstance 管地址连接、取消和有限重试；机关与能力各自拥有业务状态。
 - 战斗参数、表现资源与能力关系使用 Data Asset；机关/网络实验参数使用已有 JSON 配置。前者适合 UE 资产引用，后者便于外部实验；不重复维护同一字段。
-- ASC/AttributeSet 当前在战斗 Character 上，不宣传为 PlayerState 常驻架构。角色重建后的恢复通过显式快照完成。
+- ASC/AttributeSet 当前在战斗 Character 上，不宣传为 PlayerState 常驻架构。ASC 独立声明在 `multiplayerCombatAbilitySystem.h`；恢复数据合同在 `Network/multiplayerCombatResumeState.h`，GameMode 不再依赖完整角色头。
 
 ## 当前验证（2026-10-24）
 
@@ -36,6 +36,7 @@ Harsh 的三端参数为 PktLag=200、Variance=50、Loss=5，不是实测 RTT。
 
 正式入口是 `/Game/Combat/Maps/CoopEscape`；`CombatTest` 用于技能专项。技能为左键攻击、Q 防御/弹反、E 治疗、R 范围、Shift 冲刺；F 引导救援，B 成长菜单。预览与释放操作、专项模式限制见脚本和历史说明。不要省略 `-Play` 后把旧机关原型的自动验证当成当前地图完整通关。
 
+- [当前架构：目录、状态所有者与三条调用链](Docs/ARCHITECTURE.md)
 - [面试讲解：背景、架构、GAS 链路与真实踩坑](Docs/INTERVIEW_GUIDE.md)
 - [GAS 架构与调用链](Docs/Study/GAS架构与调用链.md)
 - [网络同步设计](Docs/NetworkDesign.md) / [状态边界与历史复盘](Docs/Study/代码结构与状态边界.md)

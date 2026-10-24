@@ -36,6 +36,7 @@ struct FCoopRideMovementSettings
 	// 静止对照只关闭平台运动，其余角色参数和输入不变。
 	UPROPERTY() bool bStationaryPlatform = false;
 	UPROPERTY() bool bReady = false;
+	// 将原蓝图参数用于本端实验 CMC，服务器与所属客户端必须一致。
 	void Apply(UCharacterMovementComponent* Movement) const;
 };
 
@@ -45,12 +46,18 @@ class ACoopPlatformRideProbe : public ACoopNetTestProbe
 {
 	GENERATED_BODY()
 public:
+	// 开发期在 PostPhysics 逐帧采样，不在普通关卡自动生成。
 	ACoopPlatformRideProbe();
+	// 驱动当前实验输入并采样实际运动，阶段结束后冻结统计。
 	virtual void Tick(float DeltaSeconds) override;
+	// 同步实验参数，采样历史仍由每端独立记录。
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	UPROPERTY(Replicated) FCoopRideMovementSettings MovementSettings;
+	// 只认可当前复制阶段对应的采样已结束，旧阶段结果不能推进新阶段。
 	bool IsSegmentFinished() const { return bSegmentFinished && SampleStage == Stage; }
+	// 检查当前阶段真实移动/起跳/落地是否满足实验条件。
 	bool IsSegmentValid() const;
+	// 输出本端同一采样窗口的指标及有界历史，不宣称视觉流畅度通过。
 	TSharedRef<FJsonObject> MakeMetrics() const;
 	bool bMetricReported = false;
 

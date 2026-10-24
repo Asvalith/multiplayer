@@ -43,22 +43,28 @@ class MULTIPLAYER_API AmultiplayerMovingPlatform : public AActor
 	GENERATED_BODY()
 
 public:
+	// 装配可移动根、平台网格、触发器与两类可复用组件，不启用 Actor Tick。
 	AmultiplayerMovingPlatform();
 
 protected:
+	// 服务器缓存固定世界端点并绑定唯一激活来源；客户端只关闭多余触发碰撞。
 	virtual void BeginPlay() override;
+	// 无论当前激活来源如何都对称解绑，支持销毁与关卡卸载。
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	// 非物理 Scene 根不会由 AActor 默认接收函数写速度；补上供 CMC 离开平台时继承。
 	virtual void PostNetReceiveVelocity(const FVector& NewVelocity) override;
 
+	// 平台占用模式人数变化后重新计算当前激活条件。
 	UFUNCTION()
 	void HandleOccupancyChanged(int32 PlayerCount);
 
+	// 外部压力板变化只触发统一重算，不在回调中重复实现移动。
 	UFUNCTION()
 	void HandleActivationPlateChanged(
 		AmultiplayerPressurePlate* Plate,
 		bool bIsActive);
 
+	// 指定压力板销毁后清引用并取消激活，是否返回由 Transporter 决定。
 	UFUNCTION()
 	void HandleActivationPlateDestroyed(AActor* DestroyedActor);
 

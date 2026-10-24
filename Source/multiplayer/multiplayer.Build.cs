@@ -21,13 +21,25 @@ public class multiplayer : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"InputCore",
 			"EnhancedInput",
+			"GameplayAbilities",
+			"GameplayTags",
+			"GameplayTasks",
+			"Niagara",
+			"AIModule",
 			"UMG",
 			"Slate",
 			"SlateCore"
 		});
 
 		// 默认菜单、JSON 解析及测试用玩家连接标识只在实现文件中使用。
-		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline" });
+		// 视口输入回归使用平台输入设备映射，显式声明对应依赖，避免依赖 Slate 的间接链接。
+		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline", "NavigationSystem", "NetCore", "ApplicationCore" });
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "AssetTools", "AnimGraph", "BlueprintGraph", "KismetCompiler", "IKRig", "IKRigEditor", "UMGEditor", "BehaviorTreeEditor", "AIGraph" });
+		}
+
 	}
 }

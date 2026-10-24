@@ -28,6 +28,8 @@ struct FmultiplayerCoopObjectiveState
 	// 最终胜利结果。它只能由服务器 GameMode 在目标和人数均满足时写入。
 	UPROPERTY()
 	bool bGameWon = false;
+	// 战斗团灭是独立终局；倒地且仍可救援时不写失败。
+	UPROPERTY() bool bGameLost = false;
 };
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FmultiplayerObjectiveProgressEvent,
@@ -38,10 +40,21 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FmultiplayerGameWonEvent);
 
+// 关卡战斗快照独立于钥匙提交；晚加入能看到当前波次，不重放旧的刷怪事件。
+USTRUCT(BlueprintType)
+struct FmultiplayerCombatEncounterState
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) int32 Wave = 0;
+	UPROPERTY(BlueprintReadOnly) int32 TotalWaves = 0;
+	UPROPERTY(BlueprintReadOnly) int32 LivingEnemies = 0;
+	UPROPERTY(BlueprintReadOnly) bool bActive = false;
+};
+
 /**
  * 向所有客户端复制的合作目标状态。
  * GameMode 判定规则并写入快照；客户端根据最新快照刷新，不依赖收到每个中间值。
- * 两个委托都是本地通知，不是 RPC；服务器主动调用 OnRep，客户端由复制触发。
+ * 目标、终局与波次委托都是本地通知，不是 RPC；服务器主动调用 OnRep，客户端由复制触发。
  */
 UCLASS()
 class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameState
@@ -49,6 +62,7 @@ class MULTIPLAYER_API AmultiplayerCoopGameState : public AGameState
 	GENERATED_BODY()
 
 public:
+	// 声明目标与波次字段复制，不复制本地通知委托。
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -58,6 +72,12 @@ public:
 	{
 		return ObjectiveState;
 	}
+
+	// 查询本机最新胜利快照，不在客户端重算终局。
+	UFUNCTION(BlueprintPure, Category = "Coop|Objective")
+	bool HasGameWon() const { return ObjectiveState.bGameWon; }
+	// 查询本机最新团灭快照；倒地与团灭的判定仍由服务器负责。
+	UFUNCTION(BlueprintPure, Category = "Coop|Objective") bool HasGameLost() const { return ObjectiveState.bGameLost; }
 
 	// RequiredKeys 必须大于 0，避免空关卡被误判为“0/0 已完成”。
 	bool IsObjectiveComplete() const
@@ -72,21 +92,33 @@ public:
 
 	// 对外本地事件。
 	// 本机进度刷新事件：服务器写入和客户端 OnRep 都会触发，监听者无需区分数据来源。
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Objective")
 	FmultiplayerObjectiveProgressEvent OnObjectiveProgressChanged;
 
-	// 仅本机观察到 false -> true 的胜利状态转换时广播一次；具体 UI 仍由本地 PlayerController 负责。
+	// 仅本机观察到 false -> true 的胜利状态转换时广播一次；具体 UI 由本地 HUD 负责。
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Objective")
 	FmultiplayerGameWonEvent OnGameWon;
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Objective") FmultiplayerGameWonEvent OnGameLost;
+	// 返回当前波次副本，供界面初始化补读而不是依赖历史事件。
+	UFUNCTION(BlueprintPure, Category = "Coop|Combat") FmultiplayerCombatEncounterState GetEncounterState() const { return EncounterState; }
+	// 仅服务器提交实际发生变化的波次/存活数量，并通知本机与复制客户端。
+	void ApplyEncounterState(const FmultiplayerCombatEncounterState& NewState);
+	UPROPERTY(BlueprintAssignable, Category = "Coop|Combat") FmultiplayerGameWonEvent OnEncounterChanged;
 
 protected:
 	// 两端共用的通知出口；广播前保存快照，避免监听者同步改状态造成重复胜利通知。
 	UFUNCTION()
 	void OnRep_ObjectiveState();
+	// 波次字段到达后仅发布本机刷新事件，界面从当前快照读取完整数据。
+	UFUNCTION() void OnRep_EncounterState();
 
 private:
 	// GameMode 写、GameState 复制；客户端不能通过本对象提交玩法结果。
 	UPROPERTY(ReplicatedUsing = OnRep_ObjectiveState)
 	FmultiplayerCoopObjectiveState ObjectiveState;
+	UPROPERTY(ReplicatedUsing = OnRep_EncounterState) FmultiplayerCombatEncounterState EncounterState;
 
 	// 记录本机上一次已经进入通知流程的胜利状态，用于只发布 false -> true 转换。
 	bool bLastNotifiedGameWon = false;
+	bool bLastNotifiedGameLost = false;
 };

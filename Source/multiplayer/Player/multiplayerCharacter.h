@@ -3,13 +3,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Character.h"
+#include "Combat/multiplayerCombatCharacter.h"
 #include "multiplayerCharacter.generated.h"
 
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
+class UmultiplayerCombatProgressionWidget;
 struct FInputActionValue;
 
 /**
@@ -27,20 +28,24 @@ struct FInputActionValue;
  *
  * 职责边界：本类不判断钥匙进度、机关条件或胜利结果；这些状态由服务器玩法 Actor 和
  * GameMode 维护。
+ * 战斗能力由 CombatCharacter 父类提供，本类只增加对应的本地按键绑定。
  */
 UCLASS(config = Game)
-class AmultiplayerCharacter : public ACharacter
+class AmultiplayerCharacter : public AmultiplayerCombatCharacter
 {
 	GENERATED_BODY()
 
 public:
+	// 建立固定相机组件与默认移动参数，资源外观仍由角色蓝图配置。
 	AmultiplayerCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	// 两端按相同春臂规则重建观察原点，包含相机探测遮挡，不接受任意客户端射线起点。
+	virtual FVector GetCombatViewOrigin(const FRotator& Aim) const override;
 
 protected:
 	// 控制权和输入初始化。
 	// 控制器发生变化时重新判断本地所有权，并为本地玩家安装输入映射上下文。
 	virtual void NotifyControllerChanged() override;
-	// 将输入 Action 绑定到移动、观察和 ACharacter 自带跳跃接口。
+	// 绑定移动、观察、跳跃以及父类战斗/成长入口，不在输入层执行权威结算。
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 private:
@@ -49,6 +54,27 @@ private:
 	void Move(const FInputActionValue& Value);
 	// 修改 Controller 的 Yaw/Pitch；镜头通过 SpringArm 使用控制器旋转。
 	void Look(const FInputActionValue& Value);
+	// 仅所属客户端切换成长附加层，保留原 HUD 生命周期与界面布局。
+	void ToggleProgressionMenu();
+	// Q 按下预览槽位 1，装配映射由成长组件决定。
+	void PreviewDefense() { BeginSlotTargeting(1); }
+	// E 按下预览槽位 2，不直接消耗资源或选择权威治疗目标。
+	void PreviewHeal() { BeginSlotTargeting(2); }
+	// R 按下预览槽位 3，预览与实际能力共用父类规则。
+	void PreviewArea() { BeginSlotTargeting(3); }
+	// Shift 按下预览槽位 4，不在输入层直接改变位置。
+	void PreviewDash() { BeginSlotTargeting(4); }
+	// 仅当前预览仍属于 Q 槽位时确认。
+	void ReleaseDefense();
+	// 仅当前预览仍属于 E 槽位时确认。
+	void ReleaseHeal();
+	// 仅当前预览仍属于 R 槽位时确认。
+	void ReleaseArea();
+	// 仅当前预览仍属于 Shift 槽位时确认。
+	void ReleaseDash();
+	// 共用松键确认入口，阻止已取消或已切换技能的旧松键继续激活。
+	void ReleaseTargetSlot(int32 Slot);
+	UPROPERTY(Transient) TObjectPtr<UmultiplayerCombatProgressionWidget> ProgressionMenu;
 
 	// 相机组件。
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))

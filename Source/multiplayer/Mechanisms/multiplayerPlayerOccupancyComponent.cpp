@@ -7,22 +7,20 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 
-/*
- * 进入/离开维护重叠次数，控制器变化维护玩家资格，销毁直接移除角色。
- * 非复制 Actor 的调用方须像 WinArea 一样排除客户端世界，不能只依赖 HasAuthority。
- */
+// 区域人数基础组件：服务器记录物理重叠与玩家资格，供门、压力板、平台和终点复用。
+// 不判断关卡规则、不复制人数；多碰撞体计数和外部订阅只在事件中维护。
 
+//构造函数组件配置
 UmultiplayerPlayerOccupancyComponent::UmultiplayerPlayerOccupancyComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	SetIsReplicatedByDefault(false);
 }
 
-void UmultiplayerPlayerOccupancyComponent::BindTrigger(
-	UPrimitiveComponent* InTrigger,
-	bool bInRequirePlayerControlledCharacter)
+//绑定触发体并设置玩家资格要求；重绑定时会静默清理旧成员，避免中途通知清零让机关短暂误判无人。
+void UmultiplayerPlayerOccupancyComponent::BindTrigger(UPrimitiveComponent* InTrigger,bool bInRequirePlayerControlledCharacter)
 {
-	// 先保存成员再静默重建，避免中途通知清零让机关短暂误判无人。
+	//先保存成员再静默重建，避免中途通知清零让机关短暂误判无人。
 	TSet<TWeakObjectPtr<ACharacter>> PreviousOccupants;
 	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
 	{
@@ -32,43 +30,43 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 		}
 	}
 
-	UnbindTriggerInternal();
+	//静默清理供普通解绑和重绑定复用，由调用方统一通知最终状态。
+	UnbindTrigger(false);
+	//保存新的触发体和玩家资格要求
 	BoundTrigger = InTrigger;
 	bRequirePlayerControlledCharacter = bInRequirePlayerControlledCharacter;
-
+	//绑定触发体的重叠回调；仅在服务器上启用触发体，避免客户端重复计数。
 	AActor* Owner = GetOwner();
-	if (BoundTrigger != nullptr && Owner != nullptr)
+	if (BoundTrigger != nullptr && Owner != nullptr && Owner->HasAuthority())
 	{
-		if (Owner->HasAuthority())
-		{
-			BoundTrigger->OnComponentBeginOverlap.AddUniqueDynamic(
-				this,
-				&UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap);
-			BoundTrigger->OnComponentEndOverlap.AddUniqueDynamic(
-				this,
-				&UmultiplayerPlayerOccupancyComponent::HandleEndOverlap);
+		BoundTrigger->OnComponentBeginOverlap.AddUniqueDynamic(
+			this,
+			&UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap);
+		BoundTrigger->OnComponentEndOverlap.AddUniqueDynamic(
+			this,
+			&UmultiplayerPlayerOccupancyComponent::HandleEndOverlap);
 
-			// 保留组件及 BodyIndex，保证重建计数与 Begin/EndOverlap 的语义一致。
-			for (const FOverlapInfo& Overlap : BoundTrigger->GetOverlapInfos())
+		//只有拥有 Authority 的服务器端才绑定重叠回调，客户端直接跳过，再次强化服务器权威
+		for (const FOverlapInfo& Overlap : BoundTrigger->GetOverlapInfos())
+		{
+			UPrimitiveComponent* OtherComponent = Overlap.OverlapInfo.Component.Get();
+			if (OtherComponent == nullptr)
 			{
-				UPrimitiveComponent* OtherComponent = Overlap.OverlapInfo.Component.Get();
-				if (OtherComponent == nullptr)
-				{
-					continue;
-				}
-				if (ACharacter* Character = GetOverlapCandidate(OtherComponent->GetOwner()))
-				{
-					RecordOccupantOverlap(Character);
-				}
+				continue;
+			}
+			if (ACharacter* Character = GetOverlapCandidate(OtherComponent->GetOwner()))
+			{
+				RecordOccupantOverlap(Character);
 			}
 		}
-		else
-		{
-			BoundTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		}
+	}
+	// 客户端关闭触发体碰撞且不维护人数；服务器通过控制器变化事件刷新原地 Possess/UnPossess 资格。
+	else if (BoundTrigger != nullptr && Owner != nullptr)
+	{
+		BoundTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
-	// 一次遍历同时统计人数和比较成员；A 换成 B 即使人数不变，也必须通知门。
+	//统一广播最终变化
 	int32 NewPlayerCount = 0;
 	bool bMembershipChanged = false;
 	for (const TPair<TWeakObjectPtr<ACharacter>, FOccupantRecord>& Entry : Occupants)
@@ -86,15 +84,10 @@ void UmultiplayerPlayerOccupancyComponent::BindTrigger(
 	}
 }
 
-void UmultiplayerPlayerOccupancyComponent::UnbindTrigger()
+//解绑触发体和所有角色回调；可选择是否通知人数变化。
+void UmultiplayerPlayerOccupancyComponent::UnbindTrigger(bool bNotifyChange)
 {
-	const int32 PreviousPlayerCount = GetPlayerCount();
-	UnbindTriggerInternal();
-	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
-}
-
-void UmultiplayerPlayerOccupancyComponent::UnbindTriggerInternal()
-{
+	const int32 PreviousPlayerCount = bNotifyChange ? GetPlayerCount() : 0;
 	// 先解除触发体回调，再清角色回调；避免清理过程中又收到新的 Begin/EndOverlap。
 	if (BoundTrigger != nullptr)
 	{
@@ -115,8 +108,13 @@ void UmultiplayerPlayerOccupancyComponent::UnbindTriggerInternal()
 		}
 	}
 	Occupants.Reset();
+	if (bNotifyChange)
+	{
+		BroadcastIfPlayerCountChanged(PreviousPlayerCount);
+	}
 }
 
+//查询函数：安全计数
 int32 UmultiplayerPlayerOccupancyComponent::GetPlayerCount() const
 {
 	// 不直接返回 Map.Num()：弱引用失效与延迟销毁窗口中，容器可能暂时保留无效条目。
@@ -131,6 +129,7 @@ int32 UmultiplayerPlayerOccupancyComponent::GetPlayerCount() const
 	return PlayerCount;
 }
 
+// 查询函数：追加所有有效不同玩家角色，不清空已有输出，供门跨多个区域合并。
 void UmultiplayerPlayerOccupancyComponent::GetOccupyingCharacters(
 	TArray<ACharacter*>& OutCharacters) const
 {
@@ -142,14 +141,14 @@ void UmultiplayerPlayerOccupancyComponent::GetOccupyingCharacters(
 		}
 	}
 }
-
-void UmultiplayerPlayerOccupancyComponent::EndPlay(
-	const EEndPlayReason::Type EndPlayReason)
+// 组件卸载时对称解除触发器与角色订阅，避免长期存在的外部对象再回调旧组件。
+void UmultiplayerPlayerOccupancyComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindTrigger();
 	Super::EndPlay(EndPlayReason);
 }
 
+// 服务器每个物理重叠项增加一次引用，仅不同玩家总数实际改变时通知机关。
 void UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap(
 	UPrimitiveComponent* OverlappedComponent,
 	AActor* OtherActor,
@@ -169,6 +168,7 @@ void UmultiplayerPlayerOccupancyComponent::HandleBeginOverlap(
 	BroadcastIfPlayerCountChanged(PreviousPlayerCount);
 }
 
+// 单个组件离开只递减重叠数；最后一项离开才移除整名角色并解除其外部订阅。
 void UmultiplayerPlayerOccupancyComponent::HandleEndOverlap(
 	UPrimitiveComponent* OverlappedComponent,
 	AActor* OtherActor,

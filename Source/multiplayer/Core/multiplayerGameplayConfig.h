@@ -4,7 +4,10 @@
 
 #include "CoreMinimal.h"
 
-/** 启动时读取的纯 C++ 玩法参数；默认值也是配置无效时的完整回退值。 */
+/**
+ * 启动时读取的纯 C++ 玩法参数；默认值也是配置无效时的完整回退值。
+ * 本结构不保存回合状态，也不复制客户端配置来覆盖服务器规则。
+ */
 struct MULTIPLAYER_API FmultiplayerGameplayConfig
 {
 	/** 完整校验 JSON 后一次性应用；任何读取或校验失败都会恢复整套默认值。 */
@@ -15,6 +18,8 @@ struct MULTIPLAYER_API FmultiplayerGameplayConfig
 
 	// 配置数据及整套回退默认值。
 	int32 SessionMaxPlayers = 2;
+	// 本关需要完成的插槽数量，由服务器写入 GameState；与关卡中的有效钥匙和插槽配套配置。
+	int32 RequiredKeys = 4;
 	int32 WinRequiredPlayers = 2;
 	int32 PlatformRequiredPlayers = 1;
 	float PlatformMoveSpeed = 150.f;

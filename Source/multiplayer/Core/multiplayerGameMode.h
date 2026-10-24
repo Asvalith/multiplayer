@@ -3,8 +3,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/multiplayerCombatCharacter.h"
 #include "GameFramework/GameMode.h"
 #include "multiplayerGameMode.generated.h"
+
+class AmultiplayerCoopPlayerController;
 
 /**
  * 合作玩法的服务器规则入口。
@@ -22,7 +25,24 @@ public:
 	AmultiplayerGameMode();
 
 	// 在接收玩家前设置实际登录容量；地图直接启动或重开时同样使用 JSON 人数上限。
-	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+	// GameSession 和 GameState 创建后，统一应用内存中的配置并初始化目标快照。
+	virtual void InitGameState() override;
+	// 登录后为尚未接纳的控制器安排握手期限。
+	virtual void PostLogin(APlayerController* NewPlayer) override;
+	// 只为未接纳玩家走引擎出生流程，不提供已接纳角色的免费复活。
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	// 退出时补存个人快照，再交还引擎清理连接。
+	virtual void Logout(AController* Exiting) override;
+
+	// 接纳只校验服务器签发的票据；个人状态始终来自本局服务器快照，不收客户端数值。
+	bool ClaimCombatSession(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket,
+		FGuid& OutTicket, FText& OutError, bool& bRetryable);
+	// Controller 在销毁 Pawn 前调用；重复的销毁/Logout 通知不会覆盖第一次快照。
+	void SaveCombatSession(AmultiplayerCoopPlayerController* Controller);
+	// 终局死亡后复核整队；仍有活跃玩家时保留救援机会，不把单人死亡当整局结束。
+	void NotifyCombatPlayerDeath();
+	// 服务器接纳完成后的通知；场景出生器据此启动，GameMode 不接管刷怪数量、落点或计时。
+	FSimpleMulticastDelegate OnCombatSessionAccepted;
 
 	// 合作目标的权威提交入口。
 	/**
@@ -47,7 +67,7 @@ public:
 
 	// 当前回合重开与失败恢复。
 	/**
-	 * 仅在比赛已经胜利时接受一次重开请求，并使用 AGameMode::RestartGame 重新加载当前 URL。
+	 * 仅在胜利或失败终局接受一次重开请求，并使用 AGameMode::RestartGame 重新加载当前 URL。
 	 * 这不会选择或自动切换到另一张玩法地图。
 	 */
 	bool RequestRestartCurrentRound(AController* RequestingController);
@@ -56,9 +76,27 @@ public:
 	bool RecoverFailedRestart(const FString& FailureReason);
 
 protected:
-	virtual void BeginPlay() override;
+	// 跨越引擎 Possess/Restart 过程保持未接纳 Pawn 禁行，接纳后才由握手开放。
+	virtual void FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation) override;
+	// 向客户端发送 Travel 前清旧回合票据，失败恢复时再由原 GameMode 下发。
+	virtual APlayerController* ProcessClientTravel(FString& URL, bool bSeamless, bool bAbsolute) override;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCoopResumeAdmissionResultTest;
+#endif
+	// 单个服务器会话：在线弱引用、票据别名和个人快照共享同一接纳锁。
+	struct FCombatSession
+	{
+		TWeakObjectPtr<AmultiplayerCoopPlayerController> Controller;
+		FGuid PreviousTicket;
+		FmultiplayerCombatResumeState State;
+		double SavedAt = 0;
+		double ExpiresAt = 0;
+	};
+	// 仅存本局内存；断线快照保留120秒，当前/备用票据共享一个在线锁，轮换回执丢失也能恢复。
+	TMap<FGuid, FCombatSession> CombatSessions;
+
 	// 钥匙附着、销毁和进度通知可能同步触发其他事件，拒绝提交期间的嵌套登记。
 	bool bRegisteringKey = false;
 

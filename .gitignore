@@ -30,3 +30,13 @@ x64/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Source-only interview snapshot. Keep all existing local assets untouched.
+/Content/
+/Docs/Study/
+/PROJECT_HISTORY.md
+*.utrace
+*.ucache
+*.etl
+.codex/
+.agents/

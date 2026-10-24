@@ -27,6 +27,7 @@ class MULTIPLAYER_API UmultiplayerPlayerOccupancyComponent : public UActorCompon
 	GENERATED_BODY()
 
 public:
+	// 事件驱动的服务器统计，不启用 Tick 或组件复制。
 	UmultiplayerPlayerOccupancyComponent();
 
 	/** 重绑定时重建已有重叠，最终成员变化只通知一次；客户端关闭本地触发体碰撞。 */
@@ -35,7 +36,8 @@ public:
 		bool bInRequirePlayerControlledCharacter = true);
 
 	// 对称移除重叠、销毁、控制器变化 Delegate，并清空临时计数；可安全重复调用。
-	void UnbindTrigger();
+	// 默认通知人数变化；重绑定时传 false，静默清理后由 BindTrigger 统一通知最终成员变化。
+	void UnbindTrigger(bool bNotifyChange = true);
 
 	// 返回有效弱引用的数量，不把同一角色的多个碰撞组件重复算作多个玩家。
 	int32 GetPlayerCount() const;
@@ -46,13 +48,12 @@ public:
 	FmultiplayerOccupancyChangedEvent OnOccupancyChanged;
 
 protected:
+	// 释放触发器及所有已登记角色的销毁/控制器变化订阅。
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	// 静默清理供普通解绑和重绑定复用，由调用方统一通知最终状态。
-	void UnbindTriggerInternal();
-
 	// 这些监听只由 BindTrigger 的服务器分支安装；事件直接更新成员记录。
+	// 新增一个物理重叠项，人数仍按角色去重。
 	UFUNCTION()
 	void HandleBeginOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -62,6 +63,7 @@ private:
 		bool bFromSweep,
 		const FHitResult& SweepResult);
 
+	// 递减物理重叠项，最后一个组件离开才移除角色。
 	UFUNCTION()
 	void HandleEndOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -69,17 +71,21 @@ private:
 		UPrimitiveComponent* OtherComponent,
 		int32 OtherBodyIndex);
 
+	// 直接销毁角色时补清记录，不依赖 EndOverlap 一定到达。
 	UFUNCTION()
 	void HandleOccupantDestroyed(AActor* DestroyedActor);
 
+	// 原地 Possess/UnPossess 也更新玩家资格，避免没有新 Overlap 就遗漏人数变化。
 	UFUNCTION()
 	void HandleControllerChanged(APawn* Pawn, AController* OldController, AController* NewController);
 
 	// 先记录物理重叠候选，不在此排除未被玩家控制的角色，否则原地 Possess 无法补入人数。
 	ACharacter* GetOverlapCandidate(AActor* OtherActor) const;
+	// 玩家资格是控制器条件，不等同于物理重叠是否存在。
 	bool CanCountAsPlayer(const ACharacter* Character) const;
 	// 只登记一条有效角色重叠，不广播；实时进入和初始重建共用相同计数、解绑配对规则。
 	void RecordOccupantOverlap(ACharacter* Character);
+	// 成组解除角色销毁与控制器变化订阅，不修改容器或广播。
 	void UnbindOccupant(ACharacter* Character);
 	// 屏蔽“组件数变化但不同玩家数不变”的噪声事件。
 	void BroadcastIfPlayerCountChanged(int32 PreviousPlayerCount);

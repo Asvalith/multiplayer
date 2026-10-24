@@ -203,14 +203,13 @@ private:
 	bool bEndingMelee = false;
 };
 
-// 防御：消耗、冷却、限时效果和技能。
+// 所有技能共用同一种能量成本；金额由本次提交的 Data.Cost 提供。
 UCLASS(Blueprintable)
-class MULTIPLAYER_API UmultiplayerDefendCostEffect : public UGameplayEffect
+class MULTIPLAYER_API UmultiplayerEnergyCostEffect : public UGameplayEffect
 {
 	GENERATED_BODY()
 public:
-	// 从 Data.Cost 读取本次防御能量消耗，不在效果中固定扣费数值。
-	UmultiplayerDefendCostEffect();
+	UmultiplayerEnergyCostEffect();
 };
 
 UCLASS(Blueprintable)
@@ -248,7 +247,7 @@ class MULTIPLAYER_API UmultiplayerDefendAbility : public UmultiplayerCombatAbili
 	GENERATED_BODY()
 
 public:
-	// 声明防御分类、定向事件及独立的成本／冷却效果。
+	// 声明防御分类、定向事件；能量成本共用，冷却标签独立。
 	UmultiplayerDefendAbility();
 
 protected:
@@ -267,15 +266,6 @@ class MULTIPLAYER_API UmultiplayerHealEffect : public UGameplayEffect
 public:
 	// 读取本次 Data.Heal 修改血量，属性集负责限制上限与禁止复活。
 	UmultiplayerHealEffect();
-};
-
-UCLASS(Blueprintable)
-class MULTIPLAYER_API UmultiplayerHealCostEffect : public UGameplayEffect
-{
-	GENERATED_BODY()
-public:
-	// 从 Data.Cost 读取本次治疗消耗，扣费与其他技能共用 GAS 资源账本。
-	UmultiplayerHealCostEffect();
 };
 
 UCLASS(Blueprintable)
@@ -309,14 +299,6 @@ protected:
 		const FGameplayEventData* TriggerEventData) override;
 };
 
-// 范围技能沿用防御/治疗的资源通道，不另写客户端扣费或冷却计时。
-UCLASS()
-class MULTIPLAYER_API UmultiplayerAreaCostEffect : public UGameplayEffect
-{
-	GENERATED_BODY()
-// 以 Data.Cost 修改能量，可供其他使用同一资源通道的技能复用。
-public: UmultiplayerAreaCostEffect();
-};
 // 范围技能的默认冷却标签；实际时长在提交时由有效规则覆盖。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerAreaCooldownEffect : public UGameplayEffect

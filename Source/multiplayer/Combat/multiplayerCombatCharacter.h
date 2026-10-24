@@ -116,8 +116,9 @@ public:
 	void SetCombatSessionReady(bool bReady);
 	// 从服务器取本局短时重连快照，区别于只保存成长配装的长期档案。
 	FmultiplayerCombatResumeState CaptureResumeState() const;
-	// 只恢复未接纳的新 Pawn，扣除离线时间；不恢复半次施法或回滚当前局进度。
-	void RestoreResumeState(const FmultiplayerCombatResumeState& State, float OfflineSeconds);
+	// 只恢复未接纳的新 Pawn；成长或原生传送失败明确拒绝，由接纳方保留旧票据并销毁失败 Pawn。
+	// 离线时间正常扣除，不续接半次施法；失败不承诺回滚这个未接纳的临时 Pawn。
+	bool RestoreResumeState(const FmultiplayerCombatResumeState& State, float OfflineSeconds, FText* OutError = nullptr);
 	// 状态直接读取 GAS 标签；剩余时间供拥有者与服务器查询，远端只复制标签不保证完整效果。
 	UFUNCTION(BlueprintPure, Category = "Combat")
 	bool IsDefending() const;
@@ -318,6 +319,8 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Combat") TObjectPtr<UmultiplayerCombatConfig> CombatConfig;
 
 private:
+	// 本端统一发布失败提示；不重新查询资格，也不替代权威拒绝。
+	void PresentSkillFailure(const FText& Message);
 	// 瞄准意图与激活使用同一个 GAS 请求/预测键，不依赖另一路移动包先更新服务器朝向。
 	bool ActivateAimedSkill(TSubclassOf<UGameplayAbility> AbilityClass, const FGameplayTag& EventTag);
 	// 所属连接提交救援取消意图，服务器仍只操作本角色能力。

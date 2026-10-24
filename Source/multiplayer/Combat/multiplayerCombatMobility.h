@@ -1,5 +1,5 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
-// 位移技能模块只定义冲刺能力及其消耗、冷却效果，复用通用 GAS 准入与取消。
+// 位移技能模块定义冲刺能力及独立冷却，能量成本、GAS 准入与取消使用公共实现。
 // 实际推进交给原生 RootMotionSource 和 CMC，不手写瞬移回滚或第二套移动复制。
 
 #pragma once
@@ -7,16 +7,6 @@
 #include "CoreMinimal.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "multiplayerCombatMobility.generated.h"
-
-// 冲刺仍使用同一份能量属性与预测账本，不直接改客户端数值。
-UCLASS()
-class MULTIPLAYER_API UmultiplayerDashCostEffect : public UGameplayEffect
-{
-	GENERATED_BODY()
-public:
-	// 使用通用 Data.Cost 给能量加负值，幅度由本次提交规则决定。
-	UmultiplayerDashCostEffect();
-};
 
 // 独立冲刺冷却标签参与原生 GAS 检查，持续时间在提交时覆盖。
 UCLASS()

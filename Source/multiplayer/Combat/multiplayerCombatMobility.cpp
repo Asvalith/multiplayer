@@ -6,21 +6,10 @@
 
 #include "Abilities/GameplayAbilityTargetTypes.h"
 #include "Abilities/Tasks/AbilityTask_ApplyRootMotionConstantForce.h"
-#include "Combat/multiplayerCombatAttributes.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
-
-// 只定义能量修改通道，负成本由通用提交入口通过 SetByCaller 写入。
-UmultiplayerDashCostEffect::UmultiplayerDashCostEffect()
-{
-	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
-	Modifier.Attribute = UmultiplayerCombatAttributes::GetEnergyAttribute();
-	FSetByCallerFloat Cost;
-	Cost.DataTag = CombatTags::Data_Cost;
-	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
-}
 
 // 用持续 GE 持有冲刺冷却标签，实际时长由本次技能规则覆盖。
 UmultiplayerDashCooldownEffect::UmultiplayerDashCooldownEffect()
@@ -42,7 +31,7 @@ UmultiplayerDashAbility::UmultiplayerDashAbility()
 	ActivationOwnedTags.AddTag(CombatTags::State_Dashing);
 	// 只拥有本次冲刺标签；禁行/重复激活关系读取角色配置，结束仍由原生任务清位移源。
 	AbilityTriggers.AddDefaulted_GetRef().TriggerTag = CombatTags::Event_Dash;
-	CostGameplayEffectClass = UmultiplayerDashCostEffect::StaticClass();
+	CostGameplayEffectClass = UmultiplayerEnergyCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerDashCooldownEffect::StaticClass();
 }
 

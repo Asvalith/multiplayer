@@ -42,8 +42,8 @@ public:
 	AmultiplayerCombatEnemy();
 	// 范围配置由 Service 和攻击任务读取，运行中的目标只保存在黑板。
 	float GetDetectionRadius() const { return DetectionRadius; }
-	// 攻击任务的接近阈值；真正出手仍由能力复核命中条件。
-	float GetAttackDistance() const { return AttackDistance; }
+	// 从当前有效技能规则派生接近阈值，不再维护第二份可编辑射程。
+	float GetAttackDistance() const;
 	// 返回 Sight 单侧视角半角，墙后位置不会借此直接暴露给决策。
 	float GetPeripheralVisionAngle() const { return PeripheralVisionAngle; }
 	// 巡逻点围绕首次记录的出生区域选取，不跟随玩家不断平移。
@@ -74,9 +74,6 @@ protected:
 	float PatrolRadius = 700.0f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|AI", meta = (ClampMin = "0.1"))
 	float SearchDuration = 5.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|AI", meta = (ClampMin = "100.0"))
-	float AttackDistance = 400.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|AI")
 	TSoftObjectPtr<UBehaviorTree> CombatBehaviorTree;

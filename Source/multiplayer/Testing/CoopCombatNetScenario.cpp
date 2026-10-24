@@ -56,11 +56,11 @@ namespace
 		if (Name == TEXT("Attack")) return { UmultiplayerAttackAbility::StaticClass(), UmultiplayerAttackCooldownEffect::StaticClass(),
 			nullptr, CombatTags::Cooldown_Attack, 0.0f };
 		if (Name == TEXT("Defense")) return { UmultiplayerDefendAbility::StaticClass(), UmultiplayerDefendCooldownEffect::StaticClass(),
-			UmultiplayerDefendCostEffect::StaticClass(), CombatTags::Cooldown_Defend, 20.0f };
+			UmultiplayerEnergyCostEffect::StaticClass(), CombatTags::Cooldown_Defend, 20.0f };
 		if (Name == TEXT("Area")) return { UmultiplayerAreaAbility::StaticClass(), UmultiplayerAreaCooldownEffect::StaticClass(),
-			UmultiplayerAreaCostEffect::StaticClass(), CombatTags::Cooldown_Area, 30.0f };
+			UmultiplayerEnergyCostEffect::StaticClass(), CombatTags::Cooldown_Area, 30.0f };
 		return { UmultiplayerHealAbility::StaticClass(), UmultiplayerHealCooldownEffect::StaticClass(),
-			UmultiplayerHealCostEffect::StaticClass(), CombatTags::Cooldown_Heal, 25.0f };
+			UmultiplayerEnergyCostEffect::StaticClass(), CombatTags::Cooldown_Heal, 25.0f };
 	}
 
 	// 每个拒绝场景后都在服务器恢复合法条件；Fresh 组只在主动退出后的新会话执行。
@@ -1406,7 +1406,7 @@ void UCoopNetTestDriver::CombatClientTick(UWorld* World)
 					{
 						const auto* Effect = CasterASC->GetActiveGameplayEffect(Handle);
 						if (!Effect || Effect->PredictionKey != Key) continue;
-						KeyedCost |= Effect->Spec.Def->IsA<UmultiplayerHealCostEffect>();
+						KeyedCost |= Effect->Spec.Def->IsA<UmultiplayerEnergyCostEffect>();
 						KeyedCooldown |= Effect->Spec.Def->IsA<UmultiplayerHealCooldownEffect>();
 					}
 					SendReceipt(TEXT("PrimarySelfHealPredicted"), Key.IsLocalClientKey() && Key.WasLocallyGenerated()

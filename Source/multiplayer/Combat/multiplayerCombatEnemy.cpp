@@ -13,6 +13,7 @@
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatPresentation.h"
 #include "Combat/multiplayerCombatTags.h"
+#include "Combat/multiplayerCombatTargeting.h"
 #include "Core/multiplayerLog.h"
 #include "Core/multiplayerGameMode.h"
 #include "Components/CapsuleComponent.h"
@@ -75,9 +76,16 @@ bool AmultiplayerCombatEnemy::ConfigureRangedArchetype()
 	CombatConfig->Attack.Amount = 15.f;
 	CombatConfig->Attack.Cost = 0.f;
 	CombatConfig->Attack.Cooldown = 1.8f;
-	AttackDistance = CombatConfig->Attack.Range;
 	AttackAbilityClass = UmultiplayerAttackAbility::StaticClass();
 	return true;
+}
+
+// 接近资格与真正出手共用当前规则；没有独立停步偏好的正式小兵不再保存第二份射程。
+float AmultiplayerCombatEnemy::GetAttackDistance() const
+{
+	const auto AttackClass = GetAttackAbilityClass();
+	return AttackClass && AttackClass->IsChildOf(UmultiplayerEnemyMeleeAbility::StaticClass())
+		? GetSkillRule(EMultiplayerCombatSkill::Attack).Range : CombatTargeting::GetProjectileRange(*this);
 }
 
 // 决策只在服务器执行；导航追击需要关卡中存在覆盖活动区域的 NavMesh。
@@ -182,6 +190,10 @@ void AmultiplayerCombatAIController::OnUnPossess()
 			Enemy->GetAbilitySystemComponent()->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved)
 				.RemoveAll(this);
 		}
+		// 停树只停止新的请求；已有起手任务属于 ASC，失控时必须沿其 EndAbility 清理。
+		// 已经生成的弹体有自己的生命周期，不因取消角色动作而被追溯销毁。
+		FGameplayTagContainer AttackTags(CombatTags::Ability_Attack);
+		Enemy->GetAbilitySystemComponent()->CancelAbilities(&AttackTags);
 	}
 	bCombatActionBlocked = false;
 	Super::OnUnPossess();

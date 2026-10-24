@@ -82,6 +82,9 @@ protected:
 	virtual APlayerController* ProcessClientTravel(FString& URL, bool bSeamless, bool bAbsolute) override;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCoopResumeAdmissionResultTest;
+#endif
 	// 单个服务器会话：在线弱引用、票据别名和个人快照共享同一接纳锁。
 	struct FCombatSession
 	{

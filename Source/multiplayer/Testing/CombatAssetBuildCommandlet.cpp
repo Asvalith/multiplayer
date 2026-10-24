@@ -2051,11 +2051,11 @@ bool ConnectARPGEnemySource(bool bAuditOnly = false)
 	Weapon->SetGenerateOverlapEvents(false);
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Montages); ++Index)
 		if (!SetAsset(Character, MontageFields[Index], Montages[Index])) return false;
-	FFloatProperty* Distance = FindFProperty<FFloatProperty>(Character->GetClass(), TEXT("AttackDistance"));
-	if (!Distance || !SetAsset(Character, TEXT("HealMontage"), nullptr) || !SetAsset(Character, TEXT("AreaMontage"), nullptr)
+	if (!SetAsset(Character, TEXT("HealMontage"), nullptr) || !SetAsset(Character, TEXT("AreaMontage"), nullptr)
 		|| !SetAsset(Character, TEXT("CombatConfig"), Config)
 		|| !SetAsset(Character, TEXT("AttackAbilityClass"), UmultiplayerEnemyMeleeAbility::StaticClass())) return false;
-	Distance->SetPropertyValue_InContainer(Character, Config->Attack.Range);
+	const auto* CombatEnemy = Cast<AmultiplayerCombatEnemy>(Character);
+	if (!CombatEnemy || !FMath::IsNearlyEqual(CombatEnemy->GetAttackDistance(), Config->Attack.Range)) return false;
 	if (!Compile(Enemy) || !Save(Enemy)) return false;
 	FAssetCompilingManager::Get().FinishAllCompilation();
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("ARPG_ENEMY_SOURCE_CONNECTED mesh=%s skeleton=%s animation=%s sequences=%d montages=3 attackSource=%s release=%.6f duration=%.6f ability=EnemyMelee gameplay=ownBT_GAS_CMC visualPreview=NOT_RUN"),

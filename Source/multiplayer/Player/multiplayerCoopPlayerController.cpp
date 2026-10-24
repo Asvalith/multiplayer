@@ -142,18 +142,32 @@ void AmultiplayerCoopPlayerController::RequestRestartCurrentRound()
 	{
 		return;
 	}
+	// 未接纳时不建立在途请求；进入 PlayingState 不代表服务器已开放本局资格。
+	if (!bCombatSessionAccepted)
+	{
+		SetVictoryAction(ECoopVictoryAction::Idle,
+			NSLOCTEXT("Multiplayer", "RestartBeforeAdmission", "会话尚未就绪，请稍候再重开。"));
+		return;
+	}
 
 	// 先占用再发 RPC；只有失败回执能解除等待，避免快速点击重复提交。
 	SetVictoryAction(ECoopVictoryAction::RestartPending,NSLOCTEXT("Multiplayer", "RestartPending", "正在请求重新开始……"));
 	// 可靠 Server RPC 经此控制器的所属连接发往服务器，不能把本地占位当作重开成功。
-	ServerRequestRestartCurrentRound();
+	if (VictoryAction == ECoopVictoryAction::RestartPending) ServerRequestRestartCurrentRound();
 }
 
 //接收请求并做权威校验（防重入，状态校验，权威校验，规则校验）
 void AmultiplayerCoopPlayerController::ServerRequestRestartCurrentRound_Implementation()
 {
-	if (!bCombatSessionAccepted || bServerRestartPending)
+	// 重复的在途请求不另发失败：否则会把真正等待 Travel 的本地操作错误解锁。
+	if (bServerRestartPending)
 	{
+		return;
+	}
+	if (!bCombatSessionAccepted)
+	{
+		// 首个未接纳请求仍须有终结回执，不能让旧客户端或直接调用永久等待。
+		ClientRestartFailed(NSLOCTEXT("Multiplayer", "RestartBeforeAdmission", "会话尚未就绪，请稍候再重开。"));
 		return;
 	}
 	// 先占用该玩家的请求；GameMode 另有整局占位，阻止两名玩家同时重载地图。

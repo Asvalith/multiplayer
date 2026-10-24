@@ -56,6 +56,13 @@ namespace
 	}
 }
 
+float CombatTargeting::GetProjectileRange(const AmultiplayerCombatCharacter& Source)
+{
+	const float Range = Source.GetSkillRule(EMultiplayerCombatSkill::Attack).Range;
+	const float LifetimeRange = Source.GetCombatConfig().ProjectileSpeed * ProjectileLifetime;
+	return Range > 0.f ? FMath::Min(Range, LifetimeRange) : LifetimeRange;
+}
+
 // 小兵的预警与真正出手共用距离、正面角度和遮挡；客户端不需要服务器的AIController。
 bool CombatTargeting::CanMeleeHit(const AmultiplayerCombatCharacter& Source,
 	const AmultiplayerCombatCharacter& Target, bool bCheckFacing)
@@ -190,8 +197,7 @@ FmultiplayerCombatTargetPreview AmultiplayerCombatCharacter::GetSkillTargetPrevi
 	if (Skill == EMultiplayerCombatSkill::Attack)
 	{
 		Result.Origin = GetCombatMuzzleLocation(&Aim);
-		const float LifetimeRange = GetCombatConfig().ProjectileSpeed * CombatTargeting::ProjectileLifetime;
-		const float Range = Rule.Range > 0 ? FMath::Min(Rule.Range, LifetimeRange) : LifetimeRange;
+		const float Range = CombatTargeting::GetProjectileRange(*this);
 		// 玩家普攻沿本轮身体出手的水平正前方发射；自由镜头俯仰不再把普攻引向地面。
 		FVector DesiredEnd = Result.Origin + FRotator(0, Aim.Yaw, 0).Vector() * Range;
 		if (GetCombatTeam() != EMultiplayerCombatTeam::Players)

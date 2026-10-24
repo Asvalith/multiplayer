@@ -160,15 +160,15 @@ bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* 
 	Session.Controller = Controller;
 	CombatSessions.Add(IssuedTicket, MoveTemp(Session));
 	Controller->ServerCombatTicket = IssuedTicket;
-	if (Ticket.IsValid()) Character->RestoreResumeState(SavedState, OfflineSeconds);
-	if (!IsValid(Character) || !IsValid(Controller) || Controller->GetPawn() != Character)
+	const bool bRestored = !Ticket.IsValid() || Character->RestoreResumeState(SavedState, OfflineSeconds, &OutError);
+	if (!bRestored || !IsValid(Character) || !IsValid(Controller) || Controller->GetPawn() != Character)
 	{
 		// 恢复通知允许同步销毁/换Pawn；失败不能消费用户仅有的旧票据。
 		CombatSessions.Remove(IssuedTicket);
 		if (PreviousKey.IsValid()) CombatSessions.Add(PreviousKey, RecoverySession);
 		if (IsValid(Controller)) Controller->ServerCombatTicket.Invalidate();
 		bRetryable = true;
-		OutError = NSLOCTEXT("Multiplayer", "CombatRestoreFailed", "个人状态恢复未完成，请重新连接。");
+		if (OutError.IsEmpty()) OutError = NSLOCTEXT("Multiplayer", "CombatRestoreFailed", "个人状态恢复未完成，请重新连接。");
 		return false;
 	}
 	Controller->bCombatSessionAccepted = true;

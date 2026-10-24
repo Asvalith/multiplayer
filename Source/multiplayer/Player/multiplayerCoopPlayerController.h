@@ -93,6 +93,10 @@ protected:
 
 private:
 	friend class AmultiplayerGameMode;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCoopFlowRequestClosureTest;
+	friend class FCoopResumeAdmissionResultTest;
+#endif
 	// 可靠回执只发所属连接；客户端按 Controller、World 与操作编号过滤旧结果。
 	UFUNCTION(Client, Reliable)
 	void ClientCombatSessionResult(FGuid Ticket, uint64 Operation, const FText& Error, bool bRetryable);

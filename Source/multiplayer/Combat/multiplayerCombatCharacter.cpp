@@ -387,13 +387,24 @@ namespace
 }
 
 // 仅对尚未接纳的新 Pawn 还原服务器快照；离线时间正常扣除，不刷新资源、冷却或死亡状态。
-void AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatResumeState& State, float OfflineSeconds)
+bool AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatResumeState& State, float OfflineSeconds, FText* OutError)
 {
-	if (!HasAuthority() || bCombatSessionReady) return;
+	if (OutError) *OutError = FText::GetEmpty();
+	const auto Reject = [OutError](const FText& Error)
+	{
+		if (OutError) *OutError = Error;
+		return false;
+	};
+	if (!HasAuthority() || bCombatSessionReady)
+		return Reject(NSLOCTEXT("Multiplayer", "CombatRestoreContext", "角色不处于待恢复阶段。"));
 	AbilitySystem->CancelAllAbilities();
 	ClearTransientEffects();
 	// 先恢复长期上限和装配，再钳本局资源；不把成长加载当成一次治疗或免费回能。
-	Progression->RestoreState(State.Progression);
+	if (!Progression->RestoreState(State.Progression))
+		return Reject(NSLOCTEXT("Multiplayer", "CombatRestoreLoadout", "成长与配装恢复失败，请重新连接。"));
+	// 沿用原生传送规则；失败就拒绝本次接纳，不静默改用出生点，也不额外搜索安全落点。
+	if (IsActorBeingDestroyed() || !TeleportTo(State.Location, State.Rotation))
+		return Reject(NSLOCTEXT("Multiplayer", "CombatRestoreLocation", "原位置暂时无法恢复，请重新连接。"));
 	const float Elapsed = FMath::Max(0.f, OfflineSeconds);
 	float OfflineDamage = 0.f;
 	// 白名单中只有灼烧造成离线数值变化；无方向灼烧不经过正面格挡，再统一先盾后血。
@@ -412,8 +423,6 @@ void AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatRes
 	CombatAttributes->SetEnergy(FMath::Clamp(State.Energy, 0.0f, GetMaxEnergy()));
 	CombatAttributes->SetShield(bDead ? 0.f : RestoredShield);
 	CombatAttributes->SetHealth(bDead ? 0.f : RestoredHealth);
-	// 尝试回到原位置；这里没有通用安全落点搜索，也不跨地图迁移坐标。
-	TeleportTo(State.Location, State.Rotation);
 	if (bNotifyRestoredDeath)
 	{
 		OnRep_Dead();
@@ -457,6 +466,7 @@ void AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatRes
 		if (State.bDowned) Coop->RestoreDowned(State.DownedRemaining - Elapsed);
 	}
 	ForceNetUpdate();
+	return true;
 }
 
 // 玩家输入与 GAS 请求；这里不创建弹体或直接结算技能结果。

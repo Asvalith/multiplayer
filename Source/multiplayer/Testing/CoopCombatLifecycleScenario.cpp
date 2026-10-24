@@ -644,7 +644,7 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 								const auto* Effect = SourceASC->GetActiveGameplayEffect(Handle);
 								if (!Effect || Effect->PredictionKey != Key) continue;
 								KeyedCooldown |= Effect->Spec.Def->IsA<UmultiplayerAreaCooldownEffect>();
-								KeyedCost |= Effect->Spec.Def->IsA<UmultiplayerAreaCostEffect>();
+								KeyedCost |= Effect->Spec.Def->IsA<UmultiplayerEnergyCostEffect>();
 							}
 							SendReceipt(TEXT("PrimaryAreaReleasePredicted"), Caster->IsCasting() && Key.IsLocalClientKey()
 								&& Key.WasLocallyGenerated() && KeyedCooldown && KeyedCost
@@ -690,7 +690,7 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 					const FActiveGameplayEffect* Effect = ASC->GetActiveGameplayEffect(Handle);
 					if (!Effect || Effect->PredictionKey != Key) continue;
 					HasKeyedCooldown |= Effect->Spec.Def->IsA(UmultiplayerAreaCooldownEffect::StaticClass());
-					HasKeyedCost |= Effect->Spec.Def->IsA(UmultiplayerAreaCostEffect::StaticClass());
+					HasKeyedCost |= Effect->Spec.Def->IsA(UmultiplayerEnergyCostEffect::StaticClass());
 				}
 				SendReceipt(TEXT("PrimaryArea") + Case + TEXT("Predicted"), Local->IsCasting() && Key.IsLocalClientKey()
 					&& Key.WasLocallyGenerated() && HasKeyedCooldown && HasKeyedCost

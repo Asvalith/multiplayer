@@ -111,6 +111,20 @@ namespace
 			return Player;
 		}
 
+		// 原生感知／禁锢用例明确声明 400cm 技能射程，不依赖已移除的第二份 AI 阈值。
+		AmultiplayerCombatEnemy* SpawnNativeEnemy(float AttackRange)
+		{
+			const FTransform Transform(FVector(0, 0, 100));
+			auto* Enemy = World->SpawnActorDeferred<AmultiplayerCombatEnemy>(AmultiplayerCombatEnemy::StaticClass(),
+				Transform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			if (!Enemy) return nullptr;
+			auto* Config = NewObject<UmultiplayerCombatConfig>(Enemy);
+			Config->Attack.Range = AttackRange;
+			FindFProperty<FObjectPropertyBase>(Enemy->GetClass(), TEXT("CombatConfig"))->SetObjectPropertyValue_InContainer(Enemy, Config);
+			Enemy->FinishSpawning(Transform);
+			return Enemy;
+		}
+
 		// 使用关卡中相同的保存蓝图，不临时给通用角色授予另一套技能来代替小兵配置。
 		AmultiplayerCombatEnemy* SpawnMinion()
 		{
@@ -264,10 +278,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatSightBoundaryTest, "Multiplayer.Comb
 bool FCoopCombatSightBoundaryTest::RunTest(const FString& Parameters)
 {
 	FCombatAIBoundaryWorld Fixture;
-	FActorSpawnParameters Spawn;
-	Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	auto* Enemy = Fixture.World->SpawnActor<AmultiplayerCombatEnemy>(FVector(0, 0, 100), FRotator::ZeroRotator, Spawn);
+	auto* Enemy = Fixture.SpawnNativeEnemy(400.f);
 	if (!TestNotNull(TEXT("Sight fixture spawns the actual native enemy"), Enemy)) return false;
+	TestEqual(TEXT("Sight fixture explicitly configures its attack range"), Enemy->GetAttackDistance(), 400.f);
 	Enemy->GetCharacterMovement()->DisableMovement();
 	auto* Player = Fixture.SpawnPlayer();
 	Player->SetActorLocation(FVector(-600, 0, 100));
@@ -326,12 +339,10 @@ bool FCoopCombatAIRootBoundaryTest::RunTest(const FString& Parameters)
 {
 	{
 		FCombatAIBoundaryWorld Fixture;
-		FActorSpawnParameters Spawn;
-		Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		auto* Enemy = Fixture.World->SpawnActor<AmultiplayerCombatEnemy>(
-			FVector(0, 0, 100), FRotator::ZeroRotator, Spawn);
+		auto* Enemy = Fixture.SpawnNativeEnemy(400.f);
 		auto* Player = Fixture.SpawnPlayer();
 		if (!TestNotNull(TEXT("Root fixture has an enemy"), Enemy) || !TestNotNull(TEXT("Root fixture has a player"), Player)) return false;
+		TestEqual(TEXT("Root fixture explicitly configures its attack range"), Enemy->GetAttackDistance(), 400.f);
 		Enemy->GetCharacterMovement()->SetMovementMode(MOVE_Flying);
 		Player->SetActorLocation(FVector(600, 0, 100));
 		Player->GetAbilitySystemComponent()->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetMaxHealthAttribute(), 1000.f);

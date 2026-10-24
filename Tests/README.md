@@ -1,5 +1,16 @@
 # 网络实验与战斗回归
 
+## 当前验收入口（2026-10-24）
+
+当前项目介绍见 [README](../README.md)，面试讲解见 [INTERVIEW_GUIDE](../Docs/INTERVIEW_GUIDE.md)。下方保留各版本原始记录；不要把旧地图、Listen 拓扑、166 项测试或历史百分比拼成当前结果。
+
+- 完整自动化 `Saved/Refactor_20261024/Automation_R3/index.json`：174 clean，0 warned/failed/notRun。
+- 同轮 `Network_Combat_R2`、`Network_CombatLifecycle_R1`、`Network_CombatExpansion_R1`、`Network_CombatReconnect_R1`，各 Normal/Harsh 一轮，8/8 完整通过；24 个 UE peer 正常退出，无强杀。
+- 本轮网络环境为本机 Editor DS + 双客户端，CombatTest 专项图、NullRHI；Harsh 三端 PktLag=200、Variance=50、Loss=5，不能称为实测 RTT。覆盖战斗、取消、冲刺/弹反/救援及存活/倒地/死亡恢复，不等于原埃及地图完整通关或画面验收。
+- 原生 Editor/Shipping 编译成功；最终整理后又做增量检查，两者 up to date，日志在 `Saved/FinalInterview_20261024/`。未在这次文档收尾中宣称重新运行整套网络或打包测试。
+- `Contracts_R4.json` 审计 42 条、43 个所查包磁盘内容不变；正式战斗/AI 资产校验通过。首次不完整网络采集与已修复的编译失败日志均保留。
+- 未覆盖公网、Linux DS、新发布包运行、完整地图通关和全部冷启动特效；本轮没有新增整局帧率或带宽收益。
+
 网络入口支持 RideMotion、Combat、CombatLifecycle、CombatReconnect、CombatExpansion、CombatTraffic 和 CoopEscape：一个 DS 和两个独立客户端。Partner 先连接并确认角色与共享状态就绪，Client 执行受测动作；服务器和两个客户端分别记录结果。
 
 当前恢复原埃及地图后的规则与验收入口见下文“原埃及图恢复后的正式技能验收（2026-10-20）”。旧 `CoopEscape` 全流程依赖原型的 `Escape_*` 机关布局，不适用于恢复后的原图；本文此前各日期的通过记录只对应当时的布局、规则和构建。
@@ -667,6 +678,25 @@ Q／R 不再把施法者强行转到镜头方向，受击目标也不随施法�
 - 人工核对最终 Normal 截图：Q 防御动作不再被本次被格挡攻击的伤害火焰覆盖；后续自疗截图能看见蓝色护体效果。**首次队友治疗 BasicHeal 截图仍有 `Preparing Shaders (10)` 且未见蓝球，首次冷加载特效视觉不登记通过**。测试准备已非阻塞等待真实资源、Niagara/GPU 编译及已提交 shader 任务，但不能据此保证首次绘制的新 shader/PSO，或把组件存在当作像素可见。此次也不登记完整原图通关、连续录像、声音或云服务器验收。
 
 首轮旧血量预期与侧后规则夹具失败报告均保留在该报告根目录，未用重跑覆盖失败证据。地图和配置恢复前的备份见 `Saved/CombatAssetImport/BeforeOriginalLayoutRestore-20261020-003433-505389/RestoreReport.json`；本地输入修复前的副本另保存在报告根目录 `BeforeLocalInputRepair.umap`。
+
+## 规则收敛后的当前构建网络回归（2026-10-24）
+
+本轮在 `/Game/Combat/Maps/CombatTest` 专项图串行运行一个本机 DS 与两个独立客户端，均为 NullRHI；Normal 为 `PktLag/Variance/Loss=0/0/0`，Harsh 为 `200/50/5`。这些是模拟参数，不是实测 RTT，也不代表公网、画面或恢复后原埃及图完整闯关验收。未运行旧 `CoopEscape` 原型拼图路线。
+
+证据根目录为 `Saved/Refactor_20261024`。每轮都由现有脚本核对当前 token 的角色归属、全部必需门禁、三端成功 DONE、正常退出和 fatal 检查，不把只有启动／连接成功的记录计为通过：
+
+| 场景 | 每档必需门禁数 | Normal / 秒 | Harsh / 秒 | 完整报告 |
+| --- | ---: | ---: | ---: | --- |
+| Combat | 228 | 通过 / 72.176 | 通过 / 111.422 | `Network_Combat_R2/report.json` |
+| CombatLifecycle | 93 | 通过 / 86.923 | 通过 / 111.887 | `Network_CombatLifecycle_R1/report.json` |
+| CombatExpansion | 79 | 通过 / 89.312 | 通过 / 99.124 | `Network_CombatExpansion_R1/report.json` |
+| CombatReconnect | 66 | 通过 / 108.131 | 通过 / 120.156 | `Network_CombatReconnect_R1/report.json` |
+
+合计 **8/8 轮通过**；四个 runner 均退出 0，全部 24 个 peer 均退出 0，未由 runner 强制结束，报告 errors 均为空。覆盖公共能量成本的预测／确认与拒绝撤销、一次结算、拥有者资源隔离、施法释放／取消／眩晕后真实输入移动恢复、冲刺／弹反／成长／救援，以及存活／倒地／死亡的真实断线重连。Lifecycle、Expansion、Reconnect 保留各自既有临时观察窗口与条件，不以它们替代正式技能时长或视觉体验验收。
+
+四份报告记录的磁盘项目模块 SHA256 相同：`e0404a1a6a2500108b313a4c1b94b9a8193b48d32865275f008fce2d54795409`；运行前采集的脚本清单指纹均为 `f0d9fd3df601f045e5d278e37b6f8df18ce9a345ab08a37341358ef8d7384fe8`。该清单包含 Source、Config、Scripts、Tests、UI／Combat 资产等脚本所列范围，不是整个 Content 的全量证明；未测量进程内已加载模块哈希。本段文档在八轮全部结束后补写，未在回归期间改动业务源码、配置或资产。启动参数保留 `-DDC=InstalledNoZenLocalFallback` 与 `-DDC-ForceMemoryCache`。
+
+最初 `Network_Combat_R1` 原样保留，不计入上述八轮：Normal 已写入通过结果；Harsh 的三端日志各有成功 DONE，且 Server／Client／Partner 分别有 59／134／47 条通过 ASSERT、无失败 ASSERT，但执行会话返回 `0x40010004` 后未完成 runner 的退出核验和最终汇总，`report.json` 仍为 running。因此另建 `Network_Combat_R2` 完整重跑两档，没有覆盖中断证据，也没有将旧 running 当作仍在运行或完整通过。
 
 ## 历史实验
 

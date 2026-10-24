@@ -262,7 +262,7 @@ UmultiplayerAttackAbility::UmultiplayerAttackAbility()
 	// 标签随本次能力自动结束；取消、死亡或预测拒绝均不会留下独立的转向锁。
 	ActivationOwnedTags.AddTag(CombatTags::State_Attacking);
 	AbilityTriggers.AddDefaulted_GetRef().TriggerTag = CombatTags::Event_Attack;
-	CostGameplayEffectClass = UmultiplayerAreaCostEffect::StaticClass();
+	CostGameplayEffectClass = UmultiplayerEnergyCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerAttackCooldownEffect::StaticClass();
 }
 
@@ -306,8 +306,8 @@ void UmultiplayerAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle
 		// 冷却限制请求频率，不用于压缩动作；按素材原速播放，避免短冷却把整段动画强行加速。
 		ActorInfo->AbilitySystemComponent->PlayMontage(this, ActivationInfo, Montage, 1.0f);
 	if (Revision != ActivationRevision || !IsActive()) return;
-	// 有动作时用同一份规则等待出手；无动作配置的原生角色仍保留立即发弹。
-	if (Character->GetActionMontage(EMultiplayerCombatAnimation::Attack) && GetRule().Windup > 0)
+	// 出手时序属于技能规则，缺少纯表现 Montage 不会跳过起手。
+	if (GetRule().Windup > 0)
 	{
 		auto* Delay = UAbilityTask_WaitDelay::WaitDelay(this, GetRule().Windup);
 		Delay->OnFinish.AddDynamic(this, &ThisClass::ReleaseProjectile);
@@ -342,7 +342,7 @@ void UmultiplayerAttackAbility::ReleaseProjectile()
 		}
 	}
 	if (Revision != ActivationRevision || !IsActive()) return;
-	if (Character->GetActionMontage(EMultiplayerCombatAnimation::Attack) && GetRule().Recovery > 0)
+	if (GetRule().Recovery > 0)
 	{
 		auto* Delay = UAbilityTask_WaitDelay::WaitDelay(this, GetRule().Recovery);
 		Delay->OnFinish.AddDynamic(this, &ThisClass::FinishAttack);
@@ -376,7 +376,7 @@ UmultiplayerEnemyMeleeAbility::UmultiplayerEnemyMeleeAbility()
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
 	NetSecurityPolicy = EGameplayAbilityNetSecurityPolicy::ServerOnly;
 	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Attack));
-	CostGameplayEffectClass = UmultiplayerAreaCostEffect::StaticClass();
+	CostGameplayEffectClass = UmultiplayerEnergyCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerAttackCooldownEffect::StaticClass();
 }
 
@@ -487,8 +487,8 @@ void UmultiplayerEnemyMeleeAbility::EndAbility(FGameplayAbilitySpecHandle Handle
 }
 
 // 防御：消耗、冷却、限时效果和技能。
-// GAS 在提交技能前检查能否承担这次消耗，提交后扣除能量。
-UmultiplayerDefendCostEffect::UmultiplayerDefendCostEffect()
+// 所有技能只定义这一份能量修改规则；金额仍由本次预测／权威提交写入。
+UmultiplayerEnergyCostEffect::UmultiplayerEnergyCostEffect()
 {
 	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
 	Modifier.Attribute = UmultiplayerCombatAttributes::GetEnergyAttribute();
@@ -527,7 +527,7 @@ UmultiplayerDefendAbility::UmultiplayerDefendAbility()
 	Skill = EMultiplayerCombatSkill::Defend;
 	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Defend));
 	AbilityTriggers.AddDefaulted_GetRef().TriggerTag = CombatTags::Event_Defend;
-	CostGameplayEffectClass = UmultiplayerDefendCostEffect::StaticClass();
+	CostGameplayEffectClass = UmultiplayerEnergyCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerDefendCooldownEffect::StaticClass();
 }
 
@@ -576,15 +576,6 @@ UmultiplayerHealEffect::UmultiplayerHealEffect()
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Heal);
 }
 
-// 治疗采用独立消耗效果，避免技能代码中自行扣能量。
-UmultiplayerHealCostEffect::UmultiplayerHealCostEffect()
-{
-	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
-	Modifier.Attribute = UmultiplayerCombatAttributes::GetEnergyAttribute();
-	FSetByCallerFloat Cost; Cost.DataTag = CombatTags::Data_Cost;
-	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
-}
-
 // 治疗冷却限制施放频率。
 UmultiplayerHealCooldownEffect::UmultiplayerHealCooldownEffect()
 {
@@ -598,7 +589,7 @@ UmultiplayerHealAbility::UmultiplayerHealAbility()
 {
 	Skill = EMultiplayerCombatSkill::Heal;
 	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Heal));
-	CostGameplayEffectClass = UmultiplayerHealCostEffect::StaticClass();
+	CostGameplayEffectClass = UmultiplayerEnergyCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerHealCooldownEffect::StaticClass();
 }
 
@@ -665,15 +656,6 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 	if (Revision == ActivationRevision) EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }
 
-// 通用能量成本效果只接受本次 Data.Cost；不在效果默认值中写死某个技能的消耗。
-UmultiplayerAreaCostEffect::UmultiplayerAreaCostEffect()
-{
-	FSetByCallerFloat Cost; Cost.DataTag = CombatTags::Data_Cost;
-	auto& Modifier = Modifiers.AddDefaulted_GetRef();
-	Modifier.Attribute = UmultiplayerCombatAttributes::GetEnergyAttribute();
-	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
-}
-
 // 定义范围冷却标签和默认时长，实际提交由当前有效规则覆盖时长。
 UmultiplayerAreaCooldownEffect::UmultiplayerAreaCooldownEffect()
 {
@@ -716,7 +698,7 @@ UmultiplayerAreaAbility::UmultiplayerAreaAbility()
 	Skill = EMultiplayerCombatSkill::Area;
 	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Area));
 	AbilityTriggers.AddDefaulted_GetRef().TriggerTag = CombatTags::Event_Area;
-	CostGameplayEffectClass = UmultiplayerAreaCostEffect::StaticClass();
+	CostGameplayEffectClass = UmultiplayerEnergyCostEffect::StaticClass();
 	CooldownGameplayEffectClass = UmultiplayerAreaCooldownEffect::StaticClass();
 	// 主动取消沿用 GAS 的拥有者能力取消通道；资源/CD已在起手提交，取消不退款。
 	bServerRespectsRemoteAbilityCancellation = true;

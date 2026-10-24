@@ -380,7 +380,7 @@ void UCoopNetTestDriver::ExpansionClientTick(UWorld* World)
 			for (auto Handle : ASC->GetActiveEffects(FGameplayEffectQuery()))
 			{
 				const auto* Effect = ASC->GetActiveGameplayEffect(Handle); if (!Effect || Effect->PredictionKey != Key) continue;
-				Cost |= Effect->Spec.Def->IsA<UmultiplayerDashCostEffect>(); Cooldown |= Effect->Spec.Def->IsA<UmultiplayerDashCooldownEffect>();
+				Cost |= Effect->Spec.Def->IsA<UmultiplayerEnergyCostEffect>(); Cooldown |= Effect->Spec.Def->IsA<UmultiplayerDashCooldownEffect>();
 			}
 			if (Key.IsLocalClientKey())
 			{

@@ -27,6 +27,8 @@ namespace CombatTargeting
 	constexpr float ProjectileLifetime = 3.f;
 	constexpr float AreaHalfHeight = 200.f;
 	constexpr float MeleeFrontDot = .5f;
+	// 显式技能射程仍受弹体寿命限制；Range=0 的原生投射物使用完整寿命距离。
+	float GetProjectileRange(const AmultiplayerCombatCharacter& Source);
 	// 检查敌对存活玩家的近战距离、可选朝向与遮挡。
 	bool CanMeleeHit(const AmultiplayerCombatCharacter& Source, const AmultiplayerCombatCharacter& Target, bool bCheckFacing);
 	// 检查范围圆柱中的合法敌对目标及中心到目标的视线。

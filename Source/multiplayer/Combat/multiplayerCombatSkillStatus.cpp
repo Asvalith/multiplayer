@@ -133,36 +133,39 @@ FText AmultiplayerCombatCharacter::GetSkillFailureReason(EMultiplayerCombatSkill
 }
 
 // 本地显示已有拒绝结果并播放失败 Cue；只有没有结果时才主动查询资格。
+void AmultiplayerCombatCharacter::PresentSkillFailure(const FText& Message)
+{
+	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
+	OnCombatMessage.Broadcast(Message);
+	AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
+}
+
+// 原因选择留在原入口；统一出口不重查资格或覆盖服务器已经裁决的失败原因。
 void AmultiplayerCombatCharacter::ReportSkillFailure(EMultiplayerCombatSkill Skill, const FGameplayTagContainer* Reasons)
 {
 	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
 	const FGameplayTag Reason = Reasons ? SpecificFailure(*Reasons) : FGameplayTag();
 	FText Message = Reasons ? GetSkillFailureText(Skill, Reason) : GetSkillFailureReason(Skill);
 	if (Message.IsEmpty()) Message = GetSkillFailureText(Skill, CombatTags::Failure_Requirements);
-	OnCombatMessage.Broadcast(Message);
-	AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
+	PresentSkillFailure(Message);
 }
 
 // 服务器指定的原因直接显示，不能在此重新预检尚未纠正的客户端预测状态而覆盖真正原因。
 // 当前提示按技能反馈，未携带请求编号；动作/效果的 Key 隔离不等于旧提示也能逐次精确过滤。
 void AmultiplayerCombatCharacter::ClientSkillRejected_Implementation(EMultiplayerCombatSkill Skill, FGameplayTag Reason, float AuthorityValue)
 {
-	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
-	OnCombatMessage.Broadcast(GetSkillFailureText(Skill, Reason, AuthorityValue));
-	AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
+	PresentSkillFailure(GetSkillFailureText(Skill, Reason, AuthorityValue));
 }
 
 // 接收 GAS 正式激活失败，区分战斗技能与救援提示，不再次激活或修改资源。
 void AmultiplayerCombatCharacter::HandleAbilityFailed(const UGameplayAbility* Ability, const FGameplayTagContainer& Reasons)
 {
-	if (!IsLocallyControlled() || GetNetMode() == NM_DedicatedServer) return;
 	if (const auto* CombatAbility = Cast<UmultiplayerCombatAbility>(Ability))
 	{
 		ReportSkillFailure(CombatAbility->GetCombatSkill(), &Reasons);
 	}
 	else
 	{
-		OnCombatMessage.Broadcast(FText::FromString(TEXT("无法救援：需要靠近可见的倒地队友，并保持可行动状态")));
-		AbilitySystem->ExecuteGameplayCue(CombatTags::Cue_Failure);
+		PresentSkillFailure(FText::FromString(TEXT("无法救援：需要靠近可见的倒地队友，并保持可行动状态")));
 	}
 }

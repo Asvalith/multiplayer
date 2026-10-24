@@ -1,5 +1,7 @@
 # 网络同步设计与验证边界
 
+当前讲解入口见 [INTERVIEW_GUIDE](INTERVIEW_GUIDE.md)，最新测试范围见 [Tests](../Tests/README.md)。本文件解释机制；历史实验比例不作为当前整局或 GAS 优化收益。
+
 ## 范围
 
 本项目采用 UE 5.5 Dedicated Server：一个独立服务进程，两名远端客户端。

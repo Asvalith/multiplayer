@@ -19,18 +19,16 @@
 #include "NativeGameplayTags.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 
 UE_DEFINE_GAMEPLAY_TAG_STATIC(SupplyHealth, "Data.Supply.Health");
 UE_DEFINE_GAMEPLAY_TAG_STATIC(SupplyEnergy, "Data.Supply.Energy");
 
-// 默认引用现有小兵蓝图；关卡编排本身无逐帧工作和独立客户端生成。
+// 敌人类型由正式蓝图配置；关卡编排本身无逐帧工作和独立客户端生成。
 AmultiplayerCombatEncounter::AmultiplayerCombatEncounter()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("EncounterRoot")));
-	static ConstructorHelpers::FClassFinder<AmultiplayerCombatEnemy> Minion(TEXT("/Game/Combat/Presentation/BP_CombatEnemy"));
-	EnemyClass = Minion.Class;
+	// EnemyClass 在正式 Encounter 蓝图中配置；关卡编排不选择美术资产。
 }
 
 // 两位玩家接纳后才开始；单机允许一人预览，不把原机关地图或独立测试出生器改成多波。
@@ -197,18 +195,10 @@ AmultiplayerCombatSupply::AmultiplayerCombatSupply()
 	Visual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SupplyVisual"));
 	Visual->SetupAttachment(Trigger);
 	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Visual->SetRelativeScale3D(FVector(.45f));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (Mesh.Succeeded()) Visual->SetStaticMesh(Mesh.Object);
 	Label = CreateDefaultSubobject<UTextRenderComponent>(TEXT("SupplyLabel"));
 	Label->SetupAttachment(Trigger);
-	Label->SetRelativeLocation(FVector(0,0,45));
-	Label->SetRelativeRotation(FRotator(0,90,0));
-	Label->SetWorldSize(12.f);
-	Label->SetHorizontalAlignment(EHTA_Center);
-	Label->SetTextRenderColor(FColor(100,255,120));
-	Label->SetText(FText::FromString(TEXT("SUPPLY")));
-	Label->SetHiddenInGame(true);
+	// 空组件不提供占位文案；正式文本、字号、颜色和位置由 Supply 蓝图维护。
+	Label->SetText(FText::GetEmpty());
 }
 
 // 只有服务器安装领取回调，各端立即按已知消费状态校正表现。

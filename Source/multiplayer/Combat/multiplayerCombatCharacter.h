@@ -1,12 +1,14 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// 角色协调接口：连接输入、GAS、生命权限与短时恢复；各技能的执行细节留在能力中。
+// [职责] Pawn 协调输入、GAS、生命权限与短时恢复；技能阶段在 Ability，倒地/占用在 Coop。
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
 #include "GameplayEffectTypes.h"
+#include "GameplayPrediction.h"
+#include "Combat/multiplayerCombatAbility.h"
 #include "Engine/NetSerialization.h"
 #include "Network/multiplayerCombatResumeState.h"
 #include "Combat/multiplayerCombatProgression.h"
@@ -18,6 +20,7 @@
 class UAbilitySystemComponent;
 class UAnimMontage;
 class UGameplayAbility;
+class USceneComponent;
 class UmultiplayerCombatConfig;
 class UmultiplayerCombatCoopComponent;
 struct FStreamableHandle;
@@ -85,7 +88,7 @@ public:
 	void SetCombatSessionReady(bool bReady);
 	// 从服务器取本局短时重连快照，区别于只保存成长配装的长期档案。
 	FmultiplayerCombatResumeState CaptureResumeState() const;
-	// 只恢复未接纳的新 Pawn；成长或原生传送失败明确拒绝，由接纳方保留旧票据并销毁失败 Pawn。
+	// [边界] 只恢复同局未接纳的新 Pawn；成长或原生传送失败由接纳方保留旧票据并清理失败 Pawn。
 	// 离线时间正常扣除，不续接半次施法；失败不承诺回滚这个未接纳的临时 Pawn。
 	bool RestoreResumeState(const FmultiplayerCombatResumeState& State, float OfflineSeconds, FText* OutError = nullptr);
 	// 状态直接读取 GAS 标签；剩余时间供拥有者与服务器查询，远端只复制标签不保证完整效果。
@@ -117,6 +120,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Combat") float GetAttackCooldownRemaining() const;
 	// 查询治疗技能冷却。
 	UFUNCTION(BlueprintPure, Category = "Combat") float GetHealCooldownRemaining() const;
+	// 各技能冷却统一按集中标签映射查询；保留现有蓝图 Getter 作为兼容入口。
+	float GetSkillCooldownRemaining(EMultiplayerCombatSkill Skill) const;
 	// 用服务器时间估算当前施法读条，标签消失后归零。
 	UFUNCTION(BlueprintPure, Category = "Combat") float GetCastProgress() const;
 	// 向蓝图暴露有效只读配置，缺省时仍返回原生默认配置。
@@ -200,8 +205,17 @@ public:
 	void Heal();
 	// R 请求当前第四槽技能。
 	UFUNCTION(BlueprintCallable, Category = "Combat") void CastArea();
-	// 撤销预览、救援、范围施法及冲刺，不退还已提交成本。
+	// 撤销预览、救援、防御、范围施法及冲刺；出手后的 R 只停表现，不退还成本或伤害。
 	UFUNCTION(BlueprintCallable, Category = "Combat") void CancelCast();
+	// 复用当前 GA 身份；拥有者收到权威结果后关联到同一服务器轮次。
+	FmultiplayerCombatActivationIdentity GetAreaActivationIdentity() const;
+	// 原生 Cue 到达/补载后接纳同一权威轮次；旧结果不能覆盖新结果。
+	bool AcceptAreaFeedbackIdentity(const FmultiplayerCombatActivationIdentity& Identity);
+	// 粒子与异步补载共用同一次技能身份，不再维护另一套本地特效代数。
+	bool IsAreaFeedbackCancelled(const FmultiplayerCombatActivationIdentity& Identity) const;
+	void TrackAreaFeedback(USceneComponent* Component, const FmultiplayerCombatActivationIdentity& Identity);
+	// 只读表现归属，用于诊断，不触发技能、伤害或取消。
+	FmultiplayerCombatActivationIdentity GetAreaFeedbackIdentity(const USceneComponent* Component) const;
 	// Shift 请求当前第五槽技能，移动仍由能力任务和 CMC 执行。
 	UFUNCTION(BlueprintCallable, Category = "Combat") void Dash();
 	// 请求 ServerOnly 救援能力，由服务器选择并占用倒地目标。
@@ -290,10 +304,19 @@ protected:
 private:
 	// 本端统一发布失败提示；不重新查询资格，也不替代权威拒绝。
 	void PresentSkillFailure(const FText& Message);
-	// 瞄准意图与激活使用同一个 GAS 请求/预测键，不依赖另一路移动包先更新服务器朝向。
+	// [亮点] 瞄准意图随同一个 GAS 激活请求/预测键提交，不依赖移动包先更新服务器朝向。
 	bool ActivateAimedSkill(TSubclassOf<UGameplayAbility> AbilityClass, const FGameplayTag& EventTag);
 	// 所属连接提交救援取消意图，服务器仍只操作本角色能力。
 	UFUNCTION(Server, Reliable) void ServerCancelRescue();
+	// 防御按本次效果的预测键结束；R 已结算的伤害和持续效果不在取消范围内。
+	UFUNCTION(Server, Reliable) void ServerCancelDefenseAndAreaFeedback(FPredictionKey DefenseKey, bool bCancelDefense,
+		FmultiplayerCombatActivationIdentity AreaIdentity);
+	// 权威确认该轮取消；拥有者也消费回执，替换暂存的预测关联。
+	UFUNCTION(NetMulticast, Reliable) void MulticastStopAreaFeedback(FmultiplayerCombatActivationIdentity Identity);
+	// 只清理匹配激活的粒子与结果圈，不停止另一次 R。
+	void StopAreaFeedback(const FmultiplayerCombatActivationIdentity& Identity);
+	// 死亡/退出清理全部本地表现，不发送网络取消，也不写伤害状态。
+	void ClearAreaFeedback();
 	// 服务器限频处理自身成长档案存取，客户端不能指定快照或磁盘路径。
 	UFUNCTION(Server, Reliable) void ServerPersistProgress(bool bLoad);
 	// 向拥有者显示实际存取结果，不在本地假定请求成功。
@@ -341,6 +364,23 @@ private:
 	uint8 PreviousMovementMode = 0;
 	uint8 PreviousCustomMode = 0;
 	TSharedPtr<FStreamableHandle> PresentationAssets;
+	struct FAreaFeedbackEntry
+	{
+		TWeakObjectPtr<USceneComponent> Component;
+		FmultiplayerCombatActivationIdentity Identity;
+	};
+	struct FAreaFeedbackState
+	{
+		FmultiplayerCombatActivationIdentity Identity;
+		uint32 OwnerActivationRevision = 0;
+		bool bCancelled = false;
+	};
+	TArray<FAreaFeedbackEntry> AreaFeedback;
+	// 每个已授予 R 能力只保留最新权威轮次，不永久累积会回绕的预测键墓碑。
+	TMap<FGameplayAbilitySpecHandle, FAreaFeedbackState> AreaFeedbackStates;
+	// 仅保存尚待权威确认的拥有者取消；回执或 Actor 退出即释放。
+	TArray<FmultiplayerCombatActivationIdentity> PendingAreaCancellations;
+	FmultiplayerCombatActivationIdentity LatestAreaFeedback;
 	TWeakObjectPtr<AmultiplayerCombatCharacter> LastDamageSource;
 	FGuid DeathRewardId;
 	double LastPersistenceRequest = -10.0;

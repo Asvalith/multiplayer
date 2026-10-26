@@ -112,15 +112,18 @@ void AmultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 
 	// 原有移动 Action 保持不变；基础战斗按键无需新增输入资源，也可由蓝图调用相同接口。
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AmultiplayerCharacter::Attack);
-	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AmultiplayerCharacter::PreviewDefense);
-	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &AmultiplayerCharacter::ReleaseDefense);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AmultiplayerCharacter::PreviewHeal);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &AmultiplayerCharacter::ReleaseHeal);
-	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AmultiplayerCharacter::PreviewArea);
-	PlayerInputComponent->BindKey(EKeys::R, IE_Released, this, &AmultiplayerCharacter::ReleaseArea);
+	// 委托按值绑定槽位，不为每个按键维护一对转发函数；UObject 绑定不会延长角色生命周期。
+	const FKey SkillKeys[] = { EKeys::Q, EKeys::E, EKeys::R, EKeys::LeftShift };
+	for (int32 Slot = 1; Slot <= UE_ARRAY_COUNT(SkillKeys); ++Slot)
+	{
+		FInputKeyBinding Press(FInputChord(SkillKeys[Slot - 1]), IE_Pressed);
+		Press.KeyDelegate.GetDelegateForManualSet().BindUObject(this, &ThisClass::BeginSlotTargeting, Slot);
+		PlayerInputComponent->KeyBindings.Add(MoveTemp(Press));
+		FInputKeyBinding Release(FInputChord(SkillKeys[Slot - 1]), IE_Released);
+		Release.KeyDelegate.GetDelegateForManualSet().BindUObject(this, &ThisClass::ReleaseTargetSlot, Slot);
+		PlayerInputComponent->KeyBindings.Add(MoveTemp(Release));
+	}
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AmultiplayerCharacter::CancelCast);
-	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this, &AmultiplayerCharacter::PreviewDash);
-	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this, &AmultiplayerCharacter::ReleaseDash);
 	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AmultiplayerCharacter::Rescue);
 	PlayerInputComponent->BindKey(EKeys::F, IE_Released, this, &AmultiplayerCharacter::CancelRescue);
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this, &AmultiplayerCharacter::ToggleProgressionMenu);
@@ -192,31 +195,12 @@ void AmultiplayerCharacter::ToggleProgressionMenu()
 	if (ProgressionMenu && ProgressionMenu->IsInViewport()) { ProgressionMenu->RemoveFromParent(); return; }
 	if (auto* PC = Cast<APlayerController>(GetController()); PC && PC->IsLocalController())
 	{
-		ProgressionMenu = CreateWidget<UmultiplayerCombatProgressionWidget>(PC, UmultiplayerCombatProgressionWidget::StaticClass());
+		if (!ProgressionWidgetClass) return;
+		ProgressionMenu = CreateWidget<UmultiplayerCombatProgressionWidget>(PC, ProgressionWidgetClass);
 		if (ProgressionMenu) ProgressionMenu->AddToViewport(20);
 	}
 }
 
-// 松键只确认自己开始的预览，切换到另一技能或右键取消后不补发旧输入。
-void AmultiplayerCharacter::ReleaseDefense()
-{
-	ReleaseTargetSlot(1);
-}
-// E 松键仅确认治疗槽位仍在进行的本地预览，不直接应用治疗。
-void AmultiplayerCharacter::ReleaseHeal()
-{
-	ReleaseTargetSlot(2);
-}
-// R 松键确认当前范围槽位预览，范围锁定与服务器校验仍由父类负责。
-void AmultiplayerCharacter::ReleaseArea()
-{
-	ReleaseTargetSlot(3);
-}
-// Shift 松键确认当前冲刺槽位预览，位移仍走 GAS 任务与 CMC。
-void AmultiplayerCharacter::ReleaseDash()
-{
-	ReleaseTargetSlot(4);
-}
 // 松键只属于当前槽位；切换预览或右键取消之后，不允许旧松键确认新技能。
 void AmultiplayerCharacter::ReleaseTargetSlot(int32 Slot)
 {

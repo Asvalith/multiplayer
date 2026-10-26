@@ -4,6 +4,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "AbilitySystemComponent.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatConfig.h"

@@ -1,6 +1,5 @@
 ﻿<#
-本机独立 DS + 两个客户端；-Play 打开可操作窗口。
-不带 -Play 调用旧 Escape_* 原型的自动验证；恢复后的原埃及图请用 -Play，不把旧入口算作全流程验收。
+本机独立 DS + 两个可操作客户端；默认即手动游玩，-Play 仅兼容已有调用。
 使用 Editor 的 -server，不等于已经构建独立 Server.exe。只清理本脚本启动的进程。
 #>
 [CmdletBinding()]
@@ -19,21 +18,16 @@ param(
     [switch]$PlanOnly
 )
 $ErrorActionPreference = 'Stop'
-if ($FromMenu -and -not $Play) { throw '-FromMenu requires -Play.' }
-if ($SkillDemo -and (-not $Play -or $Map -ne '/Game/Combat/Maps/CombatTest' -or $FromMenu -or $EnemyCount -gt 0)) {
-    throw '-SkillDemo requires -Play -Map /Game/Combat/Maps/CombatTest, without FromMenu or EnemyCount.'
+if ($SkillDemo -and ($Map -ne '/Game/Combat/Maps/CombatTest' -or $FromMenu -or $EnemyCount -gt 0)) {
+    throw '-SkillDemo requires -Map /Game/Combat/Maps/CombatTest, without FromMenu or EnemyCount.'
 }
-if ($SkillReview -and (-not $Play -or -not $SkillDemo -or [string]::IsNullOrWhiteSpace($ReviewOutput))) {
-    throw '-SkillReview requires -Play -SkillDemo and an absolute -ReviewOutput.'
+if ($SkillReview -and (-not $SkillDemo -or [string]::IsNullOrWhiteSpace($ReviewOutput))) {
+    throw '-SkillReview requires -SkillDemo and an absolute -ReviewOutput.'
 }
 if ($ReviewOutput -and -not $SkillReview) { throw '-ReviewOutput requires -SkillReview.' }
 if ($SkillReview -and -not [IO.Path]::IsPathRooted($ReviewOutput)) { throw '-ReviewOutput must be absolute.' }
-if ($EnemyCount -gt 0 -and (-not $Play -or $Map -ne '/Game/Combat/Maps/CombatTest')) {
-    throw '-EnemyCount is a temporary manual CombatTest override; use -Play -Map /Game/Combat/Maps/CombatTest.'
-}
-if (-not $Play) {
-    & (Join-Path $PSScriptRoot 'RunMultiplayerNetworkTests.ps1') -Scenario CoopEscape -Profiles @($Profile) -Repeat 1 -EditorPath $EditorPath -Map $Map -ListenPort $Port -TimeoutSeconds $TimeoutSeconds -PlanOnly:$PlanOnly
-    return
+if ($EnemyCount -gt 0 -and $Map -ne '/Game/Combat/Maps/CombatTest') {
+    throw '-EnemyCount is a temporary manual CombatTest override; use -Map /Game/Combat/Maps/CombatTest.'
 }
 
 # 以下仅负责交互式启动，不维护第二套测试断言、报告或通过条件。

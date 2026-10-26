@@ -1,0 +1,2701 @@
+{
+  "schema": 1,
+  "native_defaults": {
+    "Gate": {
+      "role": "Gate",
+      "name": "Default__multiplayerCoopGate",
+      "class": "/Script/multiplayer.multiplayerCoopGate",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "DoorMesh",
+          "location": [
+            300.0,
+            0.0,
+            200.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.30000001192092896,
+            2.0,
+            2.0
+          ],
+          "mesh": "/Engine/BasicShapes/Cube.Cube"
+        },
+        {
+          "name": "ClosedPoint",
+          "location": [
+            300.0,
+            0.0,
+            200.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "OpenPoint",
+          "location": [
+            300.0,
+            0.0,
+            600.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "RequiredPlates": [],
+        "RequiredActivePlateCount": 1,
+        "bStayOpenOnceActivated": false,
+        "bRequireObjectiveComplete": false
+      }
+    },
+    "Plate": {
+      "role": "Plate",
+      "name": "Default__multiplayerPressurePlate",
+      "class": "/Script/multiplayer.multiplayerPressurePlate",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "PlateMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.5,
+            1.5,
+            0.10000000149011612
+          ],
+          "mesh": "/Engine/BasicShapes/Cube.Cube"
+        },
+        {
+          "name": "ActivationTrigger",
+          "location": [
+            0.0,
+            0.0,
+            60.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "bLatchOnceActivated": false,
+        "bRequireObjectiveComplete": false
+      }
+    },
+    "Platform": {
+      "role": "Platform",
+      "name": "Default__multiplayerMovingPlatform",
+      "class": "/Script/multiplayer.multiplayerMovingPlatform",
+      "components": [
+        {
+          "name": "PlatformRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "PlatformMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            2.5,
+            2.5,
+            0.25
+          ],
+          "mesh": "/Engine/BasicShapes/Cube.Cube"
+        },
+        {
+          "name": "ActivationVolume",
+          "location": [
+            0.0,
+            0.0,
+            120.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "StartPoint",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "TargetPoint",
+          "location": [
+            0.0,
+            0.0,
+            500.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "ActivationPlate": null,
+        "ActivationSource": "<MovingPlatformActivationSource.EXTERNAL_PRESSURE_PLATE: 0>"
+      }
+    },
+    "Key": {
+      "role": "Key",
+      "name": "Default__multiplayerCoopKey",
+      "class": "/Script/multiplayer.multiplayerCoopKey",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "KeyMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "mesh": ""
+        },
+        {
+          "name": "PickupTrigger",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "RotationSpeedDegrees": 90.0,
+        "RotationAxis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "DestinationSocket": null
+      }
+    },
+    "Socket": {
+      "role": "Socket",
+      "name": "Default__multiplayerKeySocket",
+      "class": "/Script/multiplayer.multiplayerKeySocket",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "SocketMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "mesh": ""
+        },
+        {
+          "name": "KeyDisplayPoint",
+          "location": [
+            0.0,
+            0.0,
+            75.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {}
+    },
+    "Encounter": {
+      "role": "Encounter",
+      "name": "Default__multiplayerCombatEncounter",
+      "class": "/Script/multiplayer.multiplayerCombatEncounter",
+      "components": [
+        {
+          "name": "EncounterRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "EnemyClass": {
+          "asset": "/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"
+        }
+      }
+    },
+    "Supply": {
+      "role": "Supply",
+      "name": "Default__multiplayerCombatSupply",
+      "class": "/Script/multiplayer.multiplayerCombatSupply",
+      "components": [
+        {
+          "name": "SupplyTrigger",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "SupplyVisual",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.44999998807907104,
+            0.44999998807907104,
+            0.44999998807907104
+          ],
+          "mesh": "/Engine/BasicShapes/Sphere.Sphere"
+        },
+        {
+          "name": "SupplyLabel",
+          "location": [
+            0.0,
+            0.0,
+            45.0
+          ],
+          "rotation": [
+            0.0,
+            89.99999999999999,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "text": "SUPPLY",
+          "color": [
+            100,
+            255,
+            120,
+            255
+          ],
+          "world_size": 12.0,
+          "hidden": true
+        }
+      ],
+      "properties": {}
+    },
+    "Projectile": {
+      "role": "Projectile",
+      "name": "Default__multiplayerCombatProjectile",
+      "class": "/Script/multiplayer.multiplayerCombatProjectile",
+      "components": [
+        {
+          "name": "CollisionSphere",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "ProjectileMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.23999999463558197,
+            0.23999999463558197,
+            0.23999999463558197
+          ],
+          "mesh": "/Engine/BasicShapes/Sphere.Sphere"
+        }
+      ],
+      "properties": {}
+    }
+  },
+  "blueprints": {
+    "/Game/ThirdPerson/Blueprints/gameplayelements/bpcoopgate": {
+      "role": "Gate",
+      "name": "Default__bpcoopgate_C",
+      "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpcoopgate.bpcoopgate_C",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "DoorMesh",
+          "location": [
+            200.0,
+            -10.0,
+            200.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            2.0,
+            2.0
+          ],
+          "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_05.SM_part_ornament_05"
+        },
+        {
+          "name": "ClosedPoint",
+          "location": [
+            190.0,
+            0.0,
+            200.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "OpenPoint",
+          "location": [
+            200.0,
+            0.0,
+            -430.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "RequiredPlates": [],
+        "RequiredActivePlateCount": 1,
+        "bStayOpenOnceActivated": false,
+        "bRequireObjectiveComplete": false
+      }
+    },
+    "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate": {
+      "role": "Plate",
+      "name": "Default__pressplate_C",
+      "class": "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "PlateMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.5,
+            1.5,
+            0.10000000149011612
+          ],
+          "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_07.SM_building_part_07"
+        },
+        {
+          "name": "ActivationTrigger",
+          "location": [
+            0.0,
+            0.0,
+            5.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "bLatchOnceActivated": false,
+        "bRequireObjectiveComplete": false
+      }
+    },
+    "/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform": {
+      "role": "Platform",
+      "name": "Default__bpmovingplatform_C",
+      "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.bpmovingplatform_C",
+      "components": [
+        {
+          "name": "PlatformRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "PlatformMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            5.0,
+            3.0,
+            2.0
+          ],
+          "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_05.SM_building_part_05"
+        },
+        {
+          "name": "ActivationVolume",
+          "location": [
+            0.0,
+            0.0,
+            5.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.4,
+            0.5,
+            0.1
+          ]
+        },
+        {
+          "name": "StartPoint",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "TargetPoint",
+          "location": [
+            0.0,
+            0.0,
+            500.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "ActivationPlate": null,
+        "ActivationSource": "<MovingPlatformActivationSource.EXTERNAL_PRESSURE_PLATE: 0>"
+      }
+    },
+    "/Game/ThirdPerson/Blueprints/gameplayelements/bpkey": {
+      "role": "Key",
+      "name": "Default__bpkey_C",
+      "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "KeyMesh",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_02.SM_part_ornament_02"
+        },
+        {
+          "name": "PickupTrigger",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {
+        "RotationSpeedDegrees": 90.0,
+        "RotationAxis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "DestinationSocket": null
+      }
+    },
+    "/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket": {
+      "role": "Socket",
+      "name": "Default__bpkeysocket_C",
+      "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C",
+      "components": [
+        {
+          "name": "SceneRoot",
+          "location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "name": "SocketMesh",
+          "location": [
+            0.0,
+            0.0,
+            -110.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.3
+          ],
+          "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_column_01.SM_building_column_01"
+        },
+        {
+          "name": "KeyDisplayPoint",
+          "location": [
+            0.0,
+            0.0,
+            75.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "properties": {}
+    }
+  },
+  "maps": {
+    "/Game/Combat/Maps/CombatTest": [],
+    "/Game/Combat/Maps/CoopEscape": [
+      {
+        "role": "Encounter",
+        "name": "Escape_Encounter",
+        "class": "/Script/multiplayer.multiplayerCombatEncounter",
+        "components": [
+          {
+            "name": "EncounterRoot",
+            "location": [
+              -2100.0,
+              -2900.0,
+              200.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "Escape_Encounter",
+        "properties": {
+          "EnemyClass": {
+            "asset": "/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"
+          }
+        }
+      },
+      {
+        "role": "Socket",
+        "name": "bpkeysocket_C_2",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -1320.0,
+              -3350.0,
+              400.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SocketMesh",
+            "location": [
+              0.0,
+              0.0,
+              -110.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.5,
+              0.3
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_column_01.SM_building_column_01"
+          },
+          {
+            "name": "KeyDisplayPoint",
+            "location": [
+              0.0,
+              0.0,
+              75.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkeysocket2",
+        "properties": {}
+      },
+      {
+        "role": "Socket",
+        "name": "bpkeysocket_C_3",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -2900.0,
+              -3350.0,
+              400.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SocketMesh",
+            "location": [
+              0.0,
+              0.0,
+              -110.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.5,
+              0.3
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_column_01.SM_building_column_01"
+          },
+          {
+            "name": "KeyDisplayPoint",
+            "location": [
+              0.0,
+              0.0,
+              75.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkeysocket3",
+        "properties": {}
+      },
+      {
+        "role": "Socket",
+        "name": "bpkeysocket_C_4",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -2700.0,
+              -3350.0,
+              400.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SocketMesh",
+            "location": [
+              0.0,
+              0.0,
+              -110.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.5,
+              0.3
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_column_01.SM_building_column_01"
+          },
+          {
+            "name": "KeyDisplayPoint",
+            "location": [
+              0.0,
+              0.0,
+              75.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkeysocket4",
+        "properties": {}
+      },
+      {
+        "role": "Socket",
+        "name": "bpkeysocket_C_5",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -1510.0,
+              -3350.0,
+              400.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SocketMesh",
+            "location": [
+              0.0,
+              0.0,
+              -110.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.5,
+              0.3
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_column_01.SM_building_column_01"
+          },
+          {
+            "name": "KeyDisplayPoint",
+            "location": [
+              0.0,
+              0.0,
+              75.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkeysocket5",
+        "properties": {}
+      },
+      {
+        "role": "Platform",
+        "name": "bpmovingplatform_C_1",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.bpmovingplatform_C",
+        "components": [
+          {
+            "name": "PlatformRoot",
+            "location": [
+              -1580.0,
+              -3780.0,
+              320.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              5.0,
+              3.0,
+              3.0
+            ]
+          },
+          {
+            "name": "PlatformMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_05.SM_building_part_05"
+          },
+          {
+            "name": "ActivationVolume",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.4,
+              0.5,
+              0.1
+            ]
+          },
+          {
+            "name": "StartPoint",
+            "location": [
+              0.0,
+              0.0,
+              -6.666666666666666
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "TargetPoint",
+            "location": [
+              -50.0,
+              0.0,
+              270.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpmovingplatform",
+        "properties": {
+          "ActivationPlate": {
+            "actor_label": "pressplate4",
+            "actor_name": "pressplate_C_2"
+          },
+          "ActivationSource": "<MovingPlatformActivationSource.EXTERNAL_PRESSURE_PLATE: 0>"
+        }
+      },
+      {
+        "role": "Platform",
+        "name": "bpmovingplatform_C_3",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.bpmovingplatform_C",
+        "components": [
+          {
+            "name": "PlatformRoot",
+            "location": [
+              -3107.8063061887024,
+              -1926.1899399010795,
+              119.56306652336434
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              5.0,
+              3.0,
+              3.0
+            ]
+          },
+          {
+            "name": "PlatformMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_05.SM_building_part_05"
+          },
+          {
+            "name": "ActivationVolume",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.4,
+              0.5,
+              0.1
+            ]
+          },
+          {
+            "name": "StartPoint",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "TargetPoint",
+            "location": [
+              0.0,
+              0.0,
+              460.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpmovingplatform2",
+        "properties": {
+          "ActivationPlate": {
+            "actor_label": "pressplate",
+            "actor_name": "pressplate_C_1"
+          },
+          "ActivationSource": "<MovingPlatformActivationSource.EXTERNAL_PRESSURE_PLATE: 0>"
+        }
+      },
+      {
+        "role": "Key",
+        "name": "bpkey_C_1",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -90.0,
+              -7160.0,
+              290.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "KeyMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_02.SM_part_ornament_02"
+          },
+          {
+            "name": "PickupTrigger",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkey",
+        "properties": {
+          "RotationSpeedDegrees": 90.0,
+          "RotationAxis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "DestinationSocket": {
+            "actor_label": "bpkeysocket2",
+            "actor_name": "bpkeysocket_C_2"
+          }
+        }
+      },
+      {
+        "role": "Key",
+        "name": "bpkey_C_3",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -3786.496823781278,
+              -1359.2306944172956,
+              1593.0691897773722
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "KeyMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_02.SM_part_ornament_02"
+          },
+          {
+            "name": "PickupTrigger",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkey2",
+        "properties": {
+          "RotationSpeedDegrees": 90.0,
+          "RotationAxis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "DestinationSocket": {
+            "actor_label": "bpkeysocket3",
+            "actor_name": "bpkeysocket_C_3"
+          }
+        }
+      },
+      {
+        "role": "Key",
+        "name": "bpkey_C_5",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -2118.7632802222333,
+              -4193.100049354062,
+              1190.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "KeyMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_02.SM_part_ornament_02"
+          },
+          {
+            "name": "PickupTrigger",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkey3",
+        "properties": {
+          "RotationSpeedDegrees": 90.0,
+          "RotationAxis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "DestinationSocket": {
+            "actor_label": "bpkeysocket4",
+            "actor_name": "bpkeysocket_C_4"
+          }
+        }
+      },
+      {
+        "role": "Key",
+        "name": "bpkey_C_0",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -668.7632800000001,
+              -1273.1000489999997,
+              1420.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "KeyMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_02.SM_part_ornament_02"
+          },
+          {
+            "name": "PickupTrigger",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpkey4",
+        "properties": {
+          "RotationSpeedDegrees": 90.0,
+          "RotationAxis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "DestinationSocket": {
+            "actor_label": "bpkeysocket5",
+            "actor_name": "bpkeysocket_C_5"
+          }
+        }
+      },
+      {
+        "role": "Platform",
+        "name": "bpmovingplatform_C_0",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.bpmovingplatform_C",
+        "components": [
+          {
+            "name": "PlatformRoot",
+            "location": [
+              -157.80630599999995,
+              -1816.18994,
+              499.56306700000005
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              5.0,
+              3.0,
+              3.0
+            ]
+          },
+          {
+            "name": "PlatformMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_05.SM_building_part_05"
+          },
+          {
+            "name": "ActivationVolume",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.4,
+              0.5,
+              0.1
+            ]
+          },
+          {
+            "name": "StartPoint",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "TargetPoint",
+            "location": [
+              -84.0,
+              46.666666666666664,
+              276.6666666666665
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpmovingplatform3",
+        "properties": {
+          "ActivationPlate": {
+            "actor_label": "pressplate5",
+            "actor_name": "pressplate_C_4"
+          },
+          "ActivationSource": "<MovingPlatformActivationSource.EXTERNAL_PRESSURE_PLATE: 0>"
+        }
+      },
+      {
+        "role": "Gate",
+        "name": "bpcoopgate_C_1",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpcoopgate.bpcoopgate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -2890.0,
+              -4130.0,
+              210.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              4.0,
+              3.0,
+              2.0
+            ]
+          },
+          {
+            "name": "DoorMesh",
+            "location": [
+              200.0,
+              -10.0,
+              200.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              2.0,
+              2.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_05.SM_part_ornament_05"
+          },
+          {
+            "name": "ClosedPoint",
+            "location": [
+              200.0,
+              0.0,
+              200.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "OpenPoint",
+            "location": [
+              197.5,
+              0.0,
+              -205.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpcoopgate",
+        "properties": {
+          "RequiredPlates": [
+            {
+              "actor_label": "pressplate6",
+              "actor_name": "pressplate_C_5"
+            }
+          ],
+          "RequiredActivePlateCount": 1,
+          "bStayOpenOnceActivated": false,
+          "bRequireObjectiveComplete": false
+        }
+      },
+      {
+        "role": "Gate",
+        "name": "bpcoopgate_C_3",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/bpcoopgate.bpcoopgate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -591.0994181970076,
+              -4220.119132373899,
+              -67.63019090494993
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              3.3,
+              3.3,
+              2.8
+            ]
+          },
+          {
+            "name": "DoorMesh",
+            "location": [
+              200.0,
+              -10.0,
+              200.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              2.0,
+              2.0
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_part_ornament_05.SM_part_ornament_05"
+          },
+          {
+            "name": "ClosedPoint",
+            "location": [
+              193.03030303030303,
+              0.0,
+              228.57142857142773
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "OpenPoint",
+            "location": [
+              200.0,
+              0.0,
+              -629.2857142857152
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "bpcoopgate2",
+        "properties": {
+          "RequiredPlates": [
+            {
+              "actor_label": "pressplate3",
+              "actor_name": "pressplate_C_0"
+            }
+          ],
+          "RequiredActivePlateCount": 1,
+          "bStayOpenOnceActivated": false,
+          "bRequireObjectiveComplete": false
+        }
+      },
+      {
+        "role": "Plate",
+        "name": "pressplate_C_0",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              40.0,
+              -3700.0,
+              100.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              3.0,
+              3.0,
+              8.0
+            ]
+          },
+          {
+            "name": "PlateMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              0.10000000149011612
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_07.SM_building_part_07"
+          },
+          {
+            "name": "ActivationTrigger",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "pressplate3",
+        "properties": {
+          "bLatchOnceActivated": false,
+          "bRequireObjectiveComplete": false
+        }
+      },
+      {
+        "role": "Plate",
+        "name": "pressplate_C_1",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -3560.0,
+              -2050.0,
+              100.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              2.0
+            ]
+          },
+          {
+            "name": "PlateMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              0.10000000149011612
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_07.SM_building_part_07"
+          },
+          {
+            "name": "ActivationTrigger",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "pressplate",
+        "properties": {
+          "bLatchOnceActivated": false,
+          "bRequireObjectiveComplete": false
+        }
+      },
+      {
+        "role": "Plate",
+        "name": "pressplate_C_2",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -2840.0,
+              -3850.0,
+              290.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              8.0
+            ]
+          },
+          {
+            "name": "PlateMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              0.10000000149011612
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_07.SM_building_part_07"
+          },
+          {
+            "name": "ActivationTrigger",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "pressplate4",
+        "properties": {
+          "bLatchOnceActivated": false,
+          "bRequireObjectiveComplete": false
+        }
+      },
+      {
+        "role": "Plate",
+        "name": "pressplate_C_4",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -3026.786711544085,
+              -1664.9863725841892,
+              1500.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              8.0
+            ]
+          },
+          {
+            "name": "PlateMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              0.10000000149011612
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_07.SM_building_part_07"
+          },
+          {
+            "name": "ActivationTrigger",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "pressplate5",
+        "properties": {
+          "bLatchOnceActivated": false,
+          "bRequireObjectiveComplete": false
+        }
+      },
+      {
+        "role": "Plate",
+        "name": "pressplate_C_5",
+        "class": "/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C",
+        "components": [
+          {
+            "name": "SceneRoot",
+            "location": [
+              -2110.0,
+              -3970.0,
+              310.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              3.0,
+              1.5,
+              8.0
+            ]
+          },
+          {
+            "name": "PlateMesh",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              0.10000000149011612
+            ],
+            "mesh": "/Game/Stylized_Egypt/Meshes/building/SM_building_part_07.SM_building_part_07"
+          },
+          {
+            "name": "ActivationTrigger",
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "label": "pressplate6",
+        "properties": {
+          "bLatchOnceActivated": true,
+          "bRequireObjectiveComplete": true
+        }
+      },
+      {
+        "role": "Supply",
+        "name": "Escape_Supply_1",
+        "class": "/Script/multiplayer.multiplayerCombatSupply",
+        "components": [
+          {
+            "name": "SupplyTrigger",
+            "location": [
+              -2900.0,
+              -3100.0,
+              125.46724794003205
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SupplyVisual",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.3499999940395355,
+              0.3499999940395355
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          },
+          {
+            "name": "SupplyLabel",
+            "location": [
+              0.0,
+              0.0,
+              45.0
+            ],
+            "rotation": [
+              0.0,
+              89.99999999999999,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "text": "SUPPLY",
+            "color": [
+              100,
+              255,
+              120,
+              255
+            ],
+            "world_size": 12.0,
+            "hidden": true
+          },
+          {
+            "name": "SupplyCrossHorizontal",
+            "location": [
+              0.0,
+              18.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.2800000011920929,
+              0.009999999776482582,
+              0.05999999865889549
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          },
+          {
+            "name": "SupplyCrossVertical",
+            "location": [
+              0.0,
+              18.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.05999999865889549,
+              0.009999999776482582,
+              0.27000001072883606
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          }
+        ],
+        "label": "Escape_Supply_1",
+        "properties": {}
+      },
+      {
+        "role": "Supply",
+        "name": "Escape_Supply_2",
+        "class": "/Script/multiplayer.multiplayerCombatSupply",
+        "components": [
+          {
+            "name": "SupplyTrigger",
+            "location": [
+              -2100.0,
+              -3100.0,
+              119.99934433890292
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SupplyVisual",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.3499999940395355,
+              0.3499999940395355
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          },
+          {
+            "name": "SupplyLabel",
+            "location": [
+              0.0,
+              0.0,
+              45.0
+            ],
+            "rotation": [
+              0.0,
+              89.99999999999999,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "text": "SUPPLY",
+            "color": [
+              100,
+              255,
+              120,
+              255
+            ],
+            "world_size": 12.0,
+            "hidden": true
+          },
+          {
+            "name": "SupplyCrossHorizontal",
+            "location": [
+              0.0,
+              18.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.2800000011920929,
+              0.009999999776482582,
+              0.05999999865889549
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          },
+          {
+            "name": "SupplyCrossVertical",
+            "location": [
+              0.0,
+              18.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.05999999865889549,
+              0.009999999776482582,
+              0.27000001072883606
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          }
+        ],
+        "label": "Escape_Supply_2",
+        "properties": {}
+      },
+      {
+        "role": "Supply",
+        "name": "Escape_Supply_3",
+        "class": "/Script/multiplayer.multiplayerCombatSupply",
+        "components": [
+          {
+            "name": "SupplyTrigger",
+            "location": [
+              -1300.0,
+              -2850.0,
+              119.99934433890292
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "name": "SupplyVisual",
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.5,
+              0.3499999940395355,
+              0.3499999940395355
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          },
+          {
+            "name": "SupplyLabel",
+            "location": [
+              0.0,
+              0.0,
+              45.0
+            ],
+            "rotation": [
+              0.0,
+              89.99999999999999,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "text": "SUPPLY",
+            "color": [
+              100,
+              255,
+              120,
+              255
+            ],
+            "world_size": 12.0,
+            "hidden": true
+          },
+          {
+            "name": "SupplyCrossHorizontal",
+            "location": [
+              0.0,
+              18.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.2800000011920929,
+              0.009999999776482582,
+              0.05999999865889549
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          },
+          {
+            "name": "SupplyCrossVertical",
+            "location": [
+              0.0,
+              18.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.05999999865889549,
+              0.009999999776482582,
+              0.27000001072883606
+            ],
+            "mesh": "/Engine/BasicShapes/Cube.Cube"
+          }
+        ],
+        "label": "Escape_Supply_3",
+        "properties": {}
+      }
+    ]
+  },
+  "source_package_hashes": {
+    "E:\\ueprojrct\\multiplayer\\Content\\Combat\\Maps\\CombatTest.umap": "63925f1cb3c2b0c46e577fb431cf5b87ea800f0261f4fb49ff47d95df779aab1",
+    "E:\\ueprojrct\\multiplayer\\Content\\Combat\\Maps\\CoopEscape.umap": "20582680eb74da658b34fc1c22e6dc8023095f73b15702be560f706be0a8792b",
+    "E:\\ueprojrct\\multiplayer\\Content\\ThirdPerson\\Blueprints\\gameplayelements\\bpcoopgate.uasset": "37fbbc2ac10631dcbf409c190d739784de0958b311ebac0ccecaebad12b767bb",
+    "E:\\ueprojrct\\multiplayer\\Content\\ThirdPerson\\Blueprints\\gameplayelements\\pressplate.uasset": "280cee4ec5505c23567edafe358a47ee39d4b355a50a842db21b82626bbd69ea",
+    "E:\\ueprojrct\\multiplayer\\Content\\ThirdPerson\\Blueprints\\gameplayelements\\bpmovingplatform.uasset": "96bf7e3b40e8db2bbbd1082087acd02f587fa3f5ebef623c55e05ae84f8705f4",
+    "E:\\ueprojrct\\multiplayer\\Content\\ThirdPerson\\Blueprints\\gameplayelements\\bpkey.uasset": "9ee12aa6232e279806ac05bda4d0d90327a6be24c6a9205fc712f23fbdb23989",
+    "E:\\ueprojrct\\multiplayer\\Content\\ThirdPerson\\Blueprints\\gameplayelements\\bpkeysocket.uasset": "d4932eb7cc97fbf8944126c920320c4a6382b007a5f2e35b94744ea91c5b0127"
+  }
+}

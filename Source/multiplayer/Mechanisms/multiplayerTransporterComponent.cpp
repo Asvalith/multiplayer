@@ -72,7 +72,7 @@ void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 	}
 
 	// 同目标在途通知不重启 Tick；静止时仍需复核实际位置。
-	if (bTransportActive == bNewActive && bMoving)
+	if (bTransportActive == bNewActive && IsComponentTickEnabled())
 	{
 		return;
 	}
@@ -92,7 +92,6 @@ void UmultiplayerTransporterComponent::SetTransportActive(bool bNewActive)
 	}
 
 	// 未到位才开启移动，并请求尽快发送当前权威位置。
-	bMoving = true;
 	SetComponentTickEnabled(true);
 	Owner->ForceNetUpdate();
 }
@@ -111,7 +110,7 @@ void UmultiplayerTransporterComponent::ConfigureWorldTargets(const FVector& InSt
 	MoveSpeed = FmultiplayerGameplayConfig::Get(this).PlatformMoveSpeed;
 }
 
-// 结束运动时先提交零基座速度，再关闭运动标记与 Tick；最终位置由调用者贴合。
+// 结束运动时先提交零基座速度，再关闭 Tick；最终位置由调用者贴合。
 void UmultiplayerTransporterComponent::FinishMovement()
 {
 	AActor* Owner = GetOwner();
@@ -120,8 +119,7 @@ void UmultiplayerTransporterComponent::FinishMovement()
 	if (Root != nullptr)
 	{
 		Root->ComponentVelocity = FVector::ZeroVector;
-		if (bMoving) Owner->ForceNetUpdate();
+		if (IsComponentTickEnabled()) Owner->ForceNetUpdate();
 	}
-	bMoving = false;
 	SetComponentTickEnabled(false);
 }

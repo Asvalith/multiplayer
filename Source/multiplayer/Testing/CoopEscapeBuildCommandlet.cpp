@@ -81,7 +81,7 @@ namespace CoopEscapeAssets
 	// 构建器只保存新关卡专属的几个副本；不写第三方原素材和旧 UI。
 	bool Save(UObject* Object)
 	{
-		if (!Object || !Object->GetPackage()->GetName().StartsWith(Folder)) return false;
+		if (!Object || !Object->GetPackage()->GetName().StartsWith(Folder + TEXT("/"))) return false;
 		Object->MarkPackageDirty();
 		FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone;
 		return UPackage::SavePackage(Object->GetPackage(), Object,
@@ -140,42 +140,6 @@ namespace CoopEscapeAssets
 		Mesh->SetWorldScale3D(Size / 100.f);
 		Mesh->SetCollisionProfileName(TEXT("BlockAll"));
 		if (Material) Mesh->SetMaterial(0, Material);
-	}
-	// 简单的项目自有补给外观：绿色盒体和白色十字，不修改素材包或使用默认棋盘材质。
-	UMaterial* SupplyMaterial(const TCHAR* Name, FLinearColor Color)
-	{
-		const FString Package = Folder / Name;
-		if (auto* Existing = LoadObject<UMaterial>(nullptr, *(Package + TEXT(".") + Name))) return Existing;
-		auto* Material = NewObject<UMaterial>(CreatePackage(*Package), Name, RF_Public | RF_Standalone);
-		auto* Tint = NewObject<UMaterialExpressionConstant3Vector>(Material);
-		Tint->Constant = Color;
-		Material->GetExpressionCollection().AddExpression(Tint);
-		Material->GetEditorOnlyData()->BaseColor.Expression = Tint;
-		auto* Roughness = NewObject<UMaterialExpressionConstant>(Material);
-		Roughness->R = .8f;
-		Material->GetExpressionCollection().AddExpression(Roughness);
-		Material->GetEditorOnlyData()->Roughness.Expression = Roughness;
-		Material->PostEditChange();
-		FAssetRegistryModule::AssetCreated(Material);
-		return Save(Material) ? Material : nullptr;
-	}
-	// 给补给副本添加无碰撞的十字标识，领取逻辑仍由原生补给 Actor 负责。
-	void SupplyCross(AActor* Supply, UMaterialInterface* Material)
-	{
-		for (int32 Index = 0; Index < 2; ++Index)
-		{
-			auto* Mesh = NewObject<UStaticMeshComponent>(Supply, Index ? TEXT("SupplyCrossVertical") : TEXT("SupplyCrossHorizontal"));
-			Supply->AddInstanceComponent(Mesh);
-			Mesh->SetupAttachment(Supply->GetRootComponent());
-			Mesh->SetMobility(EComponentMobility::Movable);
-			Mesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
-			Mesh->SetMaterial(0, Material);
-			Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Mesh->SetCastShadow(false);
-			Mesh->SetRelativeLocation(FVector(0, 18.f, 0));
-			Mesh->SetRelativeScale3D(Index ? FVector(.06f,.01f,.27f) : FVector(.28f,.01f,.06f));
-			Mesh->RegisterComponent();
-		}
 	}
 	// 按实际碰撞地面计算放置高度，查询失败直接暴露不可用位置而不猜测 Z。
 	FVector Ground(UWorld* World, FVector Point, float Offset)
@@ -411,14 +375,6 @@ namespace CoopEscapeAssets
 				const FProperty* Property = FindFProperty<FProperty>(Class, Pair.Key);
 				if (!Property || !Property->ImportText_Direct(*Pair.Value, Property->ContainerPtrToValuePtr<void>(Actor), Actor, PPF_None)) return 1;
 			}
-			if (Actor->IsA<AmultiplayerCombatSupply>())
-			{
-				auto* Visual = CastChecked<UStaticMeshComponent>(Actor->GetDefaultSubobjectByName(TEXT("SupplyVisual")));
-				Visual->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
-				Visual->SetRelativeScale3D(FVector(.5f,.35f,.35f));
-				Visual->SetMaterial(0, LoadObject<UMaterial>(nullptr, TEXT("/Game/Combat/Escape/M_EscapeSupplyGreen.M_EscapeSupplyGreen")));
-				SupplyCross(Actor, LoadObject<UMaterial>(nullptr, TEXT("/Game/Combat/Escape/M_EscapeSupplyWhite.M_EscapeSupplyWhite")));
-			}
 			Pasted.Add(Actor);
 		}
 		if (Pasted.Num() != CombatActors.Num()) return 1;
@@ -514,7 +470,20 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 #if WITH_EDITOR
 	const FString Source = TEXT("/Game/Stylized_Egypt/Maps/Stylized_Egypt_Demo");
 	const FString Target = TEXT("/Game/Combat/Maps/CoopEscape");
-	if (FParse::Param(*Params, TEXT("RepairLocalInput")))
+	const bool bRepairLocalInput = FParse::Param(*Params, TEXT("RepairLocalInput"));
+	const bool bRestoreOriginalLayout = FParse::Param(*Params, TEXT("RestoreOriginalLayout"));
+	const bool bCreate = FParse::Param(*Params, TEXT("Create"));
+	const bool bCourtyardPrototype = FParse::Param(*Params, TEXT("CourtyardPrototype"));
+	const bool bAudit = FParse::Param(*Params, TEXT("Audit"));
+	const bool bAuditSaved = FParse::Param(*Params, TEXT("AuditSaved"));
+	// 审计与保存模式互斥；先拒绝混用参数，避免 -Audit 被前面的修复分支覆盖。
+	if (int32(bRepairLocalInput) + int32(bRestoreOriginalLayout) + int32(bCreate) + int32(bAudit) + int32(bAuditSaved) != 1
+		|| (bCourtyardPrototype && !bCreate))
+	{
+		UE_LOG(LogCoopEscapeBuild, Error, TEXT("Choose one mode: RepairLocalInput, RestoreOriginalLayout, Create, Audit or AuditSaved; CourtyardPrototype requires Create"));
+		return 1;
+	}
+	if (bRepairLocalInput)
 	{
 		if (!FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(Target, FPackageName::GetMapPackageExtension()), false, false)) return 1;
 		UWorld* World = GEditor->GetEditorWorldContext().World();
@@ -522,12 +491,8 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 		if (!CoopEscapeAssets::RepairLocalInput(World, bChanged)) return 1;
 		return !bChanged || FEditorFileUtils::SaveLevel(World->PersistentLevel) ? 0 : 1;
 	}
-	if (FParse::Param(*Params, TEXT("RestoreOriginalLayout"))
-		|| (FParse::Param(*Params, TEXT("Create")) && !FParse::Param(*Params, TEXT("CourtyardPrototype"))))
+	if (bRestoreOriginalLayout || (bCreate && !bCourtyardPrototype))
 		return CoopEscapeAssets::RestoreOriginalLayout(Source, Target);
-	const bool bAudit = FParse::Param(*Params, TEXT("Audit"));
-	const bool bAuditSaved = FParse::Param(*Params, TEXT("AuditSaved"));
-	if (!bAudit && !bAuditSaved && !FParse::Param(*Params, TEXT("Create"))) return 1;
 	if (!FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(bAuditSaved ? Target : Source, FPackageName::GetMapPackageExtension()), false, false)) return 1;
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World) return 1;
@@ -603,6 +568,19 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 			}
 		return 0;
 	}
+	// Resolve authored classes before changing any map or asset; never substitute empty native prototypes.
+	auto* KeyClass = LoadClass<AmultiplayerCoopKey>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C"));
+	auto* SocketClass = LoadClass<AmultiplayerKeySocket>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C"));
+	auto* PlateClass = LoadClass<AmultiplayerPressurePlate>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C"));
+	auto* GateClass = LoadClass<AmultiplayerCoopGate>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpcoopgate.bpcoopgate_C"));
+	auto* PlatformClass = LoadClass<AmultiplayerMovingPlatform>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.bpmovingplatform_C"));
+	auto* SupplyClass = LoadClass<AmultiplayerCombatSupply>(nullptr, TEXT("/Game/Combat/Presentation/BP_CombatSupply.BP_CombatSupply_C"));
+	auto* EncounterClass = LoadClass<AmultiplayerCombatEncounter>(nullptr, TEXT("/Game/Combat/Presentation/BP_CombatEncounter.BP_CombatEncounter_C"));
+	if (!KeyClass || !SocketClass || !PlateClass || !GateClass || !PlatformClass || !SupplyClass || !EncounterClass)
+	{
+		UE_LOG(LogCoopEscapeBuild, Error, TEXT("Production mechanism and encounter Blueprints are required before building the escape map"));
+		return 1;
+	}
 	// Save-as creates a separate package before any edits. Existing original level remains untouched on disk.
 	if (!FPackageName::DoesPackageExist(Target)
 		&& !FEditorFileUtils::SaveMap(World, FPackageName::LongPackageNameToFilename(Target, FPackageName::GetMapPackageExtension()))) return 1;
@@ -633,7 +611,9 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 	auto* HUD = LoadObject<UBlueprint>(nullptr,TEXT("/Game/Combat/Escape/BP_EscapeHUD.BP_EscapeHUD"));
 	if (!HUD)
 	{
-		HUD = FKismetEditorUtilities::CreateBlueprint(AmultiplayerCombatHUD::StaticClass(),CreatePackage(TEXT("/Game/Combat/Escape/BP_EscapeHUD")),
+		auto* SharedHUD = LoadClass<AmultiplayerCombatHUD>(nullptr, TEXT("/Game/Combat/Presentation/UI/BP_CombatHUDPresentation.BP_CombatHUDPresentation_C"));
+		if (!SharedHUD) return 1;
+		HUD = FKismetEditorUtilities::CreateBlueprint(SharedHUD,CreatePackage(TEXT("/Game/Combat/Escape/BP_EscapeHUD")),
 			TEXT("BP_EscapeHUD"),BPTYPE_Normal,UBlueprint::StaticClass(),UBlueprintGeneratedClass::StaticClass(),TEXT("CoopEscapeBuild"));
 		FAssetRegistryModule::AssetCreated(HUD);
 	}
@@ -711,16 +691,13 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 	}
 	Spawn(World, APlayerStart::StaticClass(), TEXT("Escape_PlayerStart_1"), FVector(-2250,-2500,210), -90);
 	Spawn(World, APlayerStart::StaticClass(), TEXT("Escape_PlayerStart_2"), FVector(-1950,-2500,210), -90);
-	auto* KeyClass = LoadClass<AmultiplayerCoopKey>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpkey.bpkey_C"));
-	auto* SocketClass = LoadClass<AmultiplayerKeySocket>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpkeysocket.bpkeysocket_C"));
-	auto* PlateClass = LoadClass<AmultiplayerPressurePlate>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/pressplate.pressplate_C"));
-	if (!KeyClass || !SocketClass || !PlateClass) return 1;
 	FVector Keys[] = {{-3000,-2800,180}, {-1200,-2800,180}, {-2750,-3100,200}, {-1350,-3300,200}};
 	for (FVector& Point : Keys) Point=Ground(World,Point,80.f);
 	for (int32 Index=0; Index<4; ++Index)
 	{
 		auto* Socket = Spawn(World, SocketClass, *FString::Printf(TEXT("Escape_Socket_%d"),Index+1), Ground(World,FVector(-2400+Index*200,-3660,0),20.f));
 		auto* Key = Spawn(World, KeyClass, *FString::Printf(TEXT("Escape_Key_%d"),Index+1), Keys[Index]);
+		if (!Socket || !Key) return 1;
 		ObjectProperty(Key, TEXT("DestinationSocket"), Socket);
 		auto* Label = Sign(World, *FString::Printf(TEXT("Escape_KeySign_%d"), Index+1), Keys[Index]+FVector(0,0,160), FString::Printf(TEXT("KEY %d"),Index+1), FColor(255,215,80), 26,WorldText);
 		Label->SetActorHiddenInGame(true);
@@ -729,7 +706,8 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 	}
 	auto* Plate1 = Spawn(World, PlateClass, TEXT("Escape_Plate_1"), Ground(World,FVector(-2350,-3500,0),15.f));
 	auto* Plate2 = Spawn(World, PlateClass, TEXT("Escape_Plate_2"), Ground(World,FVector(-1850,-3500,0),15.f));
-	auto* Gate = Spawn(World, AmultiplayerCoopGate::StaticClass(), TEXT("Escape_Gate"), Ground(World,FVector(-2100,-3870,0),0.f));
+	auto* Gate = Spawn(World, GateClass, TEXT("Escape_Gate"), Ground(World,FVector(-2100,-3870,0),0.f));
+	if (!Gate || !Plate1 || !Plate2) return 1;
 	const FArrayProperty* Plates = FindFProperty<FArrayProperty>(Gate->GetClass(), TEXT("RequiredPlates")); check(Plates);
 	FScriptArrayHelper PlateValues(Plates, Plates->ContainerPtrToValuePtr<void>(Gate)); PlateValues.Resize(2);
 	CastFieldChecked<FObjectPropertyBase>(Plates->Inner)->SetObjectPropertyValue(PlateValues.GetRawPtr(0),Plate1);
@@ -751,28 +729,17 @@ int32 UCoopEscapeBuildCommandlet::Main(const FString& Params)
 	Sign(World,TEXT("Escape_GateSign"),FVector(-2100,-3770,740),TEXT("4 KEYS  >  TWO PLATES  >  EXIT"),FColor(130,255,150),29,WorldText);
 	Sign(World,TEXT("Escape_StartSign"),FVector(-2100,-2760,400),TEXT("SURVIVE TOGETHER\nCOLLECT FOUR KEYS AND ESCAPE"),FColor(255,235,170),27,WorldText);
 	Sign(World,TEXT("Escape_ExitSign"),FVector(-2100,-4250,500),TEXT("EXIT\nBOTH PLAYERS"),FColor(130,255,150),32,WorldText);
-	auto* SupplyGreen = SupplyMaterial(TEXT("M_EscapeSupplyGreen"), FLinearColor(.025f,.28f,.065f));
-	auto* SupplyWhite = SupplyMaterial(TEXT("M_EscapeSupplyWhite"), FLinearColor(.9f,.95f,.9f));
-	if (!SupplyGreen || !SupplyWhite) return 1;
 	for (int32 Index=0; Index<3; ++Index)
 	{
 		const FVector Point=Ground(World,FVector(-2900+Index*800,Index==2 ? -2850 : -3100,0),20.f);
-		auto* Supply = Spawn(World,AmultiplayerCombatSupply::StaticClass(),*FString::Printf(TEXT("Escape_Supply_%d"),Index+1),Point);
-		auto* Visual = CastChecked<UStaticMeshComponent>(Supply->GetDefaultSubobjectByName(TEXT("SupplyVisual")));
-		Visual->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube")));
-		Visual->SetRelativeScale3D(FVector(.5f,.35f,.35f));
-		Visual->SetMaterial(0,SupplyGreen);
-		SupplyCross(Supply,SupplyWhite);
-		if (auto* Label=Supply->FindComponentByClass<UTextRenderComponent>())
-		{
-			Label->SetTextMaterial(WorldText);
-			Label->SetHiddenInGame(true);
-		}
+		auto* Supply = Spawn(World,SupplyClass,*FString::Printf(TEXT("Escape_Supply_%d"),Index+1),Point);
+		if (!Supply) return 1; // Blueprint owns its mesh, materials, cross and label.
 	}
 	// 移动平台保留原生 Occupancy/Transporter：作为侧面高点，不让基础撤离必须掌握跳台时序。
-	auto* Platform = Spawn(World,AmultiplayerMovingPlatform::StaticClass(),TEXT("Escape_Platform"),FVector(-1000,-3000,130));
+	auto* Platform = Spawn(World,PlatformClass,TEXT("Escape_Platform"),FVector(-1000,-3000,130));
+	if (!Platform) return 1;
 	CastChecked<UArrowComponent>(Platform->GetDefaultSubobjectByName(TEXT("TargetPoint")))->SetRelativeLocation(FVector(0,0,350));
-	Spawn(World,AmultiplayerCombatEncounter::StaticClass(),TEXT("Escape_Encounter"),FVector(-2100,-2900,200));
+	if (!Spawn(World,EncounterClass,TEXT("Escape_Encounter"),FVector(-2100,-2900,200))) return 1;
 	// 保存实际 Recast 数据，并验证出生区到每把钥匙、压力板均有可行走路径。
 	auto* Volume = CastChecked<ANavMeshBoundsVolume>(Spawn(World,ANavMeshBoundsVolume::StaticClass(),TEXT("Escape_Navigation"),FVector(-2100,-3300,800)));
 	auto* Builder = NewObject<UCubeBuilder>(); Builder->X=5000; Builder->Y=5000; Builder->Z=2200;

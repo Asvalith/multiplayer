@@ -1,6 +1,7 @@
 #include "Testing/CoopNetTestDriver.h"
 
 #include "AbilitySystemComponent.h"
+#include "AbilitySystemGlobals.h"
 #include "AIController.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatAttributes.h"
@@ -20,6 +21,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
+#include "GameplayCueManager.h"
 #include "InputCoreTypes.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
@@ -29,7 +31,7 @@
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
-// 技能生命周期联机夹具：从真实输入/预测到服务器出手，覆盖取消、控制、旧瞄准和移动恢复。
+// 技能生命周期联机夹具：从真实输入/预测到服务器出手，覆盖持续防御取消、控制、旧瞄准和移动恢复。
 // 服务器只在准备阶段隔离场景，两客户端独立观察；测试断言不替代正式整局视觉验收。
 
 namespace
@@ -39,19 +41,47 @@ namespace
 	const FRotator LifecycleAim(0, 45, 0), LifecycleOldAim(0, -90, 0);
 	constexpr float LifecycleAimDistance = 900.0f, LifecycleTargetSpeed = 200.0f;
 
-	// 仅本模式使用角色持有的瞬态配置副本：留出弱网确认窗口，并让冷却覆盖完整前后摇与观察余量。
-	// 不修改正式资产或全局 CDO，Recovery 仍采用角色实际配置。
+	// 仅本模式使用瞬态副本：R 留出弱网确认窗口；Q 延长防御/弹反，验证主动取消而非自然到期。
+	// 不修改正式资产或全局 CDO，R Recovery 仍采用角色实际配置。
 	bool ConfigureLifecycleRules(AmultiplayerCombatCharacter* Character)
 	{
 		const auto& Current = Character->GetCombatConfig();
 		if (Current.GetOuter() == Character) return FMath::IsNearlyEqual(Current.Area.Windup, LifecycleWindupSeconds)
-			&& Current.Area.Cooldown >= LifecycleWindupSeconds + Current.Area.Recovery + 1.0f;
+			&& Current.Area.Cooldown >= LifecycleWindupSeconds + Current.Area.Recovery + 1.0f
+			&& Current.Defend.Duration == 12 && Current.ParryWindow == 12 && Current.DefenseShieldAmount == 15;
 		auto* Property = FindFProperty<FObjectPropertyBase>(Character->GetClass(), TEXT("CombatConfig"));
 		if (!Property) return false;
 		auto* Copy = DuplicateObject<UmultiplayerCombatConfig>(&Current, Character);
 		Copy->SetFlags(RF_Transient);
 		Copy->Area.Windup = LifecycleWindupSeconds;
 		Copy->Area.Cooldown = FMath::Max(Copy->Area.Cooldown, Copy->Area.Windup + Copy->Area.Recovery + 1.0f);
+		// 留足双端接管和取消窗口；取消必须早于到期，护盾必须保留。只修改本模式瞬态副本。
+		Copy->Defend.Duration = Copy->ParryWindow = 12;
+		Copy->DefenseShieldAmount = 15;
+		Property->SetObjectPropertyValue_InContainer(Character, Copy);
+		return &Character->GetCombatConfig() == Copy;
+	}
+
+	// 仅 A/B 视觉专项缩短前后摇、请求延长原素材参数；是否实际存活仍由组件观察证明。
+	// 专项结束从角色保存的正式配置重新复制，再恢复本模式原有 3 秒起手规则。
+	bool ConfigureAreaIdentityRules(AmultiplayerCombatCharacter* Character, bool bIdentity)
+	{
+		const auto* Defaults = Character->GetClass()->GetDefaultObject<AmultiplayerCombatCharacter>();
+		auto* Property = FindFProperty<FObjectPropertyBase>(Character->GetClass(), TEXT("CombatConfig"));
+		if (!Property) return false;
+		auto* Copy = DuplicateObject<UmultiplayerCombatConfig>(&Defaults->GetCombatConfig(), Character);
+		Copy->SetFlags(RF_Transient);
+		Copy->Area.Windup = bIdentity ? .3f : LifecycleWindupSeconds;
+		Copy->Area.Cooldown = bIdentity ? 5.f : FMath::Max(Copy->Area.Cooldown, Copy->Area.Windup + Copy->Area.Recovery + 1.f);
+		Copy->Defend.Duration = Copy->ParryWindow = 12.f;
+		Copy->DefenseShieldAmount = 15.f;
+		if (bIdentity)
+		{
+			Copy->Area.Recovery = .1f; Copy->Area.Amount = 10.f; Copy->Area.Duration = 0.f;
+			Copy->AreaRootDuration = Copy->BurningDamagePerTick = Copy->BurningDuration = 0.f;
+			Copy->AreaFeedback.Duration = 12.f;
+			Copy->AreaFeedback.CascadeCleanupDelay = Copy->AreaFeedback.NiagaraCleanupDelay = 15.f;
+		}
 		Property->SetObjectPropertyValue_InContainer(Character, Copy);
 		return &Character->GetCombatConfig() == Copy;
 	}
@@ -178,7 +208,7 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 		if (bDone) return;
 		Assert(TEXT("ServerLifecycleRules"), ConfigureLifecycleRules(CombatPrimary.Get())
 			&& ConfigureLifecycleRules(CombatPartner.Get()) && ConfigureLifecycleRules(CombatEnemy.Get()),
-			TEXT("Only transient per-character config copies use Area.Windup=3 seconds and cooldown>=windup+actual recovery+1 second; no asset or CDO modified"));
+			TEXT("Only transient per-character copies use Area.Windup=3s, cooldown>=windup+recovery+1s, Defend.Duration/ParryWindow=12s and DefenseShieldAmount=15; no asset or CDO modified"));
 		if (bDone) return;
 		Probe->Subject = CombatEnemy.Get(); PartnerProbe->Subject = CombatEnemy.Get();
 		SetCommand(TEXT("LifecycleLateState"));
@@ -205,11 +235,86 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 			FString::Printf(TEXT("Actual owning-client W input moved both authoritative pawns: primary %.1fcm, partner %.1fcm; no SetWalking or direct movement input"),
 				PrimaryDistance, PartnerDistance));
 		if (bDone) return;
-		if (Case == TEXT("Join")) Prepare(TEXT("Release"));
+		if (Case == TEXT("Join"))
+		{
+			ResetLifecycleCharacter(CombatPrimary.Get());
+			CombatPrimary->GetAbilitySystemComponent()->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetShieldAttribute(), 0);
+			SetCommand(TEXT("LifecycleDefenseReady"));
+		}
 		else if (Case == TEXT("Release")) Prepare(TEXT("Cancel"));
 		else if (Case == TEXT("Cancel")) Prepare(TEXT("ConfirmedCancel"));
 		else if (Case == TEXT("ConfirmedCancel")) Prepare(TEXT("Stun"));
+		else if (bVisualAcceptance)
+		{
+			ResetLifecycleCharacter(CombatPrimary.Get()); ResetLifecycleCharacter(CombatEnemy.Get());
+			CombatPrimary->SetActorLocation(LifecycleOrigin);
+			CombatEnemy->SetActorLocation(LifecycleOrigin + FVector(CombatPrimary->GetCombatConfig().Area.Range, 0, 0));
+			Assert(TEXT("ServerAreaIdentityRules"), ConfigureAreaIdentityRules(CombatPrimary.Get(), true),
+				TEXT("Only this visual phase uses transient .3s/.1s windup/recovery, 5s cooldown and extended original FX parameters; no replacement asset"));
+			if (!bDone) SetCommand(TEXT("LifecycleIdentityReady"));
+		}
 		else SetCommand(TEXT("LifecycleAimPrepare:Snapshot"));
+		return;
+	}
+	if (Phase == TEXT("LifecycleIdentityReady") && Both(TEXT("AreaIdentityReady"))) SetCommand(TEXT("LifecycleIdentityA"));
+	if (Phase == TEXT("LifecycleIdentityA") && Both(TEXT("AreaIdentityAEffect")))
+	{
+		CombatAreaIdentityA = CombatPrimary->GetAreaActivationIdentity();
+		Assert(TEXT("ServerAreaIdentityAReleased"), CombatAreaIdentityA.IsValid() && CombatEnemy->GetHealth() == 90.f
+			&& CombatPrimary->GetEnergy() == 100.f - CombatPrimary->GetSkillRule(EMultiplayerCombatSkill::Area).Cost,
+			TEXT("First real R settled one damage/cost before its independently observed result is cancelled"));
+		if (!bDone) SetCommand(TEXT("LifecycleIdentityCancelA"));
+	}
+	if (Phase == TEXT("LifecycleIdentityCancelA") && Both(TEXT("AreaIdentityACancelled")))
+	{
+		Assert(TEXT("ServerAreaIdentityACancelled"), CombatPrimary->IsAreaFeedbackCancelled(CombatAreaIdentityA)
+			&& CombatEnemy->GetHealth() == 90.f && CombatPrimary->GetEnergy() == 100.f - CombatPrimary->GetSkillRule(EMultiplayerCombatSkill::Area).Cost,
+			TEXT("Server accepted cancellation of the first result without undoing its settled damage or cost"));
+		if (!bDone) SetCommand(TEXT("LifecycleIdentityBReady"));
+	}
+	if (Phase == TEXT("LifecycleIdentityBReady") && Both(TEXT("AreaIdentityBReady"))) SetCommand(TEXT("LifecycleIdentityB"));
+	if (Phase == TEXT("LifecycleIdentityB") && Both(TEXT("AreaIdentityBEffect")))
+	{
+		CombatAreaIdentityB = CombatPrimary->GetAreaActivationIdentity();
+		Assert(TEXT("ServerAreaIdentityBReleased"), CombatAreaIdentityB.IsValid() && !CombatAreaIdentityB.Matches(CombatAreaIdentityA)
+			&& CombatEnemy->GetHealth() == 80.f && CombatPrimary->GetEnergy() == 100.f - 2.f * CombatPrimary->GetSkillRule(EMultiplayerCombatSkill::Area).Cost,
+			TEXT("Second real R has a distinct activation identity and one additional damage/cost settlement"));
+		if (!bDone) SetCommand(TEXT("LifecycleIdentityKeepB"));
+	}
+	if (Phase == TEXT("LifecycleIdentityKeepB") && Both(TEXT("AreaIdentityBRetained")))
+	{
+		Assert(TEXT("ServerAreaIdentityBRetained"), !CombatPrimary->IsAreaFeedbackCancelled(CombatAreaIdentityB)
+			&& CombatPrimary->IsAreaFeedbackCancelled(CombatAreaIdentityA) && CombatEnemy->GetHealth() == 80.f,
+			TEXT("First activation remains cancelled while the second activation and settled target result remain current"));
+		if (bDone) return;
+		Assert(TEXT("ServerAreaIdentityRestored"), ConfigureAreaIdentityRules(CombatPrimary.Get(), false)
+			&& FMath::IsNearlyEqual(CombatPrimary->GetCombatConfig().Area.Windup, LifecycleWindupSeconds),
+			TEXT("Scoped visual rules restored before the original aim cases"));
+		if (!bDone) SetCommand(TEXT("LifecycleIdentityRestored"));
+	}
+	if (Phase == TEXT("LifecycleIdentityRestored") && Both(TEXT("AreaIdentityRestored"))) SetCommand(TEXT("LifecycleAimPrepare:Snapshot"));
+	if (Phase == TEXT("LifecycleDefenseReady") && Both(TEXT("DefenseCancelReady"))) SetCommand(TEXT("LifecycleDefenseCast"));
+	if (Phase == TEXT("LifecycleDefenseCast") && Both(TEXT("DefenseCancelObserved"))
+		&& Receipts.Contains(TEXT("PrimaryDefenseCancelAuthorityObserved")))
+	{
+		Assert(TEXT("ServerDefenseCancelActive"), CombatPrimary->IsDefending() && CombatPrimary->IsParrying()
+			&& CombatPrimary->GetEnergy() == 100 - CombatPrimary->GetCombatConfig().Defend.Cost && CombatPrimary->GetShield() == 15,
+			TEXT("Actual remote Q reached server; both defense effects and granted shield exist before cancellation"));
+		if (!bDone) SetCommand(TEXT("LifecycleDefenseCancel"));
+	}
+	if (Phase == TEXT("LifecycleDefenseCancel"))
+	{
+		if (Receipts.Contains(TEXT("PrimaryDefenseCancelSent")) && !CombatPrimary->IsDefending() && !CombatPrimary->IsParrying()
+			&& !SentReceipts.Contains(TEXT("ServerDefenseCancelOutcome")))
+		{
+			SentReceipts.Add(TEXT("ServerDefenseCancelOutcome"));
+			const float Remaining = CombatPrimary->GetDefenseCooldownRemaining();
+			const auto& Rule = CombatPrimary->GetCombatConfig().Defend;
+			Assert(TEXT("ServerDefenseCancelOutcome"), Remaining > 0 && Rule.Cooldown - Remaining < 11
+				&& CombatPrimary->GetEnergy() == 100 - Rule.Cost && CombatPrimary->GetShield() == 15,
+				TEXT("Server removed both defense effects before their 12s natural deadline, preserving energy cost, cooldown and shield"));
+		}
+		if (!bDone && SentReceipts.Contains(TEXT("ServerDefenseCancelOutcome")) && Both(TEXT("DefenseCancelOutcome"))) Prepare(TEXT("Release"));
 		return;
 	}
 	if (Phase.StartsWith(TEXT("LifecycleAimPrepare:")))
@@ -390,7 +495,7 @@ void UCoopNetTestDriver::LifecycleServerTick(UWorld* World)
 		PrepareMovement(Case);
 	}
 	if (Phase == TEXT("Complete") && Receipts.Contains(TEXT("Complete")) && Receipts.Contains(TEXT("PartnerComplete")))
-		Finish(true, TEXT("Real W/CMC movement, Area lifecycle/late state and per-activation Attack aim passed; static and CMC-lateral targets received one damage observed by both clients; not historical rewind or visual acceptance"));
+		Finish(true, TEXT("Remote defense cancellation after authority handoff, real W/CMC movement, Area lifecycle/late state and per-activation Attack aim passed; both clients observed state/results; not historical rewind or visual acceptance"));
 #endif
 }
 
@@ -410,6 +515,208 @@ void UCoopNetTestDriver::LifecycleClientTick(UWorld* World)
 	{
 		Assert(Prefix + TEXT("LifecyclePhaseTimeout"), false, FString::Printf(TEXT("Stage %s exceeded 15 seconds. %s"),
 			*Phase, *DescribeLifecycleState(Subject, Target)));
+		return;
+	}
+	if (Phase == TEXT("LifecycleIdentityReady"))
+	{
+		const FString Marker = TEXT("Configured:") + Phase;
+		if (!SentReceipts.Contains(Marker))
+		{
+			if (!ConfigureAreaIdentityRules(Subject, true)) { SendReceipt(Prefix + TEXT("AreaIdentityReady"), false, TEXT("Could not configure scoped A/B rules")); return; }
+			SentReceipts.Add(Marker);
+			const auto& Feedback = Subject->GetCombatConfig().AreaFeedback;
+			if (!Feedback.CascadeEffect.IsNull()) Feedback.CascadeEffect.LoadSynchronous();
+			else if (!Feedback.Effect.IsNull()) Feedback.Effect.LoadSynchronous();
+			CombatAreaIdentityA = {}; CombatAreaIdentityB = {};
+			CombatAreaIdentityEffectA.Reset(); CombatAreaIdentityEffectB.Reset();
+			// 只读原生接收入口：区分不可靠 Cue 未送达与送达后身份/资源检查拒绝，不补发结果。
+			CombatAreaCueTrace = UAbilitySystemGlobals::Get().GetGameplayCueManager()->OnGameplayCueRouted().AddWeakLambda(this,
+				[this, Weak = TWeakObjectPtr<AmultiplayerCombatCharacter>(Subject)](AActor* RoutedTarget, FGameplayTag Tag,
+					EGameplayCueEvent::Type Event, const FGameplayCueParameters& Parameters, EGameplayCueExecutionOptions)
+				{
+					if (bDone || RoutedTarget != Weak.Get() || Tag != CombatTags::Cue_Area || Event != EGameplayCueEvent::Executed) return;
+					const auto* Context = FmultiplayerCombatCueContext::Get(Parameters.EffectContext);
+					const auto Identity = Context ? Context->ActivationIdentity : FmultiplayerCombatActivationIdentity();
+					Emit(TEXT("AREA_CUE_ROUTE"), FString::Printf(TEXT("spec=%s authorityRevision=%u predictionKey=%d cancelledBeforeRoute=%d"),
+						*Identity.SpecHandle.ToString(), Identity.AuthorityRevision, Identity.PredictionKey,
+						!Weak.IsValid() || Weak->IsAreaFeedbackCancelled(Identity)));
+				});
+		}
+		if (Subject->IsCombatReady() && Target && Target->GetHealth() == 100.f && !Subject->IsCasting()
+			&& (bPartner || (Local == Subject && Local->GetEnergy() == 100.f && Local->GetAreaCooldownRemaining() == 0.f)))
+			SendReceipt(Prefix + TEXT("AreaIdentityReady"), true, TEXT("Actual replicas are ready; original area asset is preloaded, not replaced or preplayed"));
+		return;
+	}
+	if (Phase == TEXT("LifecycleIdentityA") || Phase == TEXT("LifecycleIdentityB"))
+	{
+		const bool bFirst = Phase == TEXT("LifecycleIdentityA");
+		const FString Case = bFirst ? TEXT("A") : TEXT("B"), Marker = TEXT("Input:") + Phase;
+		if (!bPartner)
+		{
+			if (!SentReceipts.Contains(Marker))
+			{
+				SentReceipts.Add(Marker); CombatAreaInputStep = 0; PC->SetControlRotation(FRotator::ZeroRotator);
+				PC->InputKey(FInputKeyParams(EKeys::R, IE_Pressed, 1.));
+				return;
+			}
+			// 原始 KeyDown 不代表 PlayerInput 已处理按下；先观察真实预览，再在后续输入帧松开。
+			if (CombatAreaInputStep == 0 && PC->IsInputKeyDown(EKeys::R) && Local->IsTargetingSkill()
+				&& Local->GetTargetingSkill() == EMultiplayerCombatSkill::Area)
+			{
+				PC->InputKey(FInputKeyParams(EKeys::R, IE_Released, 0.)); CombatAreaInputStep = 1;
+				return;
+			}
+			const auto Current = Local->GetAreaActivationIdentity();
+			if (CombatAreaInputStep == 1 && !PC->IsInputKeyDown(EKeys::R) && Current.IsValid()
+				&& (bFirst || !Current.Matches(CombatAreaIdentityA)))
+				SendReceipt(TEXT("PrimaryAreaIdentity") + Case + TEXT("Input"), !Local->IsTargetingSkill()
+					&& Local->GetEnergy() == 100.f - (bFirst ? 1.f : 2.f) * Local->GetSkillRule(EMultiplayerCombatSkill::Area).Cost,
+					TEXT("Actual R press/release submitted one normal activation and one cost; no direct CastArea or Cue injection"));
+		}
+		auto& Identity = bFirst ? CombatAreaIdentityA : CombatAreaIdentityB;
+		auto& Effect = bFirst ? CombatAreaIdentityEffectA : CombatAreaIdentityEffectB;
+		const auto& Feedback = Subject->GetCombatConfig().AreaFeedback;
+		const auto Observe = [&](USceneComponent* Component)
+		{
+			if (Effect.IsValid() || Component->GetWorld() != World || !Component->IsRegistered() || !Component->IsActive()) return;
+			const auto ComponentIdentity = Subject->GetAreaFeedbackIdentity(Component);
+			if (!ComponentIdentity.IsValid() || !ComponentIdentity.Matches(Subject->GetAreaActivationIdentity())
+				|| (!bFirst && ComponentIdentity.Matches(CombatAreaIdentityA))) return;
+			Identity = ComponentIdentity; Effect = Component;
+		};
+		for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+			if (!Feedback.CascadeEffect.IsNull() && It->Template == Feedback.CascadeEffect.Get()) Observe(*It);
+		for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+			if (Feedback.CascadeEffect.IsNull() && !Feedback.Effect.IsNull() && It->GetAsset() == Feedback.Effect.Get()) Observe(*It);
+		if (auto* Component = Effect.Get())
+		{
+			const bool Active = Component->IsRegistered() && Component->IsActive()
+				&& Subject->GetAreaFeedbackIdentity(Component).Matches(Identity) && !Subject->IsAreaFeedbackCancelled(Identity);
+			if (!Active) { SendReceipt(Prefix + TEXT("AreaIdentity") + Case + TEXT("Effect"), false, TEXT("Original result ended before its visual observation; duration settings alone are not proof")); return; }
+			if (CaptureSkillView(TEXT("AreaIdentity") + Case, Subject, Target))
+				SendReceipt(Prefix + TEXT("AreaIdentity") + Case + TEXT("Effect"), true,
+					FString::Printf(TEXT("Actual active particle=%s spec=%s authorityRevision=%u predictionKey=%d serverInitiated=%d; current-token PNG captured; not a numeric-only receipt"),
+						*Component->GetPathName(), *Identity.SpecHandle.ToString(), Identity.AuthorityRevision, Identity.PredictionKey, Identity.bServerInitiated));
+		}
+		return;
+	}
+	if (Phase == TEXT("LifecycleIdentityCancelA") || Phase == TEXT("LifecycleIdentityRestored"))
+	{
+		const bool bRestore = Phase == TEXT("LifecycleIdentityRestored");
+		if (bRestore && SentReceipts.Contains(Prefix + TEXT("AreaIdentityRestored"))) return;
+		const FString Marker = TEXT("Input:") + Phase;
+		const auto& Identity = bRestore ? CombatAreaIdentityB : CombatAreaIdentityA;
+		const auto& Effect = bRestore ? CombatAreaIdentityEffectB : CombatAreaIdentityEffectA;
+		if (!bPartner && !SentReceipts.Contains(Marker))
+		{
+			if (!bRestore)
+			{
+				const auto* Component = Effect.Get();
+				SendReceipt(TEXT("PrimaryAreaIdentityACancelActive"), Component && Component->IsRegistered() && Component->IsActive(),
+					TEXT("The first real explosion is still active immediately before physical RMB, not merely a registered expired component"));
+				if (bDone) return;
+				CombatAreaIdentityCooldownDeadline = World->GetTimeSeconds() + Local->GetAreaCooldownRemaining();
+			}
+			SentReceipts.Add(Marker); CombatAreaInputStep = 0;
+			PC->InputKey(FInputKeyParams(EKeys::RightMouseButton, IE_Pressed, 1.));
+			return;
+		}
+		if (!bPartner && CombatAreaInputStep == 0 && PC->IsInputKeyDown(EKeys::RightMouseButton)
+			&& Subject->IsAreaFeedbackCancelled(Identity))
+		{
+			PC->InputKey(FInputKeyParams(EKeys::RightMouseButton, IE_Released, 0.)); CombatAreaInputStep = 1;
+		}
+		if (Subject->IsAreaFeedbackCancelled(Identity) && (!Effect.IsValid() || !Effect->IsRegistered())
+			&& (bPartner || (CombatAreaInputStep == 1 && !PC->IsInputKeyDown(EKeys::RightMouseButton))))
+		{
+			if (bRestore)
+			{
+				const bool Restored = ConfigureAreaIdentityRules(Subject, false)
+					&& FMath::IsNearlyEqual(Subject->GetCombatConfig().Area.Windup, LifecycleWindupSeconds);
+				SendReceipt(Prefix + TEXT("AreaIdentityRestored"), Restored, TEXT("Final RMB cleaned the second result and restored the scoped configuration before the original aim cases"));
+			}
+			else if (CaptureSkillView(TEXT("AreaIdentityACancelled"), Subject, Target))
+				SendReceipt(Prefix + TEXT("AreaIdentityACancelled"), Target && Target->GetHealth() == 90.f
+					&& (bPartner || (Local->GetEnergy() == 100.f - Local->GetSkillRule(EMultiplayerCombatSkill::Area).Cost
+						&& FMath::IsNearlyEqual(static_cast<double>(Local->GetAreaCooldownRemaining()), FMath::Max(0., CombatAreaIdentityCooldownDeadline - World->GetTimeSeconds()), .2))),
+					TEXT("This independent connection received the same activation cancellation and saw its particle unregister; committed damage/cost/cooldown deadline retained"));
+		}
+		return;
+	}
+	if (Phase == TEXT("LifecycleIdentityBReady"))
+	{
+		if (Subject->IsAreaFeedbackCancelled(CombatAreaIdentityA) && !Subject->IsCasting()
+			&& (bPartner || Local->GetAreaCooldownRemaining() == 0.f))
+			SendReceipt(Prefix + TEXT("AreaIdentityBReady"), true, TEXT("First activation is cancelled; next actual R waits for its real cooldown, not a test-side effect deletion"));
+		return;
+	}
+	if (Phase == TEXT("LifecycleIdentityKeepB") && FPlatformTime::Seconds() - PhaseAt >= .5)
+	{
+		const auto* Component = CombatAreaIdentityEffectB.Get();
+		const bool Retained = Component && Component->IsRegistered() && Component->IsActive()
+			&& Subject->GetAreaFeedbackIdentity(CombatAreaIdentityEffectB.Get()).Matches(CombatAreaIdentityB)
+			&& !CombatAreaIdentityB.Matches(CombatAreaIdentityA) && !Subject->IsAreaFeedbackCancelled(CombatAreaIdentityB)
+			&& Subject->IsAreaFeedbackCancelled(CombatAreaIdentityA)
+			&& (!CombatAreaIdentityEffectA.IsValid() || !CombatAreaIdentityEffectA->IsRegistered());
+		if (!Retained) { SendReceipt(Prefix + TEXT("AreaIdentityBRetained"), false, TEXT("Second result did not remain active with its distinct identity while first result stayed cancelled")); return; }
+		if (CaptureSkillView(TEXT("AreaIdentityBRetained"), Subject, Target))
+			SendReceipt(Prefix + TEXT("AreaIdentityBRetained"), true, TEXT("Second actual result remains active with its own identity and PNG; this is weak-network sequencing, not forced UDP reordering"));
+		return;
+	}
+	if (Phase == TEXT("LifecycleDefenseReady"))
+	{
+		// 必须在创建测试规则副本前验收实际保存的配置；后续截图复用该成功回执。
+		// 先复制再要求配置路径等于原资产，会让视觉夹具在进入技能阶段前自相矛盾。
+		if (!ValidateVisualFixturePawn(Local)) return;
+		if (!ConfigureLifecycleRules(Subject)) { SendReceipt(Prefix + TEXT("DefenseCancelReady"), false, TEXT("Missing transient defense rules")); return; }
+		if (Subject->IsCombatReady() && !Subject->IsDefending() && !Subject->IsParrying() && Subject->GetShield() == 0
+			&& (bPartner || (Local == Subject && Local->GetEnergy() == 100 && Local->GetDefenseCooldownRemaining() == 0
+				&& Local->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerDefendAbility::StaticClass()))))
+			SendReceipt(Prefix + TEXT("DefenseCancelReady"), true, TEXT("Independent replica ready for real Q with transient 12s defense/parry and 15 shield"));
+		return;
+	}
+	if (Phase == TEXT("LifecycleDefenseCast"))
+	{
+		auto* SourceASC = Subject->GetAbilitySystemComponent();
+		if (!bPartner && !SentReceipts.Contains(TEXT("PrimaryDefenseCancelPredicted")))
+		{
+			Local->Defend();
+			const auto* Spec = SourceASC->FindAbilitySpecFromClass(UmultiplayerDefendAbility::StaticClass());
+			FPredictionKey Key = Spec && Spec->GetPrimaryInstance() ? Spec->GetPrimaryInstance()->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
+			CombatPredictionKeys.Add(TEXT("DefenseCancel"), Key.Current);
+			SendReceipt(TEXT("PrimaryDefenseCancelPredicted"), Key.IsLocalClientKey() && Key.WasLocallyGenerated()
+				&& Local->IsDefending() && Local->IsParrying() && Local->GetEnergy() == 100 - Local->GetCombatConfig().Defend.Cost,
+				TEXT("Real owning Q predicted defense/parry and one energy cost before network receive"));
+			Key.NewCaughtUpDelegate().BindWeakLambda(this, [this] { SentReceipts.Add(TEXT("DefenseCancelCaughtUp")); });
+		}
+		if (Subject->IsDefending() && Subject->IsParrying() && Subject->GetShield() == 15)
+			SendReceipt(Prefix + TEXT("DefenseCancelObserved"), true, TEXT("This independent connection sees active defense/parry and authoritative shield before cancel"));
+		if (!bPartner && SentReceipts.Contains(TEXT("DefenseCancelCaughtUp")))
+		{
+			bool Defense = false, Parry = false;
+			for (auto Handle : SourceASC->GetActiveEffects(FGameplayEffectQuery()))
+			{
+				const auto* Effect = SourceASC->GetActiveGameplayEffect(Handle);
+				if (!Effect || !Effect->PredictionKey.WasReceived() || Effect->PredictionKey.Current != CombatPredictionKeys.FindRef(TEXT("DefenseCancel"))) continue;
+				Defense |= Effect->Spec.Def->GetClass() == UmultiplayerDefendingEffect::StaticClass();
+				Parry |= Effect->Spec.Def->GetClass() == UmultiplayerParryEffect::StaticClass();
+			}
+			if (Defense && Parry) SendReceipt(TEXT("PrimaryDefenseCancelAuthorityObserved"), true, TEXT("Both received same-key authoritative GEs replaced predictions after key catch-up"));
+		}
+		return;
+	}
+	if (Phase == TEXT("LifecycleDefenseCancel"))
+	{
+		if (!bPartner && !SentReceipts.Contains(TEXT("PrimaryDefenseCancelSent")))
+		{
+			Local->CancelCast();
+			SendReceipt(TEXT("PrimaryDefenseCancelSent"), Local->GetDefenseCooldownRemaining() > 0
+				&& Local->GetEnergy() == 100 - Local->GetCombatConfig().Defend.Cost && Local->GetShield() == 15,
+				TEXT("Owner invoked normal CancelCast after authority handoff without refunding cost, cooldown or shield"));
+		}
+		if (!Subject->IsDefending() && !Subject->IsParrying() && Subject->GetShield() == 15
+			&& (bPartner || (Local->GetEnergy() == 100 - Local->GetCombatConfig().Defend.Cost && Local->GetDefenseCooldownRemaining() > 0)))
+			SendReceipt(Prefix + TEXT("DefenseCancelOutcome"), true, TEXT("This connection sees server-confirmed defense/parry removal; shield retained and owner retains cost/cooldown"));
 		return;
 	}
 	if (Phase.StartsWith(TEXT("LifecycleMoveReady:")))

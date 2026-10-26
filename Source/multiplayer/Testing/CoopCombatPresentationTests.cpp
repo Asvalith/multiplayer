@@ -6,6 +6,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "UObject/Class.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Animation/AnimInstance.h"
@@ -40,9 +41,11 @@
 #include "Components/VerticalBox.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/AssetManager.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Engine/StreamableManager.h"
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -64,7 +67,10 @@
 #include "TimerManager.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectIterator.h"
+#include "UObject/StructOnScope.h"
+#include "UObject/StrongObjectPtr.h"
 #if WITH_EDITOR
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Animation/AnimBlueprint.h"
 #include "AnimGraphNode_LayeredBoneBlend.h"
 #include "AnimGraphNode_Slot.h"
@@ -390,6 +396,9 @@ bool FCoopCombatHUDEventLifecycleTest::RunTest(const FString& Parameters)
 		|| !TestNotNull(TEXT("Actual HUD is created with the fixture world"), Widget)) return false;
 	// TakeWidget 按引擎正常路径调用 NativeConstruct，无需窗口、AddToViewport 或 GPU 读回。
 	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Widget->TakeWidget());
+	const UFunction* SnapshotEvent = Widget->FindFunction(TEXT("PresentCombatSnapshot"));
+	if (!TestNotNull(TEXT("Real combat WBP implements its presentation event"), SnapshotEvent)) return false;
+	TestEqual(TEXT("Combat control writes execute in the actual WBP"), SnapshotEvent->GetOuterUClass(), Widget->GetClass());
 	if (!TestTrue(TEXT("Slate wrapper owns the constructed actual HUD"), Slate->GetWidgetObject() == Widget)) return false;
 	UFunction* BindFunction = Widget->FindFunction(TEXT("BindPawn"));
 	if (!TestNotNull(TEXT("Pawn binding remains a reflected lifecycle entry"), BindFunction)) return false;
@@ -812,6 +821,8 @@ bool FCoopCombatCascadeLifecycleTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("Cascade fixture player spawned"), Player)) return false;
 	auto* Config = NewObject<UmultiplayerCombatConfig>(Player);
 	Config->DefenseFeedback.CascadeEffect = Cascade;
+	Config->DefenseFeedback.Anchor = EMultiplayerFeedbackAnchor::Feet;
+	Config->DefenseFeedback.bAttachToTarget = true;
 	Config->DefenseFeedback.Effect = NewObject<UNiagaraSystem>(Config);
 	Config->ProjectileCascadeEffect = Cascade;
 	Config->ProjectileEffect = Config->DefenseFeedback.Effect;
@@ -1051,13 +1062,12 @@ bool FCoopCombatHealRecipientFeetAndFollowTest::RunTest(const FString& Parameter
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatEnemyHealthPresentationTest, "Multiplayer.Combat.EnemyHealthPresentation",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatEnemyPresentationTest, "Multiplayer.Combat.EnemyPresentation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-// 复用敌人骨骼、动画和条形布局，但属性来自自己的 GAS；真实伤害后不推进一帧也应立即更新。
-bool FCoopCombatEnemyHealthPresentationTest::RunTest(const FString& Parameters)
+// 保留素材骨骼、动画和武器的完整接线，但实际小兵不再创建头顶血条。
+bool FCoopCombatEnemyPresentationTest::RunTest(const FString& Parameters)
 {
-	if (!TestTrue(TEXT("Enemy health construction has an initialized Slate application"), FSlateApplication::IsInitialized())) return false;
 	UClass* EnemyClass = LoadClass<AmultiplayerCombatEnemy>(nullptr,
 		TEXT("/Game/Combat/Presentation/BP_CombatEnemy.BP_CombatEnemy_C"));
 	if (!TestNotNull(TEXT("Actual enemy blueprint exists"), EnemyClass)) return false;
@@ -1123,61 +1133,7 @@ bool FCoopCombatEnemyHealthPresentationTest::RunTest(const FString& Parameters)
 	for (const FBlendSample& Sample : MeleeLocomotion->GetBlendSamples())
 		TestTrue(TEXT("One-handed locomotion only uses adapted melee samples, not the old magic movement"),
 			Sample.Animation && Sample.Animation->GetName().StartsWith(TEXT("AS_Enemy_Melee_")));
-	UWidgetComponent* Component = Enemy->FindComponentByClass<UWidgetComponent>();
-	if (!TestNotNull(TEXT("Enemy owns a real health widget component"), Component)) return false;
-	TestTrue(TEXT("Health widget is world-space and follows the network-smoothed body"), Component->GetWidgetSpace() == EWidgetSpace::World
-		&& Component->GetAttachParent() == Enemy->GetMesh() && Component->GetManuallyRedraw());
-	auto* Outer = Cast<UmultiplayerEnemyHealthWidget>(Component->GetUserWidgetObject());
-	if (!TestNotNull(TEXT("Enemy BeginPlay created the actual native-backed health layout"), Outer)) return false;
-	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Outer->TakeWidget());
-	auto* Inner = Cast<UmultiplayerEnemyHealthWidget>(Outer->GetWidgetFromName(TEXT("Health")));
-	if (!TestNotNull(TEXT("Source outer layout contains our adapted inner health widget"), Inner)) return false;
-	auto* Bar = Cast<UProgressBar>(Inner->GetWidgetFromName(TEXT("HealthBar")));
-	auto* BackBar = Cast<UProgressBar>(Inner->GetWidgetFromName(TEXT("LerpAttributeBar")));
-	auto* Text = Cast<UTextBlock>(Inner->GetWidgetFromName(TEXT("HealthText")));
-	if (!TestNotNull(TEXT("Enemy has its real source-style foreground bar"), Bar)
-		|| !TestNotNull(TEXT("Enemy has its real source-style background bar"), BackBar)
-		|| !TestNotNull(TEXT("Enemy has numeric health text"), Text)) return false;
-	TestEqual(TEXT("Construction reads the initial GAS snapshot"), Text->GetText().ToString(), FString::Printf(TEXT("%.0f / %.0f"), Enemy->GetHealth(), Enemy->GetMaxHealth()));
-	TestTrue(TEXT("Only the inner widget subscribes to health events"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner)
-		&& !Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Outer));
-	const auto Damage = [](AmultiplayerCombatCharacter* Target, float Amount)
-	{
-		UAbilitySystemComponent* ASC = Target->GetAbilitySystemComponent();
-		FGameplayEffectSpecHandle Spec = ASC->MakeOutgoingSpec(UmultiplayerDamageEffect::StaticClass(), 1.f, ASC->MakeEffectContext());
-		Spec.Data->SetSetByCallerMagnitude(CombatTags::Data_Damage, Amount);
-		ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
-	};
-	Damage(Enemy, 25.f);
-	TestTrue(TEXT("GAS damage updates the foreground immediately without a display tick"), FMath::IsNearlyEqual(Bar->GetPercent(), Enemy->GetHealth() / Enemy->GetMaxHealth()));
-	TestTrue(TEXT("The source-style background is updated without a source timer"), FMath::IsNearlyEqual(BackBar->GetPercent(), Bar->GetPercent()));
-	TestEqual(TEXT("GAS damage immediately updates numeric health"), Text->GetText().ToString(), FString::Printf(TEXT("%.0f / %.0f"), Enemy->GetHealth(), Enemy->GetMaxHealth()));
-
-	auto* Replacement = Fixture.Character(EnemyClass, FVector(0, 1000, 100));
-	if (!TestNotNull(TEXT("Health rebind target spawned"), Replacement)) return false;
-	Outer->BindCharacter(Replacement);
-	TestFalse(TEXT("Rebinding removes the old enemy's subscription"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
-	const FString FreshText = Text->GetText().ToString();
-	Damage(Enemy, 10.f);
-	TestEqual(TEXT("The previous enemy can no longer change the rebound bar"), Text->GetText().ToString(), FreshText);
-	Damage(Replacement, 1000.f);
-	TestFalse(TEXT("Real GAS damage commits replacement death"), Replacement->IsAlive());
-	TestTrue(TEXT("Death immediately hides the actual inner health layout"), Inner->GetVisibility() == ESlateVisibility::Collapsed);
-	TestTrue(TEXT("Death immediately empties the health bar"), FMath::IsNearlyZero(Bar->GetPercent()));
-	GLog->FlushThreadedLogs();
-	FStringOutputDevice Timers;
-	GLog->AddOutputDevice(&Timers);
-	Fixture.World->GetTimerManager().ListTimers();
-	GLog->FlushThreadedLogs();
-	GLog->RemoveOutputDevice(&Timers);
-	TestFalse(TEXT("Neither enemy health layout owns a polling timer"), Timers.Contains(Outer->GetPathName(), ESearchCase::CaseSensitive)
-		|| Timers.Contains(Inner->GetPathName(), ESearchCase::CaseSensitive));
-	Slate->ResetWidget();
-	TestFalse(TEXT("NativeDestruct unbinds the inner observer"), Replacement->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
-	Outer->BindCharacter(Enemy);
-	Enemy->Destroy();
-	TestFalse(TEXT("Enemy EndPlay removes its health subscription"), Enemy->OnCombatStatsChanged.GetAllObjects().Contains(Inner));
-	TestNull(TEXT("Enemy EndPlay releases the component's user widget"), Component->GetUserWidgetObject());
+	TestNull(TEXT("Ordinary minion has no overhead health WidgetComponent"), Enemy->FindComponentByClass<UWidgetComponent>());
 	return !HasAnyErrors();
 }
 
@@ -1428,7 +1384,10 @@ bool FCoopCombatAttackCueSnapshotTest::RunTest(const FString& Parameters)
 	FCombatPresentationWorld Fixture;
 	auto* Player = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(1300, 1400, 100));
 	if (!TestNotNull(TEXT("Attack cue caster spawned"), Player)) return false;
-	auto* Config = NewObject<UmultiplayerCombatConfig>(Player);
+	const auto* Authored = LoadObject<UmultiplayerCombatConfig>(nullptr,
+		TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig"));
+	if (!TestNotNull(TEXT("Attack cue fixture uses the formal authored placement policy"), Authored)) return false;
+	auto* Config = DuplicateObject<UmultiplayerCombatConfig>(Authored, Player);
 	auto* Property = FindFProperty<FObjectPropertyBase>(Player->GetClass(), TEXT("CombatConfig"));
 	if (!TestNotNull(TEXT("Attack cue config property exists"), Property)) return false;
 	Property->SetObjectPropertyValue_InContainer(Player, Config);
@@ -1480,7 +1439,10 @@ bool FCoopCombatHealResultCueTest::RunTest(const FString& Parameters)
 	auto* Caster = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(1000, 1000, 100));
 	auto* Recipient = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(1300, 1000, 100));
 	if (!TestNotNull(TEXT("Healer exists"), Caster) || !TestNotNull(TEXT("Different-config recipient exists"), Recipient)) return false;
-	auto* Config = NewObject<UmultiplayerCombatConfig>(Caster);
+	const auto* Authored = LoadObject<UmultiplayerCombatConfig>(nullptr,
+		TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig"));
+	if (!TestNotNull(TEXT("Heal result fixture uses the caster's formal authored feet/follow policy"), Authored)) return false;
+	auto* Config = DuplicateObject<UmultiplayerCombatConfig>(Authored, Caster);
 	Config->HealFeedback.CascadeEffect = Cascade;
 	auto* Property = FindFProperty<FObjectPropertyBase>(Caster->GetClass(), TEXT("CombatConfig"));
 	if (!TestNotNull(TEXT("Healer config is selectable"), Property)) return false;
@@ -1544,5 +1506,308 @@ bool FCoopCombatHealResultCueTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Presentation at another recipient does not apply fake healing"), Recipient->GetHealth(), 100.f);
 	return !HasAnyErrors();
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaResultCancelTest, "Multiplayer.Combat.AreaResultRightClickCancellation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+
+// R 已结算后右键只停止本人的爆炸粒子；真实伤害、消耗和冷却保留，其他人及治疗表现不受影响。
+// 使用正式 Cue 和两种真实粒子组件；不把本地回归当作双进程弱网或最终画面验收。
+bool FCoopCombatAreaResultCancelTest::RunTest(const FString& Parameters)
+{
+	UClass* AreaCueClass = LoadClass<AmultiplayerCombatCue>(nullptr,
+		TEXT("/Game/Combat/Presentation/Cues/GCN_Area.GCN_Area_C"));
+	UClass* HealCueClass = LoadClass<AmultiplayerCombatCue>(nullptr,
+		TEXT("/Game/Combat/Presentation/Cues/GCN_Heal.GCN_Heal_C"));
+	UParticleSystem* Cascade = LoadObject<UParticleSystem>(nullptr,
+		TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/DemoAssets/IggyVFX/Particles/Primary/P_Fireball_Projectile_Cast.P_Fireball_Projectile_Cast"));
+	UNiagaraSystem* Niagara = LoadObject<UNiagaraSystem>(nullptr,
+		TEXT("/Game/Pack_Effects_2/Water_Magic/VFX_Niagara/NS_Water_Magic_Splash2.NS_Water_Magic_Splash2"));
+	const auto* Authored = LoadObject<UmultiplayerCombatConfig>(nullptr,
+		TEXT("/Game/Combat/DA_CombatConfig.DA_CombatConfig"));
+	if (!TestNotNull(TEXT("Formal area cue loads"), AreaCueClass)
+		|| !TestNotNull(TEXT("Formal healing control cue loads"), HealCueClass)
+		|| !TestNotNull(TEXT("Real Cascade cancellation fixture loads"), Cascade)
+		|| !TestNotNull(TEXT("Real Niagara cancellation fixture loads"), Niagara)
+		|| !TestNotNull(TEXT("Formal combat rules load"), Authored)) return false;
+	UGameplayCueManager* Manager = UAbilitySystemGlobals::Get().GetGameplayCueManager();
+#if WITH_EDITOR
+	Manager->LoadNotifyForEditorPreview(CombatTags::Cue_Area);
+#endif
+	for (bool bNiagara : { false, true })
+	{
+		FCombatPresentationWorld Fixture;
+		auto* Caster = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 0, 100));
+		auto* Other = Fixture.Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 2000, 100));
+		if (!TestNotNull(TEXT("Area caster exists"), Caster) || !TestNotNull(TEXT("Independent caster exists"), Other)) return false;
+		auto* Config = DuplicateObject<UmultiplayerCombatConfig>(Authored, Caster);
+		Config->AreaFeedback = {};
+		// 仅缩短本用例的规则时钟，让 A/B 为两次真实激活，不手工拼一个新的编号。
+		Config->Area.Windup = .1f; Config->Area.Recovery = .1f; Config->Area.Cooldown = .3f;
+		Config->AreaFeedback.Anchor = EMultiplayerFeedbackAnchor::CueLocation;
+		if (bNiagara) Config->AreaFeedback.Effect = Niagara;
+		else Config->AreaFeedback.CascadeEffect = Cascade;
+		// 相同素材故意用于治疗，证明取消按技能归属清理，而不是遍历素材或全场粒子。
+		Config->HealFeedback = Config->AreaFeedback;
+		auto* Property = FindFProperty<FObjectPropertyBase>(Caster->GetClass(), TEXT("CombatConfig"));
+		if (!TestNotNull(TEXT("Per-character configuration property exists"), Property)) return false;
+		Property->SetObjectPropertyValue_InContainer(Caster, Config);
+		Property->SetObjectPropertyValue_InContainer(Other, Config);
+		const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+		if (!TestTrue(TEXT("Actual R has a valid ground target"), Preview.bValid)) return false;
+		auto* Target = Fixture.Character(AmultiplayerCombatEnemy::StaticClass(), Preview.End + FVector(0, 0, 100));
+		if (!TestNotNull(TEXT("Real hostile damage target exists"), Target)) return false;
+		const float InitialHealth = Target->GetHealth();
+		const auto Particles = [&]()
+		{
+			TArray<USceneComponent*> Result;
+			if (bNiagara)
+			{
+				for (TObjectIterator<UNiagaraComponent> It; It; ++It)
+					if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->GetAsset() == Niagara) Result.Add(*It);
+			}
+			else
+			{
+				for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+					if (It->GetWorld() == Fixture.World && It->IsRegistered() && It->Template == Cascade) Result.Add(*It);
+			}
+			return Result;
+		};
+		const auto Advance = [&](float Seconds)
+		{
+			for (float Elapsed = 0; Elapsed < Seconds; Elapsed += .01f)
+			{ ++GFrameCounter; Fixture.World->Tick(LEVELTICK_All, .01f); }
+		};
+		FGameplayCueParameters FirstPayload;
+		bool bCapturedFirst = false;
+		const auto Route = Manager->OnGameplayCueRouted().AddLambda(
+			[&](AActor* Actor, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters& Payload, EGameplayCueExecutionOptions)
+			{
+				if (!bCapturedFirst && Actor == Caster && Tag == CombatTags::Cue_Area && Event == EGameplayCueEvent::Executed)
+				{ FirstPayload = Payload; bCapturedFirst = true; }
+			});
+		ON_SCOPE_EXIT { Manager->OnGameplayCueRouted().Remove(Route); };
+		Caster->CastArea();
+		for (float Elapsed = 0; Elapsed < Config->Area.Windup + .1f && Particles().IsEmpty(); Elapsed += .01f)
+		{
+			++GFrameCounter;
+			Fixture.World->Tick(LEVELTICK_All, .01f);
+		}
+		const auto Released = Particles();
+		if (!TestEqual(TEXT("Actual R release creates one result particle"), Released.Num(), 1)) return false;
+		USceneComponent* Explosion = Released[0];
+		const auto FirstIdentity = Caster->GetAreaFeedbackIdentity(Explosion);
+		TestTrue(TEXT("First real result carries the authority's existing activation identity"),
+			bCapturedFirst && FirstIdentity.IsValid() && FirstIdentity.AuthorityRevision != 0
+			&& FmultiplayerCombatCueContext::Get(FirstPayload.EffectContext)
+			&& FmultiplayerCombatCueContext::Get(FirstPayload.EffectContext)->ActivationIdentity == FirstIdentity);
+		TestTrue(TEXT("R already committed real damage before cancellation"), Target->GetHealth() < InitialHealth);
+		const float SettledHealth = Target->GetHealth(), PaidEnergy = Caster->GetEnergy();
+		const float CommittedCooldown = Caster->GetSkillCooldownRemaining(EMultiplayerCombatSkill::Area);
+		TestTrue(TEXT("A real committed R cooldown exists"), CommittedCooldown > 0.f);
+		const auto SpawnHeal = [&]()
+		{
+			const auto Before = Particles();
+			auto* Cue = Fixture.World->SpawnActor<AmultiplayerCombatCue>(HealCueClass);
+			Cue->GameplayCueTag = CombatTags::Cue_Heal;
+			FGameplayCueParameters Feedback(Caster->GetAbilitySystemComponent()->MakeEffectContext());
+			Feedback.Location = Caster->GetActorLocation();
+			Cue->OnExecute_Implementation(Caster, Feedback);
+			for (auto* Component : Particles()) if (!Before.Contains(Component)) return Component;
+			return static_cast<USceneComponent*>(nullptr);
+		};
+		const auto BeforeOther = Particles();
+		Other->CastArea(); Advance(Config->Area.Windup + .02f);
+		USceneComponent* OtherExplosion = nullptr;
+		for (auto* Component : Particles()) if (!BeforeOther.Contains(Component)) OtherExplosion = Component;
+		auto* Healing = SpawnHeal();
+		if (!TestNotNull(TEXT("Other caster has its own actual explosion"), OtherExplosion)
+			|| !TestNotNull(TEXT("Same caster has an independent actual healing particle"), Healing)) return false;
+		const float CooldownBeforeCancel = Caster->GetSkillCooldownRemaining(EMultiplayerCombatSkill::Area);
+		Caster->CancelCast();
+		TestFalse(TEXT("Right-click unregisters the already visible R explosion"), Explosion->IsRegistered());
+		TestTrue(TEXT("Another caster's explosion stays registered"), OtherExplosion->IsRegistered());
+		TestTrue(TEXT("Healing is not cancelled with R"), Healing->IsRegistered());
+		TestEqual(TEXT("Stopping R visuals does not undo applied damage"), Target->GetHealth(), SettledHealth);
+		TestEqual(TEXT("Stopping R visuals does not refund committed energy"), Caster->GetEnergy(), PaidEnergy);
+		TestEqual(TEXT("Stopping R visuals does not remove or restart cooldown"),
+			Caster->GetSkillCooldownRemaining(EMultiplayerCombatSkill::Area), CooldownBeforeCancel);
+		TestTrue(TEXT("First identity is cancelled without a separate VFX generation counter"), Caster->IsAreaFeedbackCancelled(FirstIdentity));
+		Advance(Caster->GetSkillCooldownRemaining(EMultiplayerCombatSkill::Area) + .03f);
+		const auto BeforeSecond = Particles();
+		Caster->CastArea(); Advance(Config->Area.Windup + .02f);
+		USceneComponent* NextExplosion = nullptr;
+		for (auto* Component : Particles()) if (!BeforeSecond.Contains(Component)) NextExplosion = Component;
+		if (!TestNotNull(TEXT("A later R result still creates a real particle"), NextExplosion)) return false;
+		const auto SecondIdentity = Caster->GetAreaFeedbackIdentity(NextExplosion);
+		TestTrue(TEXT("Repeated real casts have distinct authority revisions without generating a second cast counter"),
+			SecondIdentity.IsValid() && FirstIdentity.SpecHandle == SecondIdentity.SpecHandle
+			&& FirstIdentity.AuthorityRevision != SecondIdentity.AuthorityRevision && !FirstIdentity.Matches(SecondIdentity));
+		// 原生 Standalone 也可能生成 server-initiated key；只清关联字段验证权威身份不依赖该键。
+		auto FirstWithoutPrediction = FirstIdentity, SecondWithoutPrediction = SecondIdentity;
+		FirstWithoutPrediction.PredictionKey = SecondWithoutPrediction.PredictionKey = 0;
+		FirstWithoutPrediction.bServerInitiated = SecondWithoutPrediction.bServerInitiated = false;
+		TestTrue(TEXT("Existing authority revisions remain unambiguous when no prediction key is supplied"),
+			FirstWithoutPrediction.IsValid() && SecondWithoutPrediction.IsValid()
+			&& FirstWithoutPrediction.Matches(FirstIdentity) && !FirstWithoutPrediction.Matches(SecondWithoutPrediction));
+		TestTrue(TEXT("Cancellation does not leave a global R visual mute"), NextExplosion->IsRegistered());
+		// 用正式接收入口确定性重放旧消息；这不是宣称 UDP 在本轮恰好发生了该顺序。
+		auto* Stop = Caster->FindFunction(TEXT("MulticastStopAreaFeedback"));
+		const auto* IdentityField = Stop ? FindFProperty<FStructProperty>(Stop, TEXT("Identity")) : nullptr;
+		if (!TestTrue(TEXT("Production cancel receiver takes the activation identity"), IdentityField
+			&& IdentityField->Struct == FmultiplayerCombatActivationIdentity::StaticStruct())) return false;
+		FStructOnScope OldCancel(Stop);
+		IdentityField->CopyCompleteValue(IdentityField->ContainerPtrToValuePtr<void>(OldCancel.GetStructMemory()), &FirstIdentity);
+		Caster->ProcessEvent(Stop, OldCancel.GetStructMemory());
+		TestTrue(TEXT("A late cancel for A leaves B's actual particle registered"), NextExplosion->IsRegistered());
+		const int32 BeforeReplay = Particles().Num();
+		auto* OldCue = Fixture.World->SpawnActor<AmultiplayerCombatCue>(AreaCueClass);
+		OldCue->GameplayCueTag = CombatTags::Cue_Area;
+		TestFalse(TEXT("A late native result payload for cancelled A is rejected"), OldCue->OnExecute_Implementation(Caster, FirstPayload));
+		TestEqual(TEXT("Replaying A creates no replacement particle"), Particles().Num(), BeforeReplay);
+		TestTrue(TEXT("Late A feedback cannot cancel B or replace its identity"), NextExplosion->IsRegistered()
+			&& Caster->GetAreaFeedbackIdentity(NextExplosion) == SecondIdentity);
+		Caster->CancelCast(); Caster->CancelCast();
+		TestFalse(TEXT("Later R can also be stopped without a stale registration"), NextExplosion->IsRegistered());
+		TestTrue(TEXT("Repeated cancellation still leaves other-caster and healing effects intact"),
+			OtherExplosion->IsRegistered() && Healing->IsRegistered());
+	}
+	return !HasAnyErrors();
+}
+
+#if WITH_EDITOR
+namespace
+{
+	// 保留真实补载句柄跨原生帧等待；没有未完成请求时直接失败，不能用已加载资源冒充异步覆盖。
+	class FAreaAsyncCancelCommand final : public IAutomationLatentCommand
+	{
+	public:
+		FAreaAsyncCancelCommand(FAutomationTestBase* InTest, TUniquePtr<FCombatPresentationWorld> InWorld,
+			AmultiplayerCombatCharacter* InCaster, FSoftObjectPath InPath)
+			: Test(InTest), Fixture(MoveTemp(InWorld)), Caster(InCaster), Path(MoveTemp(InPath))
+		{
+			Route = UAbilitySystemGlobals::Get().GetGameplayCueManager()->OnGameplayCueRouted().AddLambda(
+				[this](AActor* Target, FGameplayTag Tag, EGameplayCueEvent::Type Event, const FGameplayCueParameters&, EGameplayCueExecutionOptions)
+				{
+					if (Target != Caster || Tag != CombatTags::Cue_Area || Event != EGameplayCueEvent::Executed) return;
+					++ResultCount;
+					// 原生 Route 通知发生在 Cue OnExecute 之前，直接观察 B 到达时 A 仍未完成。
+					if (ResultCount == 2) bOldPendingAtReplacement = Pending.IsValid() && Pending->IsLoadingInProgress();
+				});
+			Caster->CastArea();
+		}
+		~FAreaAsyncCancelCommand() override
+		{
+			UAbilitySystemGlobals::Get().GetGameplayCueManager()->OnGameplayCueRouted().Remove(Route);
+			// Latent 期间引擎已推进真实帧，不能把同步 fixture 的旧帧号恢复到过去。
+			Fixture->PreviousFrame = GFrameCounter;
+		}
+		bool Update() override
+		{
+			if (FPlatformTime::Seconds() - StartedAt > 30.)
+			{ Test->AddError(TEXT("Real R async-cancel observation timed out")); return true; }
+			Fixture->World->Tick(LEVELTICK_All, .02f);
+			if (Phase == 0)
+			{
+				if (ResultCount == 0) return false;
+				TArray<TSharedRef<FStreamableHandle>> Handles;
+				UAssetManager::GetStreamableManager().GetActiveHandles(Path, Handles);
+				for (const auto& Handle : Handles) if (Handle->IsLoadingInProgress()) { Pending = Handle; break; }
+				if (!Test->TestTrue(TEXT("Actual R result has an unfinished native load for its selected particle"), Pending.IsValid())) return true;
+				FirstIdentity = Caster->GetAreaActivationIdentity();
+				if (!Test->TestTrue(TEXT("Pending result belongs to a real activation"), FirstIdentity.IsValid())) return true;
+				Test->AddInfo(FString::Printf(TEXT("AREA_ASYNC_PENDING asset=%s revision=%u"), *Path.ToString(), FirstIdentity.AuthorityRevision));
+				Caster->CancelCast();
+				Test->TestTrue(TEXT("Cancel marks this pending result's exact identity"), Caster->IsAreaFeedbackCancelled(FirstIdentity));
+				// 只推进独立世界的真实规则时钟，不泵全局加载；B 必须在 A 原请求完成前接替同一 Cue。
+				const auto AdvanceRules = [&](float Seconds)
+				{ for (float Elapsed = 0; Elapsed < Seconds; Elapsed += .01f) { ++GFrameCounter; Fixture->World->Tick(LEVELTICK_All, .01f); } };
+				AdvanceRules(Caster->GetAreaCooldownRemaining() + .03f);
+				if (!Test->TestTrue(TEXT("A is still loading when the real second R becomes available"),
+					Pending->IsLoadingInProgress() && Caster->CheckSkillAvailable(EMultiplayerCombatSkill::Area))) return true;
+				Caster->CastArea();
+				SecondIdentity = Caster->GetAreaActivationIdentity();
+				AdvanceRules(Caster->GetSkillRule(EMultiplayerCombatSkill::Area).Windup + .03f);
+				if (!Test->TestTrue(TEXT("Second native R result reaches the Cue while A is genuinely pending"),
+					ResultCount == 2 && bOldPendingAtReplacement && SecondIdentity.IsValid() && !SecondIdentity.Matches(FirstIdentity))) return true;
+				Test->TestTrue(TEXT("B takes over the same pending Cue and cancels A's old load handle"), Pending->WasCanceled());
+				Handles.Reset();
+				UAssetManager::GetStreamableManager().GetActiveHandles(Path, Handles);
+				for (const auto& Handle : Handles) if (Handle->IsLoadingInProgress()) { Replacement = Handle; break; }
+				if (!Test->TestTrue(TEXT("B owns an unfinished native replacement load"), Replacement.IsValid() && Replacement != Pending)) return true;
+				Test->AddInfo(FString::Printf(TEXT("AREA_ASYNC_REPLACEMENT oldRevision=%u newRevision=%u pendingAtRoute=%d oldHandleCancelled=%d"),
+					FirstIdentity.AuthorityRevision, SecondIdentity.AuthorityRevision, bOldPendingAtReplacement, Pending->WasCanceled()));
+				Phase = 1;
+			}
+			// 完成标志可早于完成委托；B 的一次性 Cue 清理原句柄后，再核对实际组件的归属。
+			if (!Replacement->HasLoadCompleted() || !Replacement->WasCanceled()) return false;
+			Loaded.Reset(Cast<UParticleSystem>(Path.ResolveObject()));
+			if (!Test->TestNotNull(TEXT("B's native replacement request really finishes loading"), Loaded.Get())) return true;
+			const auto Current = Particles();
+			Test->TestEqual(TEXT("Only B creates a particle after the overlapping asynchronous requests finish"), Current.Num(), 1);
+			if (!Current.IsEmpty()) Test->TestTrue(TEXT("The resulting particle carries B and cancelled A never revives"),
+				Caster->GetAreaFeedbackIdentity(Current[0]) == SecondIdentity && !Caster->IsAreaFeedbackCancelled(SecondIdentity)
+				&& Caster->IsAreaFeedbackCancelled(FirstIdentity));
+			return true;
+		}
+	private:
+		TArray<UParticleSystemComponent*> Particles() const
+		{
+			TArray<UParticleSystemComponent*> Result;
+			for (TObjectIterator<UParticleSystemComponent> It; It; ++It)
+				if (It->GetWorld() == Fixture->World && It->IsRegistered() && It->Template == Loaded.Get()) Result.Add(*It);
+			return Result;
+		}
+		FAutomationTestBase* Test;
+		TUniquePtr<FCombatPresentationWorld> Fixture;
+		AmultiplayerCombatCharacter* Caster;
+		FSoftObjectPath Path;
+		TSharedPtr<FStreamableHandle> Pending;
+		TSharedPtr<FStreamableHandle> Replacement;
+		TStrongObjectPtr<UParticleSystem> Loaded{nullptr};
+		FmultiplayerCombatActivationIdentity FirstIdentity;
+		FmultiplayerCombatActivationIdentity SecondIdentity;
+		FDelegateHandle Route;
+		double StartedAt = FPlatformTime::Seconds();
+		int32 Phase = 0;
+		int32 ResultCount = 0;
+		bool bOldPendingAtReplacement = false;
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaAsyncCancelTest, "Multiplayer.Combat.AreaAsyncLoadCancellation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
+
+// BeginPlay 后配置真实未加载素材；A 未完成就取消并由真实 B 接替，等待原生加载完成核对粒子归属。
+bool FCoopCombatAreaAsyncCancelTest::RunTest(const FString& Parameters)
+{
+	auto Fixture = MakeUnique<FCombatPresentationWorld>();
+	auto* Caster = Fixture->Character(AmultiplayerCombatCharacter::StaticClass(), FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("Real area caster exists for asynchronous cancellation"), Caster)) return false;
+	UAbilitySystemGlobals::Get().GetGameplayCueManager()->LoadNotifyForEditorPreview(CombatTags::Cue_Area);
+	FARFilter Filter;
+	Filter.PackagePaths.Add(TEXT("/Game/AdvancedARPGCombat")); Filter.bRecursivePaths = true;
+	Filter.ClassPaths.Add(UParticleSystem::StaticClass()->GetClassPathName());
+	TArray<FAssetData> Assets;
+	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssets(Filter, Assets);
+	FSoftObjectPath ParticlePath;
+	for (const auto& Asset : Assets)
+	{
+		TArray<TSharedRef<FStreamableHandle>> Handles;
+		const auto Candidate = Asset.GetSoftObjectPath();
+		if (!Asset.IsAssetLoaded() && !UAssetManager::GetStreamableManager().GetActiveHandles(Candidate, Handles))
+		{ ParticlePath = Candidate; break; }
+	}
+	if (!TestTrue(TEXT("An actual unloaded ARPG particle with no existing request is available"), ParticlePath.IsValid())) return false;
+	auto* Config = DuplicateObject<UmultiplayerCombatConfig>(&Caster->GetCombatConfig(), Caster);
+	Config->Area.Windup = .1f; Config->Area.Recovery = .1f; Config->Area.Cooldown = .3f;
+	Config->AreaFeedback = {}; Config->AreaFeedback.CascadeEffect = ParticlePath;
+	Config->AreaFeedback.Anchor = EMultiplayerFeedbackAnchor::CueLocation;
+	auto* Property = FindFProperty<FObjectPropertyBase>(Caster->GetClass(), TEXT("CombatConfig"));
+	if (!TestNotNull(TEXT("Per-character feedback config can be replaced without changing assets"), Property)) return false;
+	Property->SetObjectPropertyValue_InContainer(Caster, Config);
+	ADD_LATENT_AUTOMATION_COMMAND(FAreaAsyncCancelCommand(this, MoveTemp(Fixture), Caster, ParticlePath));
+	return true;
+}
+#endif
 
 #endif

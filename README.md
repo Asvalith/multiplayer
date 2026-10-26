@@ -12,29 +12,32 @@
 
 - C++ 管规则和状态，蓝图接动画、特效与 UMG；客户端范围预览不成为权威命中名单。
 - GameMode 管对局、接纳和恢复；GameState 复制共享事实；GameInstance 管地址连接、取消和有限重试；机关与能力各自拥有业务状态。
-- 战斗参数、表现资源与能力关系使用 Data Asset；机关/网络实验参数使用已有 JSON 配置。前者适合 UE 资产引用，后者便于外部实验；不重复维护同一字段。
+- 战斗参数、表现资源与能力关系使用 Data Asset；关卡人数、机关速度和连接重试等基础规则使用 JSON。延迟/丢包等实验条件由验证脚本参数指定，不写回正式配置；不重复维护同一字段。
 - ASC/AttributeSet 当前在战斗 Character 上，不宣传为 PlayerState 常驻架构。ASC 独立声明在 `multiplayerCombatAbilitySystem.h`；恢复数据合同在 `Network/multiplayerCombatResumeState.h`，GameMode 不再依赖完整角色头。
 
-## 当前验证（2026-10-24）
+## 当前验证（2026-10-26）
 
 | 范围 | 实际结果 |
 | --- | --- |
-| Editor / Shipping | 原生编译通过，不等于新发布包运行 |
-| 完整 Automation | 174/174，0 测试警告、0 failed/notRun |
-| 资产契约 | 42 条审计，43 个所查包内容未改变；战斗/AI 资产校验通过 |
-| 战斗联机专项 | Combat、Lifecycle、Expansion、Reconnect，Normal/Harsh 共 8/8 通过 |
-| 验证边界 | 本机 Editor DS + 双客户端、CombatTest、NullRHI；没有据此宣称正式地图画面、完整通关、公网或发布包验收通过 |
+| Editor / Shipping | 关闭 Unity 合并编译后均通过，不等于新发布包运行 |
+| 完整 Automation | 184/184，0 测试警告、0 failed/notRun |
+| 激活与表现归属 | 复用已有技能句柄、激活轮次和预测键；旧取消／旧结果重放及真实异步补载 A→B 隔离通过，不等于实际 UDP 乱序已发生 |
+| 最新带渲染联机专项 | CombatLifecycle：Normal 通过 148 项门禁、双端 16 张阶段截图；Harsh 在 R 结果表现观察阶段失败 |
+| 失败边界 | Harsh 的服务器扣费和伤害正常、旁观者看到粒子，拥有者未观察到该次原生 Cue 路由；结果 Cue 为不可靠传输，日志不足以证明具体丢包位置 |
+| 验证范围 | 本机 Editor DS + 双客户端、CombatTest、DX12 离屏；截图抽查不代表连续动画质量、正式地图完整通关、公网或发布包验收 |
 
 Harsh 的三端参数为 PktLag=200、Variance=50、Loss=5，不是实测 RTT。历史机关规模实验与平台对照保留原构建条件，不是当前整局带宽或 GAS 优化收益。
+
+最新整理删除独立特效轮次与重复动画拒绝登记，保留原生动画播放号、效果句柄及预测机制各自职责；共享材质补载读取当前有效技能，不回放旧预测落点。连接计时读取原生 ACK 估计 RTT／RTO，只调整业务等待与有限重试，不重写可靠包重传。较早的 8/8 NullRHI 网络与资源冷检属于对应历史构建，详细证据及保留的失败记录见 [Tests](Tests/README.md)。
 
 ## 运行与阅读
 
 ```powershell
 # 启动可操作的本机专服与双客户端，在地址菜单连接。
-.\Scripts\RunLocalDedicatedServer.ps1 -Play -FromMenu -Port 7777
+.\Scripts\RunLocalDedicatedServer.ps1 -FromMenu -Port 7777
 ```
 
-正式入口是 `/Game/Combat/Maps/CoopEscape`；`CombatTest` 用于技能专项。技能为左键攻击、Q 防御/弹反、E 治疗、R 范围、Shift 冲刺；F 引导救援，B 成长菜单。预览与释放操作、专项模式限制见脚本和历史说明。不要省略 `-Play` 后把旧机关原型的自动验证当成当前地图完整通关。
+正式入口是 `/Game/Combat/Maps/CoopEscape`；`CombatTest` 用于技能专项。技能为左键攻击、Q 防御/弹反、E 治疗、R 范围、Shift 冲刺；F 引导救援，B 成长菜单。启动脚本默认打开可操作的专服与双客户端，`-Play` 仅兼容旧命令。旧庭院自动路线已经移除，正式地图通关须人工操作验收；技能与网络专项使用 `RunMultiplayerNetworkTests.ps1`。
 
 - [当前架构：目录、状态所有者与三条调用链](Docs/ARCHITECTURE.md)
 - [面试讲解：背景、架构、GAS 链路与真实踩坑](Docs/INTERVIEW_GUIDE.md)

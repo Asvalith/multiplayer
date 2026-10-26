@@ -18,7 +18,7 @@
 #include "Misc/Parse.h"
 #endif
 
-// 服务器规则层：集中处理接纳/短线恢复、目标结算、终局与回合重开。
+// [职责] 服务器规则层：集中处理接纳/短线恢复、目标结算、终局与回合重开。
 // 机关提供事实，战斗角色提供个人快照；GameState 复制共享结果，本类不驱动客户端界面。
 
 // 设置原生默认类并优先采用现有角色、GameState、HUD 蓝图，保留关卡配置入口。
@@ -105,9 +105,9 @@ void AmultiplayerGameMode::PostLogin(APlayerController* NewPlayer)
 	}), 15.0f, false);
 }
 
-// 验证、消费票据和恢复集中在同一权威入口；票据只在内存与所属 Controller RPC 中传递。
-// 设计：票据定位本局快照，在线 Controller 占用阻止同一状态被重复接入；不是账号认证系统。
-// 轮换兼容保留客户端实际持有的旧票据别名，但别名仍共享同一个在线占用。
+// [职责] 所属 Controller 提交票据后，在服务器统一验证、取得在线占用并恢复新 Pawn。
+// [亮点] 轮换票据保留客户端持有的旧别名；两者指向同一在线占用，回执丢失仍可重试。
+// [边界] 票据只定位同局服务器快照，不是账号认证，也不接受客户端资源或成长数值。
 bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* Controller, const FGuid& Ticket,
 	FGuid& OutTicket, FText& OutError, bool& bRetryable)
 {
@@ -179,8 +179,9 @@ bool AmultiplayerGameMode::ClaimCombatSession(AmultiplayerCoopPlayerController* 
 	return true;
 }
 
-// 断线前保存服务器个人状态并释放在线锁，快照只在本 GameMode 内保留 120 秒。
-// 取舍：使用单调实时时钟扣除离线时间；缓存随本局 GameMode 消失，不承担服务器重启持久化。
+// [职责] Controller 销毁 Pawn 前保存个人状态，再释放在线占用，最后关闭旧 Pawn 的行动资格。
+// [边界] 保存的是已提交资源/CD与白名单持续状态；旧能力随后取消，恢复不续接半次技能。
+// 使用单调实时时钟计算 120 秒保留期及离线耗时；缓存不承担跨局或服务器重启持久化。
 void AmultiplayerGameMode::SaveCombatSession(AmultiplayerCoopPlayerController* Controller)
 {
 	if (!Controller || !Controller->HasAcceptedCombatSession()) return;
@@ -232,10 +233,9 @@ void AmultiplayerGameMode::NotifyCombatPlayerDeath()
 	}
 }
 
-// 安装成功才发布共享进度；避免附件安装失败却已增加目标数量，两份事实必须按此顺序提交。
+// [亮点] 插槽先同步提交钥匙安装，成功才更新 GameState；重入保护覆盖安装及进度通知的完整调用栈。
 bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 {
-	//防重入与状态校验
 	if (bRegisteringKey)
 	{
 		return false;
@@ -245,44 +245,38 @@ bool AmultiplayerGameMode::RegisterActivatedKey(TFunctionRef<bool()> CommitKey)
 	{
 		return false;
 	}
-	//标记安装
 	TGuardValue<bool> RegisterGuard(bRegisteringKey, true);
 	if (!CommitKey())
 	{
 		return false;
 	}
-	//更新状态
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	++NewState.ActivatedKeys;
 	CoopState->ApplyAuthoritativeState(NewState);
 	return true;
 }
 
-//判胜利
+// [职责] 胜利区域提供服务器统计的人数，GameMode 再复核钥匙目标与既有终局后提交胜利快照。
 bool AmultiplayerGameMode::TryCompleteCoopGame(int32 CurrentPlayers, int32 RequiredPlayers)
 {
-	//细节：合法性兜底
 	if (CurrentPlayers < FMath::Max(1, RequiredPlayers))
 	{
 		return false;
 	}
-	//状态校验
 	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
 	if (CoopState == nullptr || CoopState->HasGameLost() || CoopState->GetObjectiveState().bGameWon || !CoopState->IsObjectiveComplete())
 	{
 		return false;
 	}
-	//更新
 	FmultiplayerCoopObjectiveState NewState = CoopState->GetObjectiveState();
 	NewState.bGameWon = true;
 	CoopState->ApplyAuthoritativeState(NewState);
 	return true;
 }
 
-//重新开始（传入发起者）
+// [职责] 只接纳一次终局重开；锁与失败恢复资料先于引擎 Travel 建立，避免同步通知重入。
 bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingController)
 {
-	//前置校验
 	UWorld* World = GetWorld();
 	AmultiplayerCoopGameState* CoopState = GetGameState<AmultiplayerCoopGameState>();
 	if (World == nullptr || World->bIsTearingDown || GameSession == nullptr
@@ -297,14 +291,13 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingCon
 		return false;
 	}
 
-	//****先锁定请求再触发 Travel，阻止两名玩家同帧点击导致重复重载
 	PendingRestart.bRequested = true;
 	PendingRestart.PreviousMatchState = GetMatchState();
 	PendingRestart.PreviousSwitchCountdown = World->NextSwitchCountdown;
 	PendingRestart.Requester = RequestingController;
 
-//测试分支：模拟重开失败（只注入一次）
 #if !UE_BUILD_SHIPPING
+	// 非 Shipping 的显式测试开关，只模拟一次失败，不尝试加载地图。
 	static bool bRestartFailureInjected = false;
 	if (!bRestartFailureInjected && FParse::Param(FCommandLine::Get(), TEXT("CoopTestFailRestartOnce")))
 	{
@@ -332,7 +325,7 @@ bool AmultiplayerGameMode::RequestRestartCurrentRound(AController* RequestingCon
 	return true;
 }
 
-//重开失败恢复
+// [边界] 只恢复仍存活且未被其他 Travel 接管的旧 World；不回滚已卸载世界或重建整局历史。
 bool AmultiplayerGameMode::RecoverFailedRestart(const FString& FailureReason)
 {
 	UWorld* World = GetWorld();

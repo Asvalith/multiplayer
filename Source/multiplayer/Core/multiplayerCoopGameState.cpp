@@ -10,7 +10,6 @@
 void AmultiplayerCoopGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	//属性同步注册
 	DOREPLIFETIME(AmultiplayerCoopGameState, ObjectiveState);
 	DOREPLIFETIME(AmultiplayerCoopGameState, EncounterState);
 }
@@ -33,7 +32,8 @@ void AmultiplayerCoopGameState::ApplyEncounterState(const FmultiplayerCombatEnco
 // 各端通知本机 HUD 补读最新波次；晚加入不重放之前的刷怪事件。
 void AmultiplayerCoopGameState::OnRep_EncounterState() { OnEncounterChanged.Broadcast(); }
 
-// 发布当前快照而非历史增量：晚加入能直接读取已完成的目标，不依赖重播拾取 RPC。
+// [亮点] 服务器写当前快照并立即通知本机；晚加入客户端经复制补读，无需重播拾取 RPC。
+// [边界] 此处只规范化并发布结果；钥匙安装、人数和胜负资格仍由 GameMode 判定。
 void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopObjectiveState& NewObjectiveState)
 {
 	if (!HasAuthority())
@@ -41,7 +41,6 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopOb
 		return;
 	}
 
-	//净化输入
 	FmultiplayerCoopObjectiveState SanitizedState = NewObjectiveState;
 	SanitizedState.RequiredKeys = FMath::Max(0, SanitizedState.RequiredKeys);
 	SanitizedState.ActivatedKeys = FMath::Clamp(SanitizedState.ActivatedKeys,0,SanitizedState.RequiredKeys);
@@ -50,7 +49,6 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopOb
 		SanitizedState.bGameWon = false;
 	}
 	if (SanitizedState.bGameWon) SanitizedState.bGameLost = false;
-	//跳过无意义的更新
 	if (ObjectiveState.ActivatedKeys == SanitizedState.ActivatedKeys
 		&& ObjectiveState.RequiredKeys == SanitizedState.RequiredKeys
 		&& ObjectiveState.bGameWon == SanitizedState.bGameWon
@@ -58,27 +56,22 @@ void AmultiplayerCoopGameState::ApplyAuthoritativeState(const FmultiplayerCoopOb
 	{
 		return;
 	}
-	//更新
 	ObjectiveState = SanitizedState;
 	// 服务器显式调用仅通知本机监听者；远端仍通过属性复制进入各自的 OnRep。
 	OnRep_ObjectiveState();
-	//强制网络更新同步
 	ForceNetUpdate();
 }
 
-// 复制到达后通知本机订阅者；C++ 委托不跨网络，HUD 应重读快照而非自行累加进度。
+// [亮点] 广播前认领本轮终局边沿，监听者同步改状态也不会重复认领同一次胜负。
+// [边界] 委托只通知本机，HUD 初始化还须补读快照；不保证收到所有中间网络状态。
 void AmultiplayerCoopGameState::OnRep_ObjectiveState()
 {
-	//保存快照
 	const FmultiplayerCoopObjectiveState StateSnapshot = ObjectiveState;
-	//计算胜利（边沿触发）
 	const bool bBecameGameWon = !bLastNotifiedGameWon && StateSnapshot.bGameWon;
 	bLastNotifiedGameWon = StateSnapshot.bGameWon;
 	const bool bBecameGameLost = !bLastNotifiedGameLost && StateSnapshot.bGameLost;
 	bLastNotifiedGameLost = StateSnapshot.bGameLost;
-	//广播进度变化
 	OnObjectiveProgressChanged.Broadcast(StateSnapshot.ActivatedKeys,StateSnapshot.RequiredKeys);
-	//广播胜利事件
 	if (bBecameGameWon)
 	{
 		OnGameWon.Broadcast();

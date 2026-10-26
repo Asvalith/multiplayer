@@ -19,6 +19,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/ScopeExit.h"
+#include "Misc/CommandLine.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/UnrealType.h"
 
@@ -269,6 +270,20 @@ bool FCombatProgressionDiskPersistenceTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("Actual disk file has the production SaveGame class"), Disk)) return false;
 	TestTrue(TEXT("Actual disk contents equal the complete saved snapshot"),
 		FmultiplayerCombatProgressionState::StaticStruct()->CompareScriptStruct(&Saved, &Disk->Progression, 0));
+	// 演示开关也必须阻止已初始化的普通服务器角色读写；只使用本次新建的 GUID 槽。
+	{
+		TArray<uint8> BeforeDemo, AfterDemo;
+		if (!TestTrue(TEXT("Read this test's owned profile file before the demo boundary"), UGameplayStatics::LoadDataFromSlot(BeforeDemo, Slot, 0))) return false;
+		const FString OriginalCommandLine = FCommandLine::Get();
+		ON_SCOPE_EXIT { FCommandLine::Set(*OriginalCommandLine); };
+		FCommandLine::Set(*(OriginalCommandLine + TEXT(" -CoopSkillDemo")));
+		TestFalse(TEXT("Demo refuses SaveProgress even on an already initialized server profile"), Progression->SaveProgress());
+		TestFalse(TEXT("Demo refuses LoadProgress even when a valid file exists"), Progression->LoadProgress());
+		TestTrue(TEXT("Demo persistence rejection preserves every progression field"),
+			FmultiplayerCombatProgressionState::StaticStruct()->CompareScriptStruct(&Saved, &Progression->GetState(), 0));
+		TestTrue(TEXT("Demo rejection leaves this test's saved profile bytes unchanged"),
+			UGameplayStatics::LoadDataFromSlot(AfterDemo, Slot, 0) && BeforeDemo == AfterDemo);
+	}
 	Progression->AwardExperience(300, FGuid::NewGuid());
 	Progression->RequestLearnSkill(EMultiplayerCombatSkill::Attack);
 	Progression->RequestEquipPassive(EMultiplayerCombatPassive::Power);

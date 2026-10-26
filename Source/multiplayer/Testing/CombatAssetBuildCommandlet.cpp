@@ -1,8 +1,10 @@
 // 编辑器离线构建与窄修复工具：生成项目表现副本，明确区分只读验证和显式保存。
 // 动画、HUD、特效与行为树只做资产接线；运行时技能、伤害和网络规则仍由生产代码负责。
 #include "Testing/CombatAssetBuildCommandlet.h"
+#include "HAL/FileManager.h"
 
 #if WITH_EDITOR
+#include "BlueprintEditorLibrary.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequence.h"
@@ -47,6 +49,7 @@
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatPresentation.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/CapsuleComponent.h"
@@ -65,6 +68,7 @@
 #include "Components/WidgetComponent.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphSchema_BehaviorTree.h"
 #include "Engine/Blueprint.h"
@@ -90,11 +94,14 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_MacroInstance.h"
+#include "K2Node_BreakStruct.h"
+#include "Engine/Font.h"
+#include "GameFramework/GameModeBase.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
-#include "Serialization/ArchiveReplaceObjectRef.h"
 #include "Materials/MaterialInterface.h"
 #include "NiagaraSystem.h"
 #include "Distributions/DistributionFloatUniform.h"
@@ -138,6 +145,7 @@ UCombatAssetBuildCommandlet::UCombatAssetBuildCommandlet()
 }
 
 #if WITH_EDITOR
+namespace CoopResourceAssets { bool InitializeAuthoredFeedback(UmultiplayerCombatConfig& Config); }
 namespace CombatAssets
 {
 const FString Folder = TEXT("/Game/Combat/Presentation");
@@ -167,13 +175,19 @@ FString ObjectPath(const FString& Package) { return Package + TEXT(".") + FPacka
 // 加载并保留对象供本次离线操作使用，不在这里保存或改写源包。
 template<typename T> T* Load(const FString& Package) { return Keep(LoadObject<T>(nullptr, *ObjectPath(Package))); }
 
-// 只保存调用方显式传入的新包，不 SaveAll，不保存源动画、原骨架或地图。
+// 仅保存白名单中的项目包：专用表现与所选修复模式明确涉及的既有资产；不 SaveAll。
 bool Save(UObject* Object)
 {
 	if (!Object || (!Object->GetPackage()->GetName().StartsWith(Folder + TEXT("/"))
 		&& Object->GetPackage()->GetName() != ConfigPackage
 		&& Object->GetPackage()->GetName() != EnemyConfigPackage
-		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/Escape/WBP_EscapeCombatVisuals"))) return false;
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/Escape/WBP_EscapeCombatVisuals")
+		&& Object->GetPackage()->GetName() != TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter")
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Characters/Mannequins/Animations/ABP_Manny")
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/UI/BP_CombatHUD")
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/Escape/BP_EscapeHUD")
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/BP_CombatGameMode")
+		&& Object->GetPackage()->GetName() != TEXT("/Game/Combat/Escape/BP_EscapeGameMode"))) return false;
 	UPackage* Package = Object->GetPackage();
 	FSavePackageArgs Args;
 	Args.TopLevelFlags = RF_Public | RF_Standalone;
@@ -785,7 +799,10 @@ bool RepairSkillPresentation(const FString& Params)
 	}
 	if (!InsertDefensePose(Animation) || !Compile(Animation) || !Save(Animation)) return false;
 	HUD->Modify();
-	HUD->ParentClass = AmultiplayerCombatHUD::StaticClass();
+	auto* SharedHUD = Load<UBlueprint>(Folder / TEXT("UI/BP_CombatHUDPresentation"));
+	if (!SharedHUD || !SharedHUD->GeneratedClass) return false;
+	if (HUD->ParentClass != SharedHUD->GeneratedClass) UBlueprintEditorLibrary::ReparentBlueprint(HUD, SharedHUD->GeneratedClass);
+	if (HUD->ParentClass != SharedHUD->GeneratedClass || HUD->Status == BS_Error) return false;
 	FBlueprintEditorUtils::RefreshAllNodes(HUD);
 	if (!Compile(HUD) || !SetAsset(HUD->GeneratedClass->GetDefaultObject(), TEXT("CombatWidgetClass"), nullptr, true)) return false;
 	FSavePackageArgs SaveArgs;
@@ -827,12 +844,6 @@ UBlueprint* CharacterBlueprint(const TCHAR* Name, UClass* Parent, USkeletalMesh*
 	FVector Offset = Transform.GetLocation();
 	Offset.Z += PlayerTemplate->GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight() - Character->GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
 	Transform.SetLocation(Offset); Character->GetMesh()->SetRelativeTransform(Transform);
-	if (bEnemy)
-	{
-		TArray<UStaticMeshComponent*> Components; Character->GetComponents(Components);
-		for (UStaticMeshComponent* Component : Components)
-			if (Component->GetFName() == TEXT("EnemyVisual")) { Component->SetVisibility(false); Component->SetHiddenInGame(true); }
-	}
 	if (!SetAsset(Character, TEXT("AttackMontage"), Montages[0]) || !SetAsset(Character, TEXT("HealMontage"), Montages[1])
 		|| !SetAsset(Character, TEXT("DeathMontage"), Montages[2]) || !SetAsset(Character, TEXT("AreaMontage"), Montages[3], false)
 		|| !SetAsset(Character, TEXT("HitMontage"), Montages[4], false) || !SetAsset(Character, TEXT("CombatConfig"), Config)) return nullptr;
@@ -867,6 +878,7 @@ UmultiplayerCombatConfig* CreateConfig()
 	SetFeedback(Config->AreaFeedback, Poison + TEXT("NS_Posion_Magic_Area1"), TEXT("SW_Area_Placeholder"));
 	SetFeedback(Config->StunFeedback, Poison + TEXT("NS_Posion_Magic_Debuff"), nullptr);
 	SetFeedback(Config->FailureFeedback, TEXT(""), TEXT("SW_Denied_Placeholder"));
+	if (bCreated && !CoopResourceAssets::InitializeAuthoredFeedback(*Config)) return nullptr;
 	if (bCreated) FAssetRegistryModule::AssetCreated(Config);
 	return Save(Config) ? Config : nullptr;
 }
@@ -1025,20 +1037,138 @@ bool CreateUI(bool bUpdateOnly = false)
 		UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_HUD_LAYOUT_UPDATED asset=%s designStats=432x176 designSkills=720x156 feedback=800x64 updateOnly=%d"), *WidgetPath, bUpdateOnly);
 	}
 	if (bUpdateOnly) return true;
-	UClass* HUDBase = LoadClass<UObject>(nullptr, TEXT("/Script/multiplayer.multiplayerCombatHUD"));
-	if (!HUDBase) return false;
-	const FString HUDPath = Folder / TEXT("UI/BP_CombatHUD");
-	UBlueprint* HUD = Load<UBlueprint>(HUDPath);
-	if (!HUD)
-	{
-		HUD = Keep(FKismetEditorUtilities::CreateBlueprint(HUDBase, CreatePackage(*HUDPath), TEXT("BP_CombatHUD"),
-			BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass(), TEXT("CombatAssetBuild")));
-		if (!HUD || !Compile(HUD) || !SetAsset(HUD->GeneratedClass->GetDefaultObject(), TEXT("CombatWidgetClass"), Widget->GeneratedClass)) return false;
-		FAssetRegistryModule::AssetCreated(HUD);
-		if (!Compile(HUD) || !Save(HUD)) return false;
-	}
 	return true;
 }
+
+// 把成长附加层保存为真实 UMG 资产；运行时只绑定按钮和快照，不再构建树。
+bool UpdateProgressionUI(bool bValidateOnly)
+{
+	const FString Package = Folder / TEXT("UI/WBP_CombatProgression");
+	UWidgetBlueprint* Widget = Load<UWidgetBlueprint>(Package);
+	const bool bCreated = Widget == nullptr;
+	if (!Widget && !bValidateOnly)
+	{
+		Widget = Keep(Cast<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(UmultiplayerCombatProgressionWidget::StaticClass(),
+			CreatePackage(*Package), TEXT("WBP_CombatProgression"), BPTYPE_Normal, UWidgetBlueprint::StaticClass(),
+			UWidgetBlueprintGeneratedClass::StaticClass(), TEXT("CombatAssetBuild"))));
+	}
+	if (!Widget || Widget->ParentClass != UmultiplayerCombatProgressionWidget::StaticClass()) return false;
+	if (!bValidateOnly)
+	{
+		Widget->Modify();
+		if (Widget->WidgetTree) Widget->WidgetTree->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+		Widget->WidgetTree = NewObject<UWidgetTree>(Widget, TEXT("WidgetTree"), RF_Transactional);
+		UWidgetTree* Tree = Widget->WidgetTree;
+		auto* Canvas = Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("ProgressionCanvas")); Tree->RootWidget = Canvas;
+		auto* Panel = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ProgressionPanel")); Panel->SetPadding(FMargin(18));
+		Panel->SetBrushColor(FLinearColor(.025f, .035f, .055f, .96f));
+		auto* Position = Canvas->AddChildToCanvas(Panel); Position->SetAnchors(FAnchors(.5f, .5f));
+		Position->SetAlignment(FVector2D(.5f, .5f)); Position->SetAutoSize(true);
+		auto* Size = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("ProgressionSize")); Size->SetWidthOverride(620); Panel->SetContent(Size);
+		auto* Lines = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ProgressionLines")); Size->SetContent(Lines);
+		const auto Label = [Tree, Lines](const TCHAR* Name, const FText& Value, int32 FontSize = 16)
+		{
+			auto* Text = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), FName(Name)); Text->bIsVariable = true; Text->SetText(Value);
+			FSlateFontInfo Font = Text->GetFont(); Font.Size = FontSize; Text->SetFont(Font);
+			Text->SetColorAndOpacity(FSlateColor(FLinearColor(.92f, .94f, .98f))); Text->SetAutoWrapText(true);
+			Lines->AddChildToVerticalBox(Text)->SetPadding(FMargin(0, 3)); return Text;
+		};
+		const auto Row = [Tree, Lines](const TCHAR* Name)
+		{ auto* Result = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), FName(Name)); Lines->AddChildToVerticalBox(Result); return Result; };
+		const auto Button = [Tree](UHorizontalBox* Parent, const TCHAR* Name, const FText& Value)
+		{
+			auto* Result = Tree->ConstructWidget<UButton>(UButton::StaticClass(), FName(Name)); Result->bIsVariable = true;
+			auto* Text = Tree->ConstructWidget<UTextBlock>(); Text->SetText(Value); FSlateFontInfo Font = Text->GetFont(); Font.Size = 15; Text->SetFont(Font);
+			Result->SetContent(Text); Result->SetBackgroundColor(FLinearColor(.16f, .24f, .34f));
+			auto* Slot = Parent->AddChildToHorizontalBox(Result); Slot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); Slot->SetPadding(FMargin(2, 4));
+		};
+		Label(TEXT("ProgressionTitle"), NSLOCTEXT("CombatProgression", "Title", "成长与技能  [B / Esc 关闭]"), 22);
+		Label(TEXT("ProgressionSummary"), FText::GetEmpty(), 18); Label(TEXT("ProgressionSkills"), FText::GetEmpty());
+		Label(TEXT("ProgressionSelectedSkill"), FText::GetEmpty());
+		auto* Skills = Row(TEXT("ProgressionSkillActions"));
+		Button(Skills, TEXT("PreviousSkillButton"), NSLOCTEXT("CombatProgression", "PreviousSkill", "上个技能"));
+		Button(Skills, TEXT("NextSkillButton"), NSLOCTEXT("CombatProgression", "NextSkill", "下个技能"));
+		Button(Skills, TEXT("LearnSkillButton"), NSLOCTEXT("CombatProgression", "LearnSkill", "学习 / 升级 (-1点)"));
+		Label(TEXT("ProgressionSelectedSlot"), FText::GetEmpty()); auto* Slots = Row(TEXT("ProgressionSlotActions"));
+		Button(Slots, TEXT("PreviousSlotButton"), NSLOCTEXT("CombatProgression", "PreviousSlot", "上个槽位"));
+		Button(Slots, TEXT("NextSlotButton"), NSLOCTEXT("CombatProgression", "NextSlot", "下个槽位"));
+		Button(Slots, TEXT("EquipSkillButton"), NSLOCTEXT("CombatProgression", "EquipSkill", "装配所选技能"));
+		Label(TEXT("ProgressionPassives"), FText::GetEmpty()); Label(TEXT("ProgressionSelectedPassive"), FText::GetEmpty());
+		auto* Passives = Row(TEXT("ProgressionPassiveActions"));
+		Button(Passives, TEXT("PreviousPassiveButton"), NSLOCTEXT("CombatProgression", "PreviousPassive", "上个被动"));
+		Button(Passives, TEXT("NextPassiveButton"), NSLOCTEXT("CombatProgression", "NextPassive", "下个被动"));
+		Button(Passives, TEXT("LearnPassiveButton"), NSLOCTEXT("CombatProgression", "LearnPassive", "学习被动 (-1点)"));
+		auto* Equip = Row(TEXT("ProgressionEquipActions"));
+		Button(Equip, TEXT("EquipPassiveButton"), NSLOCTEXT("CombatProgression", "EquipPassive", "装配被动"));
+		Button(Equip, TEXT("UnequipPassiveButton"), NSLOCTEXT("CombatProgression", "UnequipPassive", "卸下被动"));
+		auto* Files = Row(TEXT("ProgressionFileActions"));
+		Button(Files, TEXT("SaveProgressButton"), NSLOCTEXT("CombatProgression", "Save", "保存成长 [F5]"));
+		Button(Files, TEXT("LoadProgressButton"), NSLOCTEXT("CombatProgression", "Load", "读取成长 [F9]"));
+		Button(Files, TEXT("CloseProgressionButton"), NSLOCTEXT("CombatProgression", "Close", "关闭"));
+		Label(TEXT("ProgressionMessage"), NSLOCTEXT("CombatProgression", "Instructions", "学习每级花1点，技能等级不能超过角色等级。装配已有技能会交换槽位；施法期间不能换装。"), 14);
+		if (bCreated) FAssetRegistryModule::AssetCreated(Widget);
+		if (!Compile(Widget)) return false;
+		auto* Defaults = Cast<UmultiplayerCombatProgressionWidget>(Widget->GeneratedClass->GetDefaultObject()); if (!Defaults) return false;
+		Defaults->Modify(); Defaults->SetIsFocusable(true);
+		Defaults->SkillNames = { NSLOCTEXT("CombatProgression", "Attack", "攻击"), NSLOCTEXT("CombatProgression", "Defense", "防御"),
+			NSLOCTEXT("CombatProgression", "Heal", "治疗"), NSLOCTEXT("CombatProgression", "Area", "范围"), NSLOCTEXT("CombatProgression", "Dash", "冲刺") };
+		Defaults->SlotKeys = { FText::FromString(TEXT("LMB")), FText::FromString(TEXT("Q")), FText::FromString(TEXT("E")), FText::FromString(TEXT("R")), FText::FromString(TEXT("Shift")) };
+		Defaults->PassiveNames = { NSLOCTEXT("CombatProgression", "NoPassive", "无"), NSLOCTEXT("CombatProgression", "Toughness", "坚韧"), NSLOCTEXT("CombatProgression", "Power", "强攻") };
+		Defaults->SummaryFormat = NSLOCTEXT("CombatProgression", "SummaryFormat", "Lv.{0}    XP {1} / {2}    技能点 {3}");
+		Defaults->WaitingText = NSLOCTEXT("CombatProgression", "Waiting", "等待角色 / 成长数据同步");
+		Defaults->SkillLineFormat = NSLOCTEXT("CombatProgression", "SkillLineFormat", "{0}  {1}  ·  槽{2} [{3}]");
+		Defaults->SkillLevelFormat = NSLOCTEXT("CombatProgression", "SkillLevelFormat", "Lv.{0}");
+		Defaults->UnlearnedText = NSLOCTEXT("CombatProgression", "Unlearned", "未学习");
+		Defaults->UnlockText = NSLOCTEXT("CombatProgression", "Unlock", "未学习（可花1点解锁）");
+		Defaults->SelectedSkillFormat = NSLOCTEXT("CombatProgression", "SelectedSkillFormat", "当前技能：{0}  {1}");
+		Defaults->SlotFormat = NSLOCTEXT("CombatProgression", "SlotFormat", "目标槽{0} [{1}]：{2}");
+		Defaults->PassivesFormat = NSLOCTEXT("CombatProgression", "PassivesFormat", "被动：坚韧 Lv.{0} (+20生命/级)  ·  强攻 Lv.{1} (+5攻击/级)\n当前装配：{2}");
+		Defaults->SelectedPassiveFormat = NSLOCTEXT("CombatProgression", "SelectedPassiveFormat", "选择被动：{0}  Lv.{1}");
+		if (!Save(Widget)) return false;
+	}
+	if (!Widget->GeneratedClass || !Widget->WidgetTree || !Widget->WidgetTree->RootWidget) return false;
+	// BindWidget 的类/控件绑定由编译器检查；可达层级必须真实附在根下，不能只检查同名孤立控件。
+	const auto Bound = [Widget](const TCHAR* Name, UClass* Type)
+	{
+		const UWidget* Control = Widget->WidgetTree->FindWidget(FName(Name));
+		if (!Control || !Control->IsA(Type) || !Control->bIsVariable) return false;
+		while (Control && Control != Widget->WidgetTree->RootWidget) Control = Control->GetParent();
+		return Control == Widget->WidgetTree->RootWidget;
+	};
+	for (const TCHAR* Name : { TEXT("ProgressionSummary"), TEXT("ProgressionSkills"), TEXT("ProgressionSelectedSkill"), TEXT("ProgressionSelectedSlot"),
+		TEXT("ProgressionPassives"), TEXT("ProgressionSelectedPassive"), TEXT("ProgressionMessage") }) if (!Bound(Name, UTextBlock::StaticClass())) return false;
+	for (const TCHAR* Name : { TEXT("PreviousSkillButton"), TEXT("NextSkillButton"), TEXT("LearnSkillButton"), TEXT("PreviousSlotButton"), TEXT("NextSlotButton"),
+		TEXT("EquipSkillButton"), TEXT("PreviousPassiveButton"), TEXT("NextPassiveButton"), TEXT("LearnPassiveButton"), TEXT("EquipPassiveButton"),
+		TEXT("UnequipPassiveButton"), TEXT("SaveProgressButton"), TEXT("LoadProgressButton"), TEXT("CloseProgressionButton") }) if (!Bound(Name, UButton::StaticClass())) return false;
+	auto* Defaults = Cast<UmultiplayerCombatProgressionWidget>(Widget->GeneratedClass->GetDefaultObject());
+	if (!Defaults || !Defaults->IsFocusable() || Defaults->SkillNames.Num() != 5 || Defaults->SlotKeys.Num() != 5 || Defaults->PassiveNames.Num() != 3
+		|| Defaults->SummaryFormat.IsEmpty() || Defaults->WaitingText.IsEmpty() || Defaults->SkillLineFormat.IsEmpty() || Defaults->SkillLevelFormat.IsEmpty()
+		|| Defaults->UnlearnedText.IsEmpty() || Defaults->UnlockText.IsEmpty() || Defaults->SelectedSkillFormat.IsEmpty() || Defaults->SlotFormat.IsEmpty()
+		|| Defaults->PassivesFormat.IsEmpty() || Defaults->SelectedPassiveFormat.IsEmpty()) return false;
+	for (const FString& Path : { Folder / TEXT("BP_CombatPlayer"), FString(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter")) })
+	{
+		auto* Player = Load<UBlueprint>(Path); if (!Player || !Player->GeneratedClass) return false;
+		if (!bValidateOnly)
+		{
+			Player->Modify(); Player->GeneratedClass->GetDefaultObject()->Modify();
+			if (!SetAsset(Player->GeneratedClass->GetDefaultObject(), TEXT("ProgressionWidgetClass"), Widget->GeneratedClass) || !Compile(Player) || !Save(Player)) return false;
+		}
+		const FObjectPropertyBase* Field = FindFProperty<FObjectPropertyBase>(Player->GeneratedClass, TEXT("ProgressionWidgetClass"));
+		if (!Field || Field->GetObjectPropertyValue_InContainer(Player->GeneratedClass->GetDefaultObject()) != Widget->GeneratedClass) return false;
+	}
+	// Escape 继承正式玩家；只读验证有效 CDO，禁止为新属性另存一份相同覆盖。
+	if (auto* Escape = Load<UBlueprint>(TEXT("/Game/Combat/Escape/BP_EscapePlayerVariant")))
+	{
+		const FObjectPropertyBase* Field = Escape->GeneratedClass ? FindFProperty<FObjectPropertyBase>(Escape->GeneratedClass, TEXT("ProgressionWidgetClass")) : nullptr;
+		if (!Field || Field->GetObjectPropertyValue_InContainer(Escape->GeneratedClass->GetDefaultObject()) != Widget->GeneratedClass) return false;
+	}
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_PROGRESSION_UI mode=%s asset=%s reachableLabels=7 reachableButtons=14 classBindings=verified runtimeButtonTests=REQUIRED visualPreview=NOT_RUN"),
+		bValidateOnly ? TEXT("Validate") : TEXT("Update"), *Widget->GetPathName());
+	return true;
+}
+
+#include "Testing/CoopHUDPresentationBuild.inl"
+#include "Testing/CoopWidgetPresentationBuild.inl"
 
 // 只给原 HUD 追加素材表现子控件；保留原父类、原控件、事件图、HUDClass 和准星。
 bool ConnectARPGHUD()
@@ -1296,136 +1426,6 @@ bool RefreshCombatFeedbackAndHUD()
 	return true;
 }
 
-// 复制源包的两层血条表现树，不复制属性系统、绑定图或平滑计时器。
-bool ConnectARPGEnemyHealth()
-{
-	UWidgetBlueprint* SourceOuter = Load<UWidgetBlueprint>(TEXT("/Game/AdvancedARPGCombat/MagicCombatSystem/UI/Widget/WB_MagicEnemyHealth"));
-	UWidgetBlueprint* SourceBar = Load<UWidgetBlueprint>(TEXT("/Game/AdvancedARPGCombat/AdvancedCombatFramework/UI/Widgets/WB_AttributeProgressBar"));
-	UBlueprint* Enemy = Load<UBlueprint>(Folder / TEXT("BP_CombatEnemy"));
-	if (!SourceOuter || !SourceOuter->WidgetTree || !SourceBar || !SourceBar->WidgetTree || !Enemy || !Enemy->GeneratedClass) return false;
-	UWidget* SourceHealth = SourceOuter->WidgetTree->FindWidget(TEXT("Health"));
-	if (!SourceHealth) return false;
-	// 拷贝控件外观到本项目原生父类，并移除源委托，避免带入第二套属性和计时逻辑。
-	const auto CopyLayout = [](UWidgetBlueprint* Source, const TCHAR* Name)
-	{
-		const FString Package = Folder / TEXT("UI") / Name;
-		UWidgetBlueprint* Output = Load<UWidgetBlueprint>(Package);
-		if (Output && Output->ParentClass != UmultiplayerEnemyHealthWidget::StaticClass()) return static_cast<UWidgetBlueprint*>(nullptr);
-		if (!Output)
-		{
-			Output = Keep(Cast<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(UmultiplayerEnemyHealthWidget::StaticClass(),
-				CreatePackage(*Package), FName(Name), BPTYPE_Normal, UWidgetBlueprint::StaticClass(),
-				UWidgetBlueprintGeneratedClass::StaticClass(), TEXT("CombatAssetBuild"))));
-			if (!Output) return Output;
-			FAssetRegistryModule::AssetCreated(Output);
-		}
-		Output->Modify();
-		if (Output->WidgetTree) Output->WidgetTree->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
-		Output->WidgetTree = DuplicateObject<UWidgetTree>(Source->WidgetTree, Output, TEXT("WidgetTree"));
-		// UMG 属性委托属于源业务图；副本只保留控件、槽位、尺寸、颜色和纹理。
-		Output->WidgetTree->ForEachWidget([](UWidget* Widget)
-		{
-			for (TFieldIterator<FDelegateProperty> Field(Widget->GetClass()); Field; ++Field)
-				Field->ContainerPtrToValuePtr<FScriptDelegate>(Widget)->Unbind();
-		});
-		return Output;
-	};
-	UWidgetBlueprint* Bar = CopyLayout(SourceBar, TEXT("WBP_ARPGEnemyAttributeBar"));
-	if (!Bar || !Bar->WidgetTree->RootWidget) return false;
-	UProgressBar* Primary = Cast<UProgressBar>(Bar->WidgetTree->FindWidget(TEXT("AttributeBar")));
-	UProgressBar* Trail = Cast<UProgressBar>(Bar->WidgetTree->FindWidget(TEXT("LerpAttributeBar")));
-	if (!Primary || !Trail) return false;
-	Primary->Rename(TEXT("HealthBar"), Bar->WidgetTree, REN_DontCreateRedirectors | REN_NonTransactional);
-	Primary->bIsVariable = true; Trail->bIsVariable = true;
-	// 外层源实例的样式由其 PreConstruct 图应用；这里直接拷贝样式值，不运行源初始化逻辑。
-	for (const auto& Entry : { TPair<const TCHAR*, UProgressBar*>(TEXT("AttributeBarStyle"), Primary),
-		TPair<const TCHAR*, UProgressBar*>(TEXT("LerpBarStyle"), Trail) })
-	{
-		const FStructProperty* Style = FindFProperty<FStructProperty>(SourceHealth->GetClass(), Entry.Key);
-		if (!Style || Style->Struct->GetFName() != TEXT("ProgressBarStyle")) return false;
-		Entry.Value->SetWidgetStyle(*Style->ContainerPtrToValuePtr<FProgressBarStyle>(SourceHealth));
-	}
-	UWidget* SourceRoot = Bar->WidgetTree->RootWidget;
-	UOverlay* Numbers = Bar->WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("EnemyHealthReadout"));
-	Bar->WidgetTree->RootWidget = Numbers;
-	UOverlaySlot* VisualSlot = Numbers->AddChildToOverlay(SourceRoot);
-	VisualSlot->SetHorizontalAlignment(HAlign_Fill); VisualSlot->SetVerticalAlignment(VAlign_Fill);
-	UTextBlock* Label = Bar->WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("HealthText"));
-	Label->bIsVariable = true; Label->SetText(FText::FromString(TEXT("100 / 100"))); Label->SetJustification(ETextJustify::Center);
-	FSlateFontInfo Font = Label->GetFont(); Font.Size = 12; Font.OutlineSettings = FFontOutlineSettings(1, FLinearColor::Black); Label->SetFont(Font);
-	UOverlaySlot* TextSlot = Numbers->AddChildToOverlay(Label);
-	TextSlot->SetHorizontalAlignment(HAlign_Fill); TextSlot->SetVerticalAlignment(VAlign_Center);
-	if (!Compile(Bar) || !Save(Bar)) return false;
-	UWidgetBlueprint* Outer = CopyLayout(SourceOuter, TEXT("WBP_ARPGEnemyHealth"));
-	if (!Outer) return false;
-	UWidget* OldHealth = Outer->WidgetTree->FindWidget(TEXT("Health"));
-	UPanelWidget* Parent = OldHealth ? OldHealth->GetParent() : nullptr;
-	if (!Parent) return false;
-	OldHealth->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
-	UUserWidget* NewHealth = Outer->WidgetTree->ConstructWidget<UUserWidget>(Bar->GeneratedClass.Get(), TEXT("Health"));
-	NewHealth->bIsVariable = true;
-	if (!Parent->ReplaceChild(OldHealth, NewHealth)) return false;
-	OldHealth->Slot = nullptr;
-	if (!Compile(Outer) || !Save(Outer)) return false;
-	Enemy->Modify();
-	auto* Defaults = Cast<AmultiplayerCombatEnemy>(Enemy->GeneratedClass->GetDefaultObject());
-	UWidgetComponent* Component = Defaults ? Cast<UWidgetComponent>(Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))) : nullptr;
-	if (!Component) return false;
-	Component->SetWidgetClass(Outer->GeneratedClass.Get());
-	if (auto* WorldHealth = Cast<UmultiplayerEnemyHealthWidgetComponent>(Component)) WorldHealth->ConfigureWorldDefaults();
-	else return false;
-	if (!Compile(Enemy) || !Save(Enemy)) return false;
-	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ARPG_ENEMY_HEALTH_CONNECTED sourceLayout=2 nativeWidgets=2 sourceBusinessGraphs=0 healthPolling=0"));
-	return true;
-}
-
-// 仅迁移现有敌人 BP 的展示组件；不重新复制源 UI，不更换布局或业务图。
-bool UpdateEnemyWorldHealth()
-{
-	UBlueprint* Enemy = Load<UBlueprint>(Folder / TEXT("BP_CombatEnemy"));
-	if (!Enemy || !Enemy->GeneratedClass) return false;
-	Enemy->Modify();
-	auto* Defaults = Cast<AmultiplayerCombatEnemy>(Enemy->GeneratedClass->GetDefaultObject());
-	auto* Legacy = Defaults ? Cast<UWidgetComponent>(Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))) : nullptr;
-	auto* Component = Cast<UmultiplayerEnemyHealthWidgetComponent>(Legacy);
-	auto* ExistingWidget = Load<UWidgetBlueprint>(Folder / TEXT("UI/WBP_ARPGEnemyHealth"));
-	UE_LOG(LogCombatAssetBuild, Display, TEXT("WORLD_HEALTH_COMPONENT_AUDIT bp=%s componentClass=%s nativeClass=%s"),
-		*GetNameSafe(Enemy), *GetNameSafe(Legacy ? Legacy->GetClass() : nullptr),
-		*GetNameSafe(GetMutableDefault<AmultiplayerCombatEnemy>()->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))->GetClass()));
-	if (!Component && Legacy && Legacy->GetClass() == UWidgetComponent::StaticClass())
-	{
-		// 旧BP序列化了同名基类子对象，单改C++构造类型不会升级它。按编辑器换组件类的方式
-		// 复制共同属性并替换CDO引用，只迁移这个继承组件，不重建敌人或任何UI布局。
-		const FName ComponentName = Legacy->GetFName();
-		const EObjectFlags Flags = Legacy->GetFlags();
-		Legacy->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
-		Component = NewObject<UmultiplayerEnemyHealthWidgetComponent>(Defaults, ComponentName, Flags);
-		UEngine::CopyPropertiesForUnrelatedObjects(Legacy, Component);
-		TMap<UObject*, UObject*> Replacements;
-		Replacements.Add(Legacy, Component);
-		FArchiveReplaceObjectRef<UObject> ReplaceReferences(Defaults, Replacements);
-		Defaults->RemoveOwnedComponent(Legacy);
-		Defaults->AddOwnedComponent(Component);
-		FindFProperty<FObjectPropertyBase>(Defaults->GetClass(), TEXT("HealthBarWidget"))->SetObjectPropertyValue_InContainer(Defaults, Component);
-		Legacy->MarkAsGarbage();
-	}
-	if (!Component || !ExistingWidget || !ExistingWidget->GeneratedClass)
-	{
-		UE_LOG(LogCombatAssetBuild, Error, TEXT("World health migration requires the native component and existing widget: component=%s widget=%s"),
-			*GetNameSafe(Defaults ? Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget")) : nullptr), *GetNameSafe(ExistingWidget));
-		return false;
-	}
-	// 原生组件类型更新后旧BP覆盖可能失去WidgetClass；明确重连已有布局，不复制或重建源UI。
-	Component->SetWidgetClass(ExistingWidget->GeneratedClass.Get());
-	Component->ConfigureWorldDefaults();
-	if (!Compile(Enemy)) return false;
-	Defaults = Cast<AmultiplayerCombatEnemy>(Enemy->GeneratedClass->GetDefaultObject());
-	Component = Defaults ? Cast<UmultiplayerEnemyHealthWidgetComponent>(Defaults->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))) : nullptr;
-	if (!Component || Component->GetWidgetClass() != ExistingWidget->GeneratedClass || !Save(Enemy)) return false;
-	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ENEMY_WORLD_HEALTH_UPDATED asset=%s worldSpace=1 manualRedraw=1 layout=preserved depthTest=1"), *Enemy->GetPathName());
-	return true;
-}
-
 // 顺序构建重定向动画、动作层、配置、Cue、UI 和角色副本，任一步失败即停止。
 bool Create()
 {
@@ -1509,6 +1509,66 @@ bool UpdateAnimations()
 }
 
 // 只接入素材表现：保留本项目骨架、移动状态机和 GAS，不挂源包自己的战斗框架。
+// 只移除模板地形脚 IK；保留原上游姿态到每个真实下游的连接，不处理重定向或其他 Rig。
+bool RemoveImportedFootIK(UAnimBlueprint* Blueprint, bool bValidateOnly, int32& Removed)
+{
+	if (!Blueprint) return false;
+	TArray<UEdGraph*> Graphs; Blueprint->GetAllGraphs(Graphs);
+	for (UEdGraph* Graph : Graphs)
+	{
+		TArray<UEdGraphNode*> Nodes;
+		for (UEdGraphNode* Node : Graph->Nodes) Nodes.Add(Node);
+		for (UEdGraphNode* Node : Nodes)
+		{
+			if (Node->GetClass()->GetFName() != TEXT("AnimGraphNode_ControlRig")) continue;
+			const FStructProperty* Data = FindFProperty<FStructProperty>(Node->GetClass(), TEXT("Node"));
+			const FObjectPropertyBase* Field = Data ? FindFProperty<FObjectPropertyBase>(Data->Struct, TEXT("ControlRigClass")) : nullptr;
+			const UObject* Rig = Field ? Field->GetObjectPropertyValue_InContainer(Data->ContainerPtrToValuePtr<void>(Node)) : nullptr;
+			if (!Rig && Data)
+			{
+				Field = FindFProperty<FObjectPropertyBase>(Data->Struct, TEXT("DefaultControlRigClass"));
+				Rig = Field ? Field->GetObjectPropertyValue_InContainer(Data->ContainerPtrToValuePtr<void>(Node)) : nullptr;
+			}
+			if (!Rig || Rig->GetPathName() != TEXT("/Game/Characters/Mannequins/Rigs/CR_Mannequin_BasicFootIK.CR_Mannequin_BasicFootIK_C")) continue;
+			if (bValidateOnly) return false;
+			UEdGraphPin* Source = Node->FindPin(TEXT("Source"), EGPD_Input);
+			UEdGraphPin* Pose = Node->FindPin(TEXT("Pose"), EGPD_Output);
+			if (!Source || !Pose || (!Pose->LinkedTo.IsEmpty() && Source->LinkedTo.Num() != 1)) return false;
+			UEdGraphPin* Upstream = Source->LinkedTo.Num() == 1 ? Source->LinkedTo[0] : nullptr;
+			const TArray<UEdGraphPin*> Consumers = Pose->LinkedTo;
+			Blueprint->Modify(); FBlueprintEditorUtils::RemoveNode(Blueprint, Node, true);
+			for (UEdGraphPin* Consumer : Consumers)
+				if (!Graph->GetSchema()->TryCreateConnection(Upstream, Consumer)) return false;
+			++Removed;
+		}
+	}
+	return true;
+}
+
+bool UpdateFootIK(bool bValidateOnly)
+{
+	for (const FString& Path : { FString(TEXT("/Game/Characters/Mannequins/Animations/ABP_Manny")), Folder / TEXT("Animations/ABP_CombatLocomotion"),
+		Folder / TEXT("ARPG/ABP_ARPGLocomotion") })
+	{
+		auto* Blueprint = Load<UAnimBlueprint>(Path); int32 Removed = 0;
+		const bool bFormal = Path == Folder / TEXT("ARPG/ABP_ARPGLocomotion");
+		if (!RemoveImportedFootIK(Blueprint, bValidateOnly || bFormal, Removed)) return false;
+		if (Removed > 0 && (!Compile(Blueprint) || !Save(Blueprint))) return false;
+		int32 Remaining = 0; if (!RemoveImportedFootIK(Blueprint, true, Remaining)) return false;
+		bool bOutputConnected = false; TArray<UEdGraph*> Graphs; Blueprint->GetAllGraphs(Graphs);
+		for (UEdGraph* Graph : Graphs) if (Graph->GetFName() == TEXT("AnimGraph"))
+		{
+			const UAnimGraphNode_Root* Root = FBlueprintEditorUtils::GetAnimGraphRoot(Graph);
+			const UEdGraphPin* Input = Root ? Root->FindPin(TEXT("Result"), EGPD_Input) : nullptr;
+			bOutputConnected |= Input && Input->LinkedTo.Num() == 1;
+		}
+		if (!bOutputConnected) return false;
+		UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_FOOT_IK mode=%s asset=%s removed=%d exactRigAbsent=1 rootPoseConnected=1 visualPreview=NOT_RUN"),
+			bValidateOnly ? TEXT("Validate") : TEXT("Remove"), *Blueprint->GetPathName(), Removed);
+	}
+	return true;
+}
+
 bool ConnectARPGAnimations()
 {
 	const FString ARPGFolder = Folder / TEXT("ARPG");
@@ -1628,38 +1688,13 @@ bool ConnectARPGAnimations()
 		TArray<UEdGraph*> Graphs; Result->GetAllGraphs(Graphs);
 		int32 IdleCount = 0, JumpCount = 0, FallCount = 0, BlendCount = 0;
 		int32 MoveConditionCount = 0, FallingConditionCount = 0, RemovedBasicFootIK = 0;
+		if (!RemoveImportedFootIK(Result, false, RemovedBasicFootIK)) return nullptr;
 		for (UEdGraph* Graph : Graphs)
 		{
 			TArray<UEdGraphNode*> Nodes;
 			for (UEdGraphNode* Node : Graph->Nodes) Nodes.Add(Node);
 			for (UEdGraphNode* Node : Nodes)
 			{
-				// ARPG 动作没有模板 Foot IK 所需的辅助骨轨；该 Rig 会把活动脚骨重新拉回静止 IK 目标。
-				// 只在本项目动画副本中旁路这一份具体 Rig，保留原状态机、缓存、动作层以及源模板。
-				if (Node->GetClass()->GetFName() == TEXT("AnimGraphNode_ControlRig"))
-				{
-					const FStructProperty* Data = FindFProperty<FStructProperty>(Node->GetClass(), TEXT("Node"));
-					const FObjectPropertyBase* Field = Data ? FindFProperty<FObjectPropertyBase>(Data->Struct, TEXT("ControlRigClass")) : nullptr;
-					const UObject* Rig = Field ? Field->GetObjectPropertyValue_InContainer(Data->ContainerPtrToValuePtr<void>(Node)) : nullptr;
-					if (!Rig && Data)
-					{
-						Field = FindFProperty<FObjectPropertyBase>(Data->Struct, TEXT("DefaultControlRigClass"));
-						Rig = Field ? Field->GetObjectPropertyValue_InContainer(Data->ContainerPtrToValuePtr<void>(Node)) : nullptr;
-					}
-					if (Rig && Rig->GetPathName() == TEXT("/Game/Characters/Mannequins/Rigs/CR_Mannequin_BasicFootIK.CR_Mannequin_BasicFootIK_C"))
-					{
-						UEdGraphPin* Source = Node->FindPin(TEXT("Source"), EGPD_Input);
-						UEdGraphPin* Pose = Node->FindPin(TEXT("Pose"), EGPD_Output);
-						if (!Source || !Pose || (!Pose->LinkedTo.IsEmpty() && Source->LinkedTo.Num() != 1)) return nullptr;
-						UEdGraphPin* Upstream = Source->LinkedTo.Num() == 1 ? Source->LinkedTo[0] : nullptr;
-						const TArray<UEdGraphPin*> Consumers = Pose->LinkedTo;
-						FBlueprintEditorUtils::RemoveNode(Result, Node, true);
-						for (UEdGraphPin* Consumer : Consumers)
-							if (!Graph->GetSchema()->TryCreateConnection(Upstream, Consumer)) return nullptr;
-						++RemovedBasicFootIK;
-						continue;
-					}
-				}
 				// 模板 ShouldMove 还要求输入加速度，AI/远端角色会因此停留在 Idle；迁移条件改读实际运动。
 				// 只改读取端，保留原事件图和原变量；旧 BlueprintUpdate 写入不会覆盖这两个原生字段。
 				if (UK2Node_VariableGet* Getter = Cast<UK2Node_VariableGet>(Node))
@@ -2014,9 +2049,13 @@ bool ConnectARPGEnemySource(bool bAuditOnly = false)
 	Config->Attack = FmultiplayerCombatSkillRule(0, 1.8f, 15, 160, 0, AttackRelease,
 		FMath::Max(.05f, Montages[0]->GetPlayLength() - AttackRelease));
 	Config->ProjectileEffect.Reset(); Config->ProjectileCascadeEffect.Reset(); Config->AreaMarkerMaterial.Reset();
-	Config->AttackFeedback = {}; Config->ImpactFeedback = {}; Config->CastingFeedback = {};
-	Config->HealFeedback = {}; Config->DefenseFeedback = {}; Config->AreaFeedback = {};
-	Config->StunFeedback = {}; Config->FailureFeedback = {};
+	// Reauthor only the enemy resource references; retain the Blueprint/Data Asset presentation policy.
+	for (auto* Feedback : {&Config->AttackFeedback, &Config->ImpactFeedback, &Config->CastingFeedback,
+		&Config->HealFeedback, &Config->DefenseFeedback, &Config->AreaFeedback, &Config->StunFeedback, &Config->FailureFeedback})
+	{
+		Feedback->Effect.Reset(); Feedback->CascadeEffect.Reset(); Feedback->Sound.Reset();
+	}
+	if (bConfigCreated && !CoopResourceAssets::InitializeAuthoredFeedback(*Config)) return false;
 	Config->AttackFeedback.Sound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(ObjectPath(
 		TEXT("/Game/AdvancedARPGCombat/MeleeCombatSystem/DemoAssets/SoundFX/A_Sword_Swing_Cue"))));
 	Config->ImpactFeedback.Sound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(ObjectPath(
@@ -2393,7 +2432,7 @@ bool Validate()
 		const FNameProperty* Field = CDO ? FindFProperty<FNameProperty>(CDO->GetClass(), TEXT("GameplayCueName")) : nullptr;
 		if (!Field || Field->GetPropertyValue_InContainer(CDO) != FName(*(FString(TEXT("GameplayCue.Combat.")) + Name))) return false;
 	}
-	// 原 HUD 和准星仍在；新增表现只是原控件树里的一个子控件，敌人血条也使用自己的 GAS 事件父类。
+	// 原 HUD 和准星仍在；玩家表现保留在原控件树，敌人不再挂头顶 UI。
 	UBlueprint* Mode = Load<UBlueprint>(TEXT("/Game/Combat/BP_CombatGameMode"));
 	UBlueprint* HUD = Load<UBlueprint>(TEXT("/Game/Combat/UI/BP_CombatHUD"));
 	const FObjectPropertyBase* HUDField = Mode && Mode->GeneratedClass ? FindFProperty<FObjectPropertyBase>(Mode->GeneratedClass, TEXT("HUDClass")) : nullptr;
@@ -2403,47 +2442,79 @@ bool Validate()
 	const UWidget* Child = Original && Original->WidgetTree ? Original->WidgetTree->FindWidget(TEXT("ARPGCombatVisuals")) : nullptr;
 	if (!Visuals || Visuals->ParentClass != UmultiplayerCombatWidget::StaticClass() || !Child || Child->GetClass() != Visuals->GeneratedClass
 		|| !Original->WidgetTree->FindWidget(TEXT("CombatCrosshair")) || Original->UbergraphPages.IsEmpty()) return false;
-	UWidgetBlueprint* EnemyWidget = Load<UWidgetBlueprint>(Folder / TEXT("UI/WBP_ARPGEnemyHealth"));
-	const auto* HealthComponent = Cast<UWidgetComponent>(Characters[1]->GetDefaultSubobjectByName(TEXT("HealthBarWidget")));
-	if (!EnemyWidget || EnemyWidget->ParentClass != UmultiplayerEnemyHealthWidget::StaticClass() || !HealthComponent
-		|| HealthComponent->GetWidgetClass().Get() != EnemyWidget->GeneratedClass.Get() || HealthComponent->GetWidgetSpace() != EWidgetSpace::World
-		|| !HealthComponent->GetManuallyRedraw() || !HealthComponent->IsA<UmultiplayerEnemyHealthWidgetComponent>()) return false;
-	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_VALIDATE actualCDOs=2 skeletons=matched montageSlots=verified nativeMotion=verified effects=verified originalHUD=preserved enemyWidget=verified visualPreview=NOT_RUN"));
+	// 同时检查命名子对象和实际组件集合，拒绝旧蓝图序列化遗留的头顶血条。
+	if (Characters[1]->GetDefaultSubobjectByName(TEXT("HealthBarWidget"))
+		|| Characters[1]->FindComponentByClass<UWidgetComponent>()) return false;
+	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_VALIDATE actualCDOs=2 skeletons=matched montageSlots=verified nativeMotion=verified effects=verified originalHUD=preserved enemyWorldUI=absent visualPreview=NOT_RUN"));
 	return true;
 }
 }
+#include "Testing/CoopResourcePresentationBuild.inl"
 #endif
 
 // 每次只执行一个显式模式；只读验证不混入重建，结束后释放全部临时强引用并返回退出码。
 int32 UCombatAssetBuildCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
-	const bool bCreate = FParse::Param(*Params, TEXT("Create"));
-	const bool bValidate = FParse::Param(*Params, TEXT("Validate"));
-	const bool bUpdateUI = FParse::Param(*Params, TEXT("UpdateUI"));
-	const bool bUpdateSkillHeadings = FParse::Param(*Params, TEXT("UpdateSkillHeadings"));
-	const bool bUpdateAnimations = FParse::Param(*Params, TEXT("UpdateAnimations"));
-	const bool bConnectARPG = FParse::Param(*Params, TEXT("ConnectARPGAnimations"));
-	const bool bConnectARPGHUD = FParse::Param(*Params, TEXT("ConnectARPGHUD"));
-	const bool bRefreshCombatFeedback = FParse::Param(*Params, TEXT("RefreshCombatFeedbackAndHUD"));
-	const bool bRepairSkillPresentation = FParse::Param(*Params, TEXT("RepairSkillPresentation"));
-	const bool bRepairCombatVfx = FParse::Param(*Params, TEXT("RepairCombatVfx"));
-	const bool bConnectARPGEnemyHealth = FParse::Param(*Params, TEXT("ConnectARPGEnemyHealth"));
-	const bool bUpdateEnemyWorldHealth = FParse::Param(*Params, TEXT("UpdateEnemyWorldHealth"));
-	const bool bConnectARPGEnemySource = FParse::Param(*Params, TEXT("ConnectARPGEnemySource"));
-	const bool bAuditARPGEnemySource = FParse::Param(*Params, TEXT("AuditARPGEnemySource"));
-	const bool bFixCombatInput = FParse::Param(*Params, TEXT("FixCombatInput"));
-	const bool bUpdateCombatAI = FParse::Param(*Params, TEXT("UpdateCombatAI"));
-	const bool bValidateCombatAI = FParse::Param(*Params, TEXT("ValidateCombatAI"));
-	if (int32(bCreate) + int32(bValidate) + int32(bUpdateUI) + int32(bUpdateSkillHeadings) + int32(bUpdateAnimations) + int32(bConnectARPG) + int32(bConnectARPGHUD) + int32(bRefreshCombatFeedback) + int32(bRepairSkillPresentation) + int32(bRepairCombatVfx) + int32(bConnectARPGEnemyHealth) + int32(bUpdateEnemyWorldHealth) + int32(bConnectARPGEnemySource) + int32(bAuditARPGEnemySource) + int32(bFixCombatInput) + int32(bUpdateCombatAI) + int32(bValidateCombatAI) != 1) return 1;
-	const bool bSuccess = bUpdateSkillHeadings ? CombatAssets::UpdateSkillHeadings() : bRepairCombatVfx ? CombatAssets::RepairCombatVfx() : bRepairSkillPresentation ? CombatAssets::RepairSkillPresentation(Params) : bUpdateCombatAI || bValidateCombatAI ? CombatAssets::UpdateCombatAI(bValidateCombatAI)
-		: bAuditARPGEnemySource ? CombatAssets::ConnectARPGEnemySource(true) : bFixCombatInput ? CombatAssets::FixCombatInput() : bConnectARPGEnemySource ? CombatAssets::ConnectARPGEnemySource() : bConnectARPG ? CombatAssets::ConnectARPGAnimations()
-		: bUpdateEnemyWorldHealth ? CombatAssets::UpdateEnemyWorldHealth() : bRefreshCombatFeedback ? CombatAssets::RefreshCombatFeedbackAndHUD() : bConnectARPGHUD ? CombatAssets::ConnectARPGHUD() : bConnectARPGEnemyHealth ? CombatAssets::ConnectARPGEnemyHealth() : bUpdateAnimations ? CombatAssets::UpdateAnimations()
-		: bUpdateUI ? CombatAssets::CreateUI(true) : bCreate ? CombatAssets::Create() : CombatAssets::Validate();
+	// 命令名、执行入口和后置迁移只定义一次，避免参数识别、派发和日志三份清单漂移。
+	struct FOperation
+	{
+		const TCHAR* Name;
+		TFunction<bool()> Run;
+		bool bFinalizeWidgets = false;
+	};
+	const FOperation Operations[] = {
+		{TEXT("Create"), [] { return CombatAssets::Create(); }, true},
+		{TEXT("Validate"), [] { return CombatAssets::Validate(); }},
+		{TEXT("UpdateUI"), [] { return CombatAssets::CreateUI(true); }, true},
+		{TEXT("UpdateResourcePresentation"), [] { return CoopResourceAssets::RunResourcePresentation(false); }},
+		{TEXT("ValidateResourcePresentation"), [] { return CoopResourceAssets::RunResourcePresentation(true); }},
+		{TEXT("UpdateWidgetPresentation"), [] { return CombatAssets::UpdateWidgetPresentation(false); }},
+		{TEXT("ValidateWidgetPresentation"), [] { return CombatAssets::UpdateWidgetPresentation(true); }},
+		{TEXT("UpdateHUDPresentation"), [] { return CombatAssets::UpdateHUDPresentation(false); }},
+		{TEXT("ValidateHUDPresentation"), [] { return CombatAssets::UpdateHUDPresentation(true); }},
+		{TEXT("RemoveFootIK"), [] { return CombatAssets::UpdateFootIK(false); }},
+		{TEXT("ValidateNoFootIK"), [] { return CombatAssets::UpdateFootIK(true); }},
+		{TEXT("UpdateProgressionUI"), [] { return CombatAssets::UpdateProgressionUI(false); }, true},
+		{TEXT("ValidateProgressionUI"), [] { return CombatAssets::UpdateProgressionUI(true); }},
+		{TEXT("UpdateSkillHeadings"), [] { return CombatAssets::UpdateSkillHeadings(); }},
+		{TEXT("UpdateAnimations"), [] { return CombatAssets::UpdateAnimations(); }},
+		{TEXT("ConnectARPGAnimations"), [] { return CombatAssets::ConnectARPGAnimations(); }},
+		{TEXT("ConnectARPGHUD"), [] { return CombatAssets::ConnectARPGHUD(); }, true},
+		{TEXT("RefreshCombatFeedbackAndHUD"), [] { return CombatAssets::RefreshCombatFeedbackAndHUD(); }, true},
+		{TEXT("RepairSkillPresentation"), [&Params] { return CombatAssets::RepairSkillPresentation(Params); }},
+		{TEXT("RepairCombatVfx"), [] { return CombatAssets::RepairCombatVfx(); }},
+		{TEXT("ConnectARPGEnemySource"), [] { return CombatAssets::ConnectARPGEnemySource(); }},
+		{TEXT("AuditARPGEnemySource"), [] { return CombatAssets::ConnectARPGEnemySource(true); }},
+		{TEXT("FixCombatInput"), [] { return CombatAssets::FixCombatInput(); }},
+		{TEXT("UpdateCombatAI"), [] { return CombatAssets::UpdateCombatAI(false); }},
+		{TEXT("ValidateCombatAI"), [] { return CombatAssets::UpdateCombatAI(true); }}
+	};
+	const FOperation* Selected = nullptr;
+	for (const FOperation& Operation : Operations)
+	{
+		if (!FParse::Param(*Params, Operation.Name)) continue;
+		if (Selected)
+		{
+			UE_LOG(LogCombatAssetBuild, Error, TEXT("Choose exactly one combat asset mode; received %s and %s"), Selected->Name, Operation.Name);
+			return 1;
+		}
+		Selected = &Operation;
+	}
+	if (!Selected)
+	{
+		UE_LOG(LogCombatAssetBuild, Error, TEXT("Choose exactly one combat asset mode"));
+		return 1;
+	}
+	bool bSuccess = Selected->Run();
+	// 旧建树命令也必须经过同一正式 WBP 接线/模板迁移出口；缺少完整正式资产时不能报告成功。
+	// 规则、控件订阅和实际 Present*Snapshot 图不另保留一套初始化实现。
+	if (bSuccess && Selected->bFinalizeWidgets)
+		bSuccess = CombatAssets::UpdateWidgetPresentation(false);
 	// 离线操作结束即释放临时强引用，不让工具对象滞留到编辑器模块销毁阶段。
 	CombatAssets::References.Reset();
 	UE_LOG(LogCombatAssetBuild, Display, TEXT("COMBAT_ASSET_BUILD mode=%s success=%d"),
-		bUpdateSkillHeadings ? TEXT("UpdateSkillHeadings") : bRepairCombatVfx ? TEXT("RepairCombatVfx") : bRepairSkillPresentation ? TEXT("RepairSkillPresentation") : bUpdateCombatAI ? TEXT("UpdateCombatAI") : bValidateCombatAI ? TEXT("ValidateCombatAI") : bAuditARPGEnemySource ? TEXT("AuditARPGEnemySource") : bFixCombatInput ? TEXT("FixCombatInput") : bConnectARPGEnemySource ? TEXT("ConnectARPGEnemySource") : bConnectARPG ? TEXT("ConnectARPGAnimations") : bUpdateEnemyWorldHealth ? TEXT("UpdateEnemyWorldHealth") : bRefreshCombatFeedback ? TEXT("RefreshCombatFeedbackAndHUD") : bConnectARPGHUD ? TEXT("ConnectARPGHUD") : bConnectARPGEnemyHealth ? TEXT("ConnectARPGEnemyHealth") : bUpdateAnimations ? TEXT("UpdateAnimations") : bUpdateUI ? TEXT("UpdateUI") : bCreate ? TEXT("Create") : TEXT("Validate"), bSuccess);
+		Selected->Name, bSuccess);
 	return bSuccess ? 0 : 1;
 #else
 	return 1;

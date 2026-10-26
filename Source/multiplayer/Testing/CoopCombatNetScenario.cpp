@@ -33,6 +33,7 @@
 #include "NiagaraSystem.h"
 #include "Particles/ParticleSystem.h"
 #include "Particles/ParticleSystemComponent.h"
+#include "PhysicsEngine/BodyInstance.h"
 #include "UObject/UObjectIterator.h"
 
 // 基础战斗三进程夹具：覆盖权威命中、所属预测与拒绝、旁观状态和实际预览/特效接线。
@@ -209,25 +210,81 @@ namespace
 		Character->ForceNetUpdate();
 	}
 
-	// 高空数值夹具也要有真实地面；两端必须查询同一复制碰撞，不再把悬空落点当可释放目标。
-	bool AddCombatTargetingGround(UWorld* World, const AmultiplayerCombatCharacter* Character)
+	// 数值与视觉夹具共用唯一地面；只切换可见性，两端仍查询同一复制碰撞。
+	AStaticMeshActor* AddCombatTargetingGround(UWorld* World, const AmultiplayerCombatCharacter* Character, bool bVisible)
 	{
 		const float Feet = Character->GetActorLocation().Z - Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 		auto* Ground = World->SpawnActor<AStaticMeshActor>(FVector(0, 0, Feet - 10.f), FRotator::ZeroRotator);
 		auto* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
-		if (!Ground || !Cube) return false;
+		if (!Ground || !Cube) return nullptr;
 		auto* Mesh = Ground->GetStaticMeshComponent();
 		Mesh->SetMobility(EComponentMobility::Movable);
-		Mesh->SetStaticMesh(Cube);
+		const bool bCompilingBeforeMesh = Cube->IsCompiling();
+		const bool bMeshChanged = Mesh->SetStaticMesh(Cube);
 		Mesh->SetCollisionProfileName(TEXT("BlockAll"));
 		Mesh->SetCanEverAffectNavigation(false);
 		Ground->SetActorScale3D(FVector(100, 100, .2f));
-		Ground->SetActorHiddenInGame(true);
+		Ground->SetActorHiddenInGame(!bVisible);
 		Ground->SetReplicates(true);
 		Ground->SetReplicateMovement(true);
 		Mesh->SetIsReplicated(true);
 		Ground->ForceNetUpdate();
-		return true;
+		UE_LOG(LogTemp, Display, TEXT("COOP_COMBAT_GROUND_CREATE meshChanged%d compilingBefore%d compilingAfter%d registered%d physics%d object%d visibility%d profile=%s"),
+			bMeshChanged, bCompilingBeforeMesh, Cube->IsCompiling(), Mesh->IsRegistered(), Mesh->IsPhysicsStateCreated(),
+			int32(Mesh->GetCollisionObjectType()), int32(Mesh->GetCollisionResponseToChannel(ECC_Visibility)), *Mesh->GetCollisionProfileName().ToString());
+		return Ground;
+	}
+
+	// 组件注册不代表查询形体已存在；编辑器异步完成 Cube 编译后才会重建真实物理状态。
+	// 使用与生产落点相同的场景响应和下投距离，只检查夹具输入就绪，不轮询预览算法是否通过。
+	bool CombatTargetingGroundReady(const AmultiplayerCombatCharacter* Character,
+		const AmultiplayerCombatCharacter* Enemy, FString& Details)
+	{
+		UWorld* World = Character->GetWorld();
+		const float Feet = Character->GetActorLocation().Z - Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		AStaticMeshActor* Ground = nullptr;
+		UStaticMeshComponent* Mesh = nullptr;
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+			if (It->GetActorLocation().Equals(FVector(0, 0, Feet - 10.f), .1f)
+				&& It->GetActorScale3D().Equals(FVector(100, 100, .2f), .001f))
+			{
+				Ground = *It;
+				Mesh = It->GetStaticMeshComponent();
+				break;
+			}
+		const FVector Direction = Enemy ? (Enemy->GetActorLocation() - Character->GetActorLocation()).GetSafeNormal2D()
+			: Character->GetActorForwardVector().GetSafeNormal2D();
+		const FVector Point = Character->GetActorLocation() + Direction * Character->GetSkillRule(EMultiplayerCombatSkill::Area).Range;
+		const FVector Start = Point + FVector(0, 0, 150), End = Point - FVector(0, 0, 1000);
+		const UStaticMesh* Cube = Mesh ? Mesh->GetStaticMesh() : nullptr;
+		// Do not call GetBodySetup for diagnostics: it can finish compilation synchronously and hide this race.
+		const bool bCompiling = Cube && Cube->IsCompiling();
+		const FBodyInstance* Body = Mesh ? Mesh->GetBodyInstance() : nullptr;
+		const bool bBody = Body && Body->IsValidBodyInstance();
+		FCollisionResponseParams Scene(ECR_Ignore);
+		Scene.CollisionResponse.SetResponse(ECC_WorldStatic, ECR_Block);
+		Scene.CollisionResponse.SetResponse(ECC_WorldDynamic, ECR_Block);
+		const FCollisionQueryParams Query(SCENE_QUERY_STAT(CombatFixtureGround), false, Character);
+		FHitResult SceneHit, DefaultHit;
+		const bool bSceneHit = World->LineTraceSingleByChannel(SceneHit, Start, End, ECC_Visibility, Query, Scene);
+		const bool bDefaultHit = World->LineTraceSingleByChannel(DefaultHit, Start, End, ECC_Visibility, Query);
+		const bool bSceneObject = Mesh && (Mesh->GetCollisionObjectType() == ECC_WorldStatic || Mesh->GetCollisionObjectType() == ECC_WorldDynamic);
+		const float WalkableZ = Character->GetCharacterMovement()->GetWalkableFloorZ();
+		const bool bReady = Ground && Ground->HasActorBegunPlay() && Ground->GetActorEnableCollision()
+			&& Mesh && Cube && !bCompiling && Mesh->IsRegistered() && Mesh->IsPhysicsStateCreated() && bBody
+			&& Mesh->IsQueryCollisionEnabled() && bSceneObject && Mesh->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block
+			&& bSceneHit && SceneHit.GetComponent() == Mesh && SceneHit.ImpactNormal.Z >= WalkableZ;
+		Details = FString::Printf(TEXT("Ground[actor=%s mesh=%s begun%d actorCollision%d registered%d physics%d body%d compiling%d query%d enabled%d object%d visibility%d profile=%s boundsOrigin=%s boundsExtent=%s] FloorTrace[start=%s end=%s sceneHit%d actor=%s component=%s point=%s normal=%s walkableZ=%.3f defaultHit%d actor=%s component=%s point=%s]"),
+			*GetNameSafe(Ground), *GetNameSafe(Cube), Ground && Ground->HasActorBegunPlay(), Ground && Ground->GetActorEnableCollision(),
+			Mesh && Mesh->IsRegistered(), Mesh && Mesh->IsPhysicsStateCreated(), bBody, bCompiling, Mesh && Mesh->IsQueryCollisionEnabled(),
+			Mesh ? int32(Mesh->GetCollisionEnabled()) : -1, Mesh ? int32(Mesh->GetCollisionObjectType()) : -1,
+			Mesh ? int32(Mesh->GetCollisionResponseToChannel(ECC_Visibility)) : -1,
+			Mesh ? *Mesh->GetCollisionProfileName().ToString() : TEXT("missing"),
+			Mesh ? *Mesh->Bounds.Origin.ToCompactString() : TEXT("missing"), Mesh ? *Mesh->Bounds.BoxExtent.ToCompactString() : TEXT("missing"),
+			*Start.ToCompactString(), *End.ToCompactString(), bSceneHit, *GetNameSafe(SceneHit.GetActor()), *GetNameSafe(SceneHit.GetComponent()),
+			*SceneHit.ImpactPoint.ToCompactString(), *SceneHit.ImpactNormal.ToCompactString(), WalkableZ,
+			bDefaultHit, *GetNameSafe(DefaultHit.GetActor()), *GetNameSafe(DefaultHit.GetComponent()), *DefaultHit.ImpactPoint.ToCompactString());
+		return bReady;
 	}
 
 	// 只读核对正式查询返回的枪口、弹体半径、R 半径/目标和防御方向，避免提示与结算几何脱节。
@@ -284,22 +341,15 @@ namespace
 		const bool bTeams = Local->GetCombatTeam() == EMultiplayerCombatTeam::Players && Other
 			&& Other->GetCombatTeam() == EMultiplayerCombatTeam::Players && Enemy && Enemy->GetCombatTeam() == EMultiplayerCombatTeam::Enemies;
 		const bool bLocalCapsule = CapsuleReady(Local), bOtherCapsule = CapsuleReady(Other), bEnemyCapsule = CapsuleReady(Enemy);
-		const float Feet = 4000.f - Local->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-		bool bGround = false;
-		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
-		{
-			const auto* Mesh = It->GetStaticMeshComponent();
-			if (It->GetActorLocation().Equals(FVector(0, 0, Feet - 10.f), .1f)
-				&& It->GetActorScale3D().Equals(FVector(100, 100, .2f), .001f)
-				&& It->HasActorBegunPlay() && Mesh && Mesh->GetStaticMesh() && Mesh->IsRegistered()
-				&& Mesh->IsPhysicsStateCreated() && Mesh->IsQueryCollisionEnabled()) { bGround = true; break; }
-		}
+		FString GroundDetails;
+		const bool bGround = CombatTargetingGroundReady(Local, Enemy, GroundDetails);
 		Details = FString::Printf(TEXT("FixtureInputs[localBegun%d otherBegun%d enemyBegun%d transforms=%d/%d/%d teams%d capsules=%d/%d/%d ground%d] local=%s@%s(team%d collision%d object%d) other=%s@%s enemy=%s@%s(team%d collision%d object%d)"),
 			Local->HasActorBegunPlay(), Other && Other->HasActorBegunPlay(), Enemy && Enemy->HasActorBegunPlay(),
 			bLocalTransform, bOtherTransform, bEnemyTransform, bTeams, bLocalCapsule, bOtherCapsule, bEnemyCapsule, bGround,
 			*Local->GetName(), *Local->GetActorLocation().ToCompactString(), int32(Local->GetCombatTeam()), int32(Local->GetCapsuleComponent()->GetCollisionEnabled()), int32(Local->GetCapsuleComponent()->GetCollisionObjectType()),
 			*GetNameSafe(Other), Other ? *Other->GetActorLocation().ToCompactString() : TEXT("missing"), *GetNameSafe(Enemy), Enemy ? *Enemy->GetActorLocation().ToCompactString() : TEXT("missing"),
 			Enemy ? int32(Enemy->GetCombatTeam()) : -1, Enemy ? int32(Enemy->GetCapsuleComponent()->GetCollisionEnabled()) : -1, Enemy ? int32(Enemy->GetCapsuleComponent()->GetCollisionObjectType()) : -1);
+		Details += TEXT("; ") + GroundDetails;
 		for (const auto* Character : { Local, Other, Enemy })
 			if (Character)
 			{
@@ -569,10 +619,17 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		CombatPartner->GetCharacterMovement()->DisableMovement();
 		CombatPrimary->SetActorLocation(FVector(0, 0, 4000));
 		CombatPartner->SetActorLocation(FVector(100, 300, 4000));
-		Assert(TEXT("ServerCombatTargetingFloor"), AddCombatTargetingGround(World, CombatPrimary.Get()),
+		auto* Ground = AddCombatTargetingGround(World, CombatPrimary.Get(), bVisualAcceptance);
+		Assert(TEXT("ServerCombatTargetingFloor"), Ground != nullptr,
 			TEXT("Real replicated collision ground supports identical client previews and authority ground targeting"));
 		if (bDone) return;
-		if (!PrepareVisualFixtureSurface(World,CombatPrimary.Get())) return;
+		if (bVisualAcceptance)
+		{
+			const auto* Mesh = Ground->GetStaticMeshComponent();
+			Assert(TEXT("ServerVisualSurface"), !Ground->IsHidden() && Mesh->IsVisible() && !Mesh->CanEverAffectNavigation(),
+				TEXT("The same replicated targeting ground is visible at capsule feet without affecting navigation; no overlapping visual ground is created"));
+			if (bDone) return;
+		}
 		PrimaryPC->SetControlRotation(FRotator::ZeroRotator);
 		PartnerPC->SetControlRotation(FRotator::ZeroRotator);
 
@@ -601,6 +658,28 @@ void UCoopNetTestDriver::CombatServerTick(UWorld* World)
 		PartnerProbe->Subject = CombatEnemy.Get();
 		Probe->CombatTarget = CombatEnemy.Get();
 		PartnerProbe->CombatTarget = CombatEnemy.Get();
+		FString GroundDetails;
+		const bool bGroundReady = CombatTargetingGroundReady(CombatPrimary.Get(), CombatEnemy.Get(), GroundDetails);
+		Emit(TEXT("FIXTURE_GROUND_CREATED"), FString::Printf(TEXT("immediateReady%d; "), bGroundReady) + GroundDetails);
+		SetPhase(TEXT("CombatFixtureGround"));
+		return;
+	}
+	if (Phase == TEXT("CombatFixtureGround"))
+	{
+		FString GroundDetails;
+		const bool bGroundReady = CombatTargetingGroundReady(CombatPrimary.Get(), CombatEnemy.Get(), GroundDetails);
+		if (!bGroundReady)
+		{
+			if (!SentReceipts.Contains(TEXT("ServerFixtureGroundPending")))
+			{
+				Emit(TEXT("FIXTURE_GROUND_PENDING"), GroundDetails);
+				SentReceipts.Add(TEXT("ServerFixtureGroundPending"));
+			}
+			if (FPlatformTime::Seconds() - PhaseAt > 10.f)
+				Assert(TEXT("ServerCombatTargetingGroundReady"), false, TEXT("Fixture ground did not become traceable within 10 seconds; ") + GroundDetails);
+			return;
+		}
+		Assert(TEXT("ServerCombatTargetingGroundReady"), true, GroundDetails);
 		FString AuthorityPreviewDetails;
 		const bool bAuthorityPreview = CombatPreviewsMatchGeometry(CombatPrimary.Get(), CombatEnemy.Get(), &AuthorityPreviewDetails);
 		Assert(TEXT("ServerCombatTargetPreview"), bAuthorityPreview, AuthorityPreviewDetails);

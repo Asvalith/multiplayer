@@ -50,7 +50,7 @@ public:
 private:
 	// 根据当前激活状态选择目标；端点由平台 BeginPlay 在开始移动前缓存为固定世界坐标。
 	FVector GetTargetLocation() const { return bTransportActive ? ActiveLocation : StartLocation; }
-	// 仅清除运动标记并关闭 Tick；移动与最终位置对齐由调用方负责。
+	// 关闭运动 Tick 并清零基座速度；移动与最终位置对齐由调用方负责。
 	void FinishMovement();
 
 	// 配置端点时从 JSON 缓存速度，Tick 不查文件；客户端仍只接收所属 Actor 的位置。
@@ -63,7 +63,6 @@ private:
 
 	FVector StartLocation = FVector::ZeroVector;
 	FVector ActiveLocation = FVector::ZeroVector;
-	// 前者选择期望端点，后者记录运动 Tick 是否进行中；二者都只是服务器运行期状态。
+	// 仅选择期望端点；是否正在运动直接读取组件 Tick 状态，不再维护重复标记。
 	bool bTransportActive = false;
-	bool bMoving = false;
 };

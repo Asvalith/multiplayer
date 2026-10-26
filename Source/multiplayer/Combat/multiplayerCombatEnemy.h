@@ -15,7 +15,6 @@
 
 class UStaticMeshComponent;
 class UBehaviorTree;
-class UmultiplayerEnemyHealthWidgetComponent;
 class AmultiplayerGameMode;
 class UAISenseConfig_Sight;
 
@@ -38,7 +37,7 @@ class MULTIPLAYER_API AmultiplayerCombatEnemy : public AmultiplayerCombatCharact
 	GENERATED_BODY()
 
 public:
-	// 配置敌方 ASC、服务器 AI、移动和本地世界血条组件。
+	// 配置敌方 ASC、服务器 AI、移动与武器外观，不创建头顶 UI。
 	AmultiplayerCombatEnemy();
 	// 范围配置由 Service 和攻击任务读取，运行中的目标只保存在黑板。
 	float GetDetectionRadius() const { return DetectionRadius; }
@@ -60,8 +59,6 @@ public:
 protected:
 	// GAS 初始化完成后通知控制器启动行为树；客户端只显示复制的移动和战斗状态。
 	virtual void BeginPlay() override;
-	// 退出前解除头顶血条与角色的订阅，不影响服务器行为树的原有清理。
-	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	// 基类完成死亡结算后，立即停止追击并延迟清理尸体。
 	virtual void HandleDeath() override;
 
@@ -83,11 +80,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|Presentation")
 	TObjectPtr<UStaticMeshComponent> EnemyWeapon;
 
-private:
-	UPROPERTY(VisibleAnywhere, Category = "Combat|AI")
-	TObjectPtr<UStaticMeshComponent> EnemyVisual;
-	UPROPERTY(VisibleAnywhere, Category = "Combat|UI")
-	TObjectPtr<UmultiplayerEnemyHealthWidgetComponent> HealthBarWidget;
 };
 
 /** 服务器控制器负责行为树生命周期；GAS 状态决定是否允许决策，移动仍交给 CMC。 */

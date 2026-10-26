@@ -11,7 +11,6 @@
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 #include "Mechanisms/multiplayerPressurePlate.h"
 #include "Mechanisms/multiplayerTransporterComponent.h"
-#include "UObject/ConstructorHelpers.h"
 
 /*
  * 平台 Actor 负责组件装配与激活来源选择，Transporter 负责移动，Occupancy 负责人数。
@@ -34,7 +33,6 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	PlatformMesh->SetMobility(EComponentMobility::Movable);
 	PlatformMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	PlatformMesh->SetGenerateOverlapEvents(false);
-	PlatformMesh->SetRelativeScale3D(FVector(2.5f, 2.5f, 0.25f));
 	// 仅查询 Pawn 重叠，是否满足人数条件交给 PlayerOccupancy。
 	ActivationVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("ActivationVolume"));
 	ActivationVolume->SetupAttachment(PlatformMesh);
@@ -64,13 +62,8 @@ AmultiplayerMovingPlatform::AmultiplayerMovingPlatform()
 	TargetPoint->bEditableWhenInherited = true;
 	TargetPoint->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
 	TargetPoint->ArrowColor = FColor::Green;
-	// 引擎立方体只作默认外观，关卡蓝图可替换网格。
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(
-		TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (CubeMesh.Succeeded())
-	{
-		PlatformMesh->SetStaticMesh(CubeMesh.Object);
-	}
+	// 平台的可见网格与展示变换由正式蓝图提供。
+	// 正式机关蓝图持有网格与展示变换，碰撞策略和过渡继续由原组件执行。
 }
 
 // 客户端接收服务器速度后回填非物理根组件，供 CMC 离开基座时继承。

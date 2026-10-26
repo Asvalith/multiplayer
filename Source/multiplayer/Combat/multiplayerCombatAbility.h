@@ -1,7 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// 声明技能公共约束、具体能力及同语义默认效果；输入和 HUD 不在此处执行玩法。
-// ASC 扩展见 multiplayerCombatAbilitySystem.h；本文件不再聚合 ASC 类声明。
+// 公共准入／提交、攻击与支援技能阶段，以及配套原生 GE；输入和 HUD 不在此处执行玩法。
+// 冲刺阶段在 CombatMobility，ASC 的标签关系和动画认领在 CombatAbilitySystem。
 
 #pragma once
 
@@ -13,6 +13,50 @@
 
 class AmultiplayerCombatCharacter;
 class UAbilitySystemComponent;
+
+// 复用 GAS 句柄/预测键与能力已有激活轮次；没有另外生成一套施法编号。
+// AuthorityRevision 是服务器该能力实例的轮次，客户端预测阶段为 0；预测键仅用于两者关联。
+USTRUCT()
+struct MULTIPLAYER_API FmultiplayerCombatActivationIdentity
+{
+	GENERATED_BODY()
+	UPROPERTY() FGameplayAbilitySpecHandle SpecHandle;
+	UPROPERTY() uint32 AuthorityRevision = 0;
+	UPROPERTY() int16 PredictionKey = 0;
+	UPROPERTY() bool bServerInitiated = false;
+
+	// 有效的授予句柄加权威轮次，或拥有者正在预测的非零键。
+	bool IsValid() const;
+	// 两边都有权威轮次时精确匹配；预测端只通过原有键接到对应权威结果。
+	bool Matches(const FmultiplayerCombatActivationIdentity& Other) const;
+	// 容器/快照的相等关系必须是完整字段比较，不能把上述部分关联当作等价关系。
+	bool operator==(const FmultiplayerCombatActivationIdentity& Other) const;
+	// 只序列化关联值，不调用会向旁观端筛除拥有者预测键的 FPredictionKey::NetSerialize。
+	bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess);
+};
+
+template<> struct TStructOpsTypeTraits<FmultiplayerCombatActivationIdentity> : TStructOpsTypeTraitsBase2<FmultiplayerCombatActivationIdentity>
+{
+	enum { WithNetSerializer = true, WithCopy = true };
+};
+
+// 结果与施法 Cue 显式携带同一激活身份；普通 GE 仍沿用原生 Context，不改全局分配器。
+USTRUCT()
+struct MULTIPLAYER_API FmultiplayerCombatCueContext : public FGameplayEffectContext
+{
+	GENERATED_BODY()
+	UPROPERTY() FmultiplayerCombatActivationIdentity ActivationIdentity;
+	virtual UScriptStruct* GetScriptStruct() const override;
+	virtual FmultiplayerCombatCueContext* Duplicate() const override;
+	virtual bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess) override;
+	// 只读本项目派生上下文；旧素材/原生 Cue 不做不安全的强制转换。
+	static const FmultiplayerCombatCueContext* Get(const FGameplayEffectContextHandle& Context);
+};
+
+template<> struct TStructOpsTypeTraits<FmultiplayerCombatCueContext> : TStructOpsTypeTraitsBase2<FmultiplayerCombatCueContext>
+{
+	enum { WithNetSerializer = true, WithCopy = true };
+};
 
 // 五个战斗技能共用 GAS 本地预测、连接接纳与死亡限制；最终玩法结果仍由服务器决定。
 // 静态冲突关系在 CombatConfig，GAS 继续管理每次激活的真实生命周期。
@@ -26,6 +70,10 @@ public:
 	UmultiplayerCombatAbility();
 	// 返回固定技能分类，供配置查询及失败反馈识别能力，不表示当前激活阶段。
 	EMultiplayerCombatSkill GetCombatSkill() const { return Skill; }
+	// 动画、Cue 和取消共用已有激活身份；它不创建预测窗口，也不生成新的编号。
+	FmultiplayerCombatActivationIdentity GetActivationIdentity() const;
+	// 本端已有轮次仅用于关联接替；不把客户端轮次假定为服务器轮次。
+	uint32 GetLocalActivationRevision() const { return ActivationRevision; }
 	// 先查连接与角色业务资格，再交 GAS 检查标签、成本和冷却；查询不修改状态。
 	virtual bool CanActivateAbility(const FGameplayAbilitySpecHandle Handle,
 		const FGameplayAbilityActorInfo* ActorInfo, const FGameplayTagContainer* SourceTags = nullptr,
@@ -67,8 +115,8 @@ private:
 		FGameplayAbilityActivationInfo ActivationInfo, const FmultiplayerCombatSkillRule& Rule) const;
 };
 
-// 攻击：伤害效果、冷却和技能放在一起。
-// 以下效果提供可运行的默认规则，蓝图派生类可调整数值和持续时间。
+// GE 定义结算方式与标签，运行数值由 CombatConfig／成长规则填入 Spec。
+// Blueprintable 允许派生 GE；创建派生资产不会替换下方能力显式使用的原生效果类。
 UCLASS(Blueprintable)
 class MULTIPLAYER_API UmultiplayerDamageEffect : public UGameplayEffect
 {
@@ -208,7 +256,7 @@ class MULTIPLAYER_API UmultiplayerParryEffect : public UGameplayEffect
 public: UmultiplayerParryEffect();
 };
 
-// 防御：由限时 GameplayEffect 授予正面格挡状态，重复施放不会叠加。
+// 防御：限时 GE 授予正面格挡；正常准入阻止重复施放，GE 独立于瞬时能力存活。
 // 客户端先预测消耗、冷却和自身防御；服务器拒绝时由同一个预测键撤销这些效果。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerDefendAbility : public UmultiplayerCombatAbility
@@ -246,7 +294,8 @@ public:
 	UmultiplayerHealCooldownEffect();
 };
 
-// 治疗：选择附近同阵营最低血量比例的存活角色；没有合法目标时不扣资源。
+// 治疗：选择附近同阵营最低血量比例的存活角色；提交前无目标不扣费。
+// 扣费通知后会重新选取目标；此时目标消失属于已提交施法，不返还成本／冷却。
 UCLASS()
 class MULTIPLAYER_API UmultiplayerHealAbility : public UmultiplayerCombatAbility
 {
@@ -302,7 +351,9 @@ public:
 	// 声明范围技能分类和可由拥有者主动取消的生命周期规则。
 	UmultiplayerAreaAbility();
 	// 范围结算归属于该技能；服务器在出手时验证目标，角色不再代管技能专属执行。
-	static void ResolveTargets(AmultiplayerCombatCharacter& Character, const FVector& Center);
+	// 无身份的默认入口只供独立结算调用，不创建假关联的结果特效。
+	static void ResolveTargets(AmultiplayerCombatCharacter& Character, const FVector& Center,
+		const FmultiplayerCombatActivationIdentity& Identity = FmultiplayerCombatActivationIdentity());
 protected:
 	// 验证并锁定落点，提交后挂施法锁与起手任务；取消不退还已提交成本／冷却。
 	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,

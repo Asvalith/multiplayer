@@ -22,7 +22,7 @@ class MULTIPLAYER_API AmultiplayerCombatEncounter : public AActor
 {
 	GENERATED_BODY()
 public:
-	// 配置无 Tick 的关卡编排器和默认敌人蓝图，不在构造中生成敌人。
+	// 创建无 Tick 的关卡编排器；敌人类型由正式蓝图配置，不在构造中生成敌人。
 	AmultiplayerCombatEncounter();
 	// 返回已启动的波次序号；客户端界面应读取 GameState 的复制快照。
 	int32 GetCurrentWave() const { return CurrentWave; }
@@ -80,7 +80,7 @@ class MULTIPLAYER_API AmultiplayerCombatSupply : public AActor
 {
 	GENERATED_BODY()
 public:
-	// 创建触发球和静态表现，文字组件保留但默认隐藏。
+	// 创建触发球和空的表现组件；文字、网格和可见性由正式补给蓝图配置。
 	AmultiplayerCombatSupply();
 	// 复制是否消费，不复制可由客户端重复提交的奖励请求。
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;

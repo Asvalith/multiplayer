@@ -6,7 +6,8 @@
 #include "GameplayEffectTypes.h"
 #include "Combat/multiplayerCombatProgression.h"
 
-// 服务器同局短时恢复的数据合同，不拥有角色，不复制到客户端，也不是通用存档或序列化协议。
+// [职责] GameMode 持有的同局个人恢复数据，断线后恢复期限为 120 秒，由服务器 Character 捕获和还原。
+// [边界] 不拥有角色、不复制给客户端，也不是长期存档、通用回滚或序列化协议。
 /** 白名单持续效果的服务器快照；Spec 保留原来源，周期额外保存距下一跳的真实时间。 */
 struct FmultiplayerCombatResumeEffect
 {
@@ -32,7 +33,8 @@ struct FmultiplayerCombatResumeState
 	bool bDowned = false;
 	float DownedRemaining = 0.f;
 	FmultiplayerCombatProgressionState Progression;
-	// 只保存灼烧与定身，不恢复正在执行的能力、施法锁或任意第三方效果。
+	// 只为灼烧与定身保留原 Spec；其他支持状态由上方标量重建，离线时间继续扣除。
+	// 不保存能力任务、施法锁、位移源、救援占用或半次出手；接纳后从稳定状态继续。
 	TArray<FmultiplayerCombatResumeEffect> PersistentEffects;
 	bool bDead = false;
 	FVector Location = FVector::ZeroVector;

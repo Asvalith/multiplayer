@@ -15,6 +15,7 @@ struct FmultiplayerCombatTargetPreview
 	FVector End = FVector::ZeroVector;
 	FVector Normal = FVector::UpVector;
 	float Radius = 0.f;
+	// 当前几何／目标是否合法；成本、冷却和施法者状态仍须通过能力准入，不保证未来命中。
 	bool bValid = false;
 	TWeakObjectPtr<AmultiplayerCombatCharacter> Target;
 	TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> AffectedTargets;
@@ -34,7 +35,7 @@ namespace CombatTargeting
 	// 检查范围圆柱中的合法敌对目标及中心到目标的视线。
 	bool CanAffectArea(const AmultiplayerCombatCharacter& Source, const AmultiplayerCombatCharacter& Target,
 		const FVector& Center, float Radius);
-	// 宽阶段只收集去重的候选，不做遮挡射线；结算必须在每个目标应用前调用 CanAffectArea。
+	// 宽阶段只收集去重候选，不做遮挡射线；每个候选开始结算前仍须调用 CanAffectArea。
 	TArray<TWeakObjectPtr<AmultiplayerCombatCharacter>> CollectAreaCandidates(
 		const AmultiplayerCombatCharacter& Source, const FVector& Center, float Radius);
 	// 预览需要当前完整命中集合，因此在候选上执行一次范围、阵营与遮挡过滤。

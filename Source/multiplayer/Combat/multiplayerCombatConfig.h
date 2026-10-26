@@ -14,6 +14,7 @@ class UNiagaraSystem;
 class UMaterialInterface;
 class UParticleSystem;
 class USoundBase;
+class AmultiplayerCombatProjectile;
 
 UENUM(BlueprintType)
 enum class EMultiplayerCombatSkill : uint8 { Attack, Defend, Heal, Area, Dash };
@@ -39,7 +40,11 @@ struct FmultiplayerCombatSkillRule
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.05")) float Recovery = .4f;
 };
 
-// 只关联可选特效与声音资源；何时播放由 Cue／表现模块决定，不在配置中产生伤害。
+// 素材的锚点由资产选择；Cue 只将已确认的位置/方向转换为本地表现，不决定命中。
+UENUM(BlueprintType)
+enum class EMultiplayerFeedbackAnchor : uint8 { Actor, Feet, CueLocation, Muzzle };
+
+// 配置音画资源及素材校准；异步加载、跟随和清理由同一个 Cue 生命周期持有。
 USTRUCT(BlueprintType)
 struct FmultiplayerCombatFeedback
 {
@@ -48,6 +53,19 @@ struct FmultiplayerCombatFeedback
 	// 素材包的 Cascade 与原 Niagara 二选一；配置 Cascade 时优先使用，避免重复播放。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UParticleSystem> CascadeEffect;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<USoundBase> Sound;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) EMultiplayerFeedbackAnchor Anchor = EMultiplayerFeedbackAnchor::Actor;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FVector LocalOffset = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FRotator RotationOffset = FRotator::ZeroRotator;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FVector Scale = FVector::OneVector;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bAttachToTarget = false;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName DurationParameter = TEXT("User.Duration");
+	// 空名表示此素材没有按范围缩放参数；真实命中半径仍读取技能规则。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName AreaScaleParameter = NAME_None;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.01")) float Duration = .3f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.01")) float LoopDuration = 120.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.01")) float NiagaraCleanupDelay = 2.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.01")) float CascadeCleanupDelay = 5.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText SuccessfulCasterMessage;
 };
 
 // 借鉴 Lyra 的关系映射：静态资格、阻断和替换集中配置，任务与效果仍由各能力自己收尾。
@@ -102,9 +120,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "10")) float AreaEffectReferenceRadius = 400.f;
 	// 地面圈只标示同一个技能落点和半径，不用追踪型粒子代替范围边界。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UMaterialInterface> AreaMarkerMaterial;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="1")) float AreaMarkerDepth = 32.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100")) float ProjectileSpeed = 1600;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UNiagaraSystem> ProjectileEffect;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UParticleSystem> ProjectileCascadeEffect;
+	// 正式 DA 指定表现蓝图类；碰撞、弹反和分段轨迹仍继承同一个原生实现。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSubclassOf<AmultiplayerCombatProjectile> ProjectileClass;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FTransform ProjectileEffectTransform = FTransform::Identity;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName ProjectileDurationParameter = TEXT("User.Duration");
 	// 新规则可按角色配置启用，默认保留原关卡的技能数值；剩余盾和效果时长不写回配置。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float DefenseShieldAmount = 0;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0")) float BurningDamagePerTick = 0;

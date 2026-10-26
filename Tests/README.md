@@ -1,6 +1,84 @@
 # 网络实验与战斗回归
 
-## 当前验收入口（2026-10-24）
+最新专项见[复用激活身份与重复机制复查](#activation-identity-20261026)：184 项自动化通过；带渲染的双客户端 Normal 通过 148 项门禁，Harsh 因拥有者未收到 R 结果 Cue 路由而失败。旧消息隔离另有确定性重放证据，不把它写成真实 UDP 乱序已发生。此前重连／连接计时报告见[最终整理与连接计时](#final-boundary-adaptive-20261026)。以下保留各阶段构建与失败记录，旧的测试数量和构建不代表当前验收结果。
+
+## 阶段记录：架构边界与代码收口（2026-10-25）
+
+本轮保留已有未提交的蓝图/资源迁移，不改反射类名、资产父类或玩法数值，不新增 Manager 或另起一套战斗框架。阅读入口统一到 [ARCHITECTURE](../Docs/ARCHITECTURE.md)：先区分状态所有者，再沿技能、连接恢复、机关三条链路阅读。关键源码按 `[职责]`、`[亮点]`、`[边界]` 补充取舍说明；Presentation 保留同一表现域，按 Cue/HUD/成长/世界血条/Canvas/动画分段。
+
+实际修复：
+
+- 普攻和范围技能的完整 EndAbility 在 GAS 作用域锁内先排队，避免原生结束被延后时先停动画、提前移除施法 GE。新增真实能力/原生锁的回归。
+- 演示模式统一在初始化、保存和加载边界识别，拒绝读写正式成长档；回归比较完整状态和唯一测试 GUID 存档的原始字节。
+- Shipping 模块不再注册网络实验退出钩子。Commandlet 的模式识别/执行共用派发表，审计与写入混用在加载地图前拒绝；生成 inl 显式限制编辑器编译。
+- 五个正式 WBP 的生成/验证共用图范围规则；额外函数、宏、委托、绑定、变量写入与表现图外调用均拒绝，保留未接线默认事件。负测只在内存挂临时图，结束还原，不保存 Content。
+- 旧 Python 资源审计改为区分玩家/小兵配置和 Montage，并按运行时 Cascade 优先规则核对依赖；旧 HUD 更新包装器备份/允许写入名单同步到实际六个控件包，不再错误声称只写旧技能布局一个包。本轮没有执行这些写入迁移入口。
+
+最终证据根目录为 `Saved/ArchitectureFinal_20261025/`：
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Editor 非 Unity 编译 | `BuildEditor_R3.log` 成功；R1 暴露测试依赖隐式 ASC 头，补显式 include 后 R2/R3 通过 |
+| Shipping 非 Unity 编译 | `BuildShipping_R2.log` 成功；不是新发布包运行验收 |
+| 全量自动化 | `Automation_R2/index.json`：179 clean，0 warned/failed/notRun/inProcess；DX12 离屏；R1 同为179 clean |
+| 实际蓝图/数据冷检 | `BoundaryAudit_R5.json`：使用本项目迁移前基线，五 WBP、共享 HUD、8 BP/3 DA/2地图及正式角色/动画/效果通过；`Contracts_R5.json`：47 资产、0错误/警告；129个受保护 Content 文件哈希未变；R4 使用原本机基线同样通过 |
+| 脚本契约与语法 | 网络 runner `-SelfTest` 通过（不启动 UE，不是网络验证）；两份修改的 Python 包装器语法检查通过 |
+
+以下四组均为最终磁盘 Editor 模块 `f5ed5e7ef62091bd18fc8c555137ea48cb6ac11979ecb1f2df028eb9bc092340`、本机 Editor DS + 双客户端、CombatTest、NullRHI，每档一轮：
+
+| 场景 / 报告 | Normal | Harsh | 每档必需门禁 |
+| --- | --- | --- | ---: |
+| `Network_Combat_R2/report.json` | 通过 | 通过 | 228 |
+| `Network_Lifecycle_R1/report.json` | 通过 | 通过 | 93 |
+| `Network_Expansion_R3/report.json` | 通过 | 通过 | 79 |
+| `Network_Reconnect_R1/report.json` | 通过 | 通过 | 66 |
+
+8/8 轮完整通过，24个 peer 全部正常退出0，无 runner 强停、无 errors；另有单 Normal `Network_Combat_Diagnostic_R1` 完整通过。Normal 三端参数为0/0/0，Harsh为 PktLag200/Variance50/Loss5，不是实测 RTT。四组记录的313项输入清单与模块在测试结束时一致；随后只更新文档并归档语义相同的迁移前基线，不把原清单扩写成整个仓库的全量证明。报告的 `loadedByRuntimeVerified=false` 保持原义，未独立测量进程内加载模块哈希。
+
+保留失败与根因：
+
+- `Network_Combat_R1` 两档真实失败：实验地面首次 Load Cube 时仍在异步编译，未创建碰撞体，却在同帧做 R 落点查询。新诊断记录 compiling1/physics0/body0/sceneHit0，约0.115秒后转为0/1/1/1。仅修夹具分阶段真实就绪条件，服务端和客户端使用同等地面射线；原范围/目标断言未放宽，生产类不加回原型网格。不是技能命中算法被改成忽略地面。
+- `Network_Expansion_R1` 为沙箱下专服无 READY 的启动失败；升权后的 R2 通过但属于夹具修复前模块，最终使用 R3。
+- 冷检 R1 缺进程级迁移快照参数，R2 未初始化命令程序渲染资源导致完整特效校验失败；按真实前提传 `-PresentationSnapshot` 和 `-AllowCommandletRendering` 后 R3/R4 通过，没有删掉校验项。
+
+迁移前 schema1 快照归档为 [ResourcePresentationBaseline_20261025.json](Evidence/ResourcePresentationBaseline_20261025.json)，原本机副本仍保留。以后资源冷检可以用本项目路径传 `-PresentationSnapshot`，不依赖相邻 FPS 工程的 Saved。JSON数据仅统一文本换行，保留原 schema 与属性/地图内容；不是重采一份当前状态来冒充迁移前基线。
+
+复现只读资源冷检时从项目根目录执行（须传进程级快照参数；不要与 Update/Create 混用）：
+
+~~~powershell
+& 'E:/program/ue554/UE_5.5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' './multiplayer.uproject' -run=CombatAssetBuild -ValidateResourcePresentation '-PresentationSnapshot=E:/ueprojrct/multiplayer/Tests/Evidence/ResourcePresentationBaseline_20261025.json' -unattended -nop4 -NullRHI
+~~~
+
+这里只核资源/规则/碰撞合同；完整特效资源就绪另用 `-Validate`、DX12 和 `-AllowCommandletRendering`，仍不能替代实际像素/声音验收。
+
+**未覆盖**：此次不登记完整画面/声音观感、原埃及图完整通关、公网、Linux DS、新发布包运行或性能收益。图契约、真实控件断言、渲染资源就绪与完整视觉体验分开评价。
+
+## 阶段记录：蓝图与资源迁移验收（2026-10-25）
+
+本轮将实际控件刷新、机关/投射物资源和艺术初始化归到保存的蓝图/配置；C++ 保留规则、网络、数值提交及生命周期。没有重做战斗、连接或机关规则，也不以本轮迁移宣称新的性能收益。当前边界和五个 WBP 名单见 [ARCHITECTURE](../Docs/ARCHITECTURE.md)。
+
+- `Saved/FinalBlueprintMigration_20261025/Automation_R3/index.json`：`Multiplayer.Combat.` **175 clean，0 warned/failed/notRun**，Windows Editor、DX12 离屏运行。原伤害、取消、解绑与资源回收断言保留，未将真实控件检查降为只检查快照字段。
+- 五个真实 WBP 的 `LocalPresentation` 图、原生只读字段、实际 Designer 控件和完整执行/数据连线通过新进程校验。外层血条的 `Health` 必须使用正式内层类，实际嵌套模板的 `HealthTextFormat` 必须与类 CDO 一致；真实 GAS 伤害后控件即时显示 `100 / 100 → 75 / 100`，无需显示 Tick。HUD 销毁清空提示并解绑，迟到事件不能重新启动其定时器。
+- 资源 Apply/Cold 验证 **8 个实际 BP、3 个 DA、2 张地图**；`CoopEscape` 核对 **22 个 Actor**，其中 4 个原生补给/遭遇实例已转换，冷检无待转换实例。`CombatTest` 同样参与核对，本次对应资源角色为 0。网格/变换、规则导出和碰撞一致性分别检查，未删除地图艺术素材。
+- Editor 与 Shipping 编译已通过。最新已读回 Editor 记录包括 `BuildEditor_Final.log`、`BuildEditor_Final2.log`，Shipping 为 `BuildShipping_Final.log`；它们只证明对应源码构建，后续修改仍以新的构建日志为准。
+- 保留 R1/R2 失败：R1 的血条文本和 HUD 销毁提示回归没有被隐藏；排查确认嵌套 Widget 模板残留空格式覆盖、以及最后空快照被过早关闭，分别修复真实保存模板和销毁发布顺序，R3 全套重跑通过。其他资源回归修复也保留原报告，不改写失败记录。
+- 本轮**没有完整重跑双端正常/弱网矩阵、正式地图通关、连续画面/音效验收或性能采集**。下面历史网络、性能结果仍属于原构建；接口/资产冷检、编译及进程内自动化不等于新一轮公网或端到端网络验证。
+- `Validate_Final.log` 使用 DX12 和真实渲染资源就绪检查，正式角色/动画/特效资产冷验通过。`Saved/FinalBlueprintMigration_20261025/VisualReview_R2/ReviewReport.json` 记录 Normal 下真实 DS + 双客户端的 40 秒技能演示，Owner/Observer 分别写出 347/345 帧；抽查四帧可见 HUD、角色和双端护盾，抽查范围单列于 `SampledFrameInspection.json`。演示显式忽略成本/冷却，只作为表现与流程证据，不代替成本、正式地图通关或弱网矩阵；没有将原报告的 `visual_passed=false` 改写为整段质量通过。首轮 Cmd 入口的 peer 提前退出记录保留。
+
+自动化报告位于 Co-op 项目本机 `Saved/FinalBlueprintMigration_20261025/`。本轮资产/构建原始日志集中在相邻 FPS 工作目录的 `Saved/FinalBlueprintMigration_20261025/CoopAssets/` 与 `CoopUIRegression/`：`Apply_R1.log`、`Cold_R1.log`、`BuildEditor_Final*.log`、`BuildShipping_Final.log`、`Automation_R1/R2/R3.log`。这些本机大文件的存在不意味着仓库提交了全部原始采集。
+
+## 同日较早：共享 HUD 与脚部 IK 迁移
+
+以下保留较早构建的原始验收口径，不替代上方本轮最终结果。
+
+本轮完成成长菜单、世界血条配置和战斗 HUD 的蓝图表现迁移，并移除导入动画图中的脚部地形 IK；规则、网络准入和结算仍由原所有者维护。当前结构见 [ARCHITECTURE](../Docs/ARCHITECTURE.md)。
+
+- `Saved/BlueprintBoundary_20261024/Automation_R3/index.json`：`Multiplayer.Combat.` 共 **175 clean，0 warned/failed/notRun**，DX12 离屏运行。新增真实 GameMode→HUD→共享蓝图 Canvas 绘制测试；原有 174 项继续通过。
+- 同目录 `Coop_ValidateHUDPresentation_R3.log`：新进程验证两种玩法的实际 HUD 类、唯一共享绘制图、执行/数据连接与持久化表现默认值，退出 0；`CoopHUD_Build_R7.log`、`CoopShipping_R1.log` 分别记录 Editor/Shipping 编译通过。
+- 保留失败记录：首次新增 HUD 测试因夹具未提供所属本地 Controller 失败，修复测试的真实 Owner/LocalPlayer/离屏视口后重跑全套；没有屏蔽错误或降低绘制断言。资产迁移中临时 SmallFont 无法持久化的问题，经新进程读回发现后改为明确字体资产。
+- 本轮没有重新运行双端正常/弱网矩阵、最终画面观感或性能采集。下面八轮网络验证属于此前构建，不移称为这次迁移后的端到端通过；Canvas 批次和资产接线也不等于屏幕像素验收。
+
+## 历史验收入口（2026-10-24）
 
 ### 同日后续：架构整理验证
 
@@ -23,9 +101,9 @@
 - `Contracts_R4.json` 审计 42 条、43 个所查包磁盘内容不变；正式战斗/AI 资产校验通过。首次不完整网络采集与已修复的编译失败日志均保留。
 - 未覆盖公网、Linux DS、新发布包运行、完整地图通关和全部冷启动特效；本轮没有新增整局帧率或带宽收益。
 
-网络入口支持 RideMotion、Combat、CombatLifecycle、CombatReconnect、CombatExpansion、CombatTraffic 和 CoopEscape：一个 DS 和两个独立客户端。Partner 先连接并确认角色与共享状态就绪，Client 执行受测动作；服务器和两个客户端分别记录结果。
+网络入口支持 RideMotion、Combat、CombatLifecycle、CombatReconnect、CombatExpansion 和 CombatTraffic：一个 DS 和两个独立客户端。Partner 先连接并确认角色与共享状态就绪，Client 执行受测动作；服务器和两个客户端分别记录结果。
 
-当前恢复原埃及地图后的规则与验收入口见下文“原埃及图恢复后的正式技能验收（2026-10-20）”。旧 `CoopEscape` 全流程依赖原型的 `Escape_*` 机关布局，不适用于恢复后的原图；本文此前各日期的通过记录只对应当时的布局、规则和构建。
+当前恢复原埃及地图后的规则与验收入口见下文“原埃及图恢复后的正式技能验收（2026-10-20）”。旧 `CoopEscape` 自动路线依赖已经移除的 `Escape_*` 庭院原型布局，现已退休；正式地图、玩法及素材作者工具保留。共享技能视觉夹具集中在 `CoopVisualFixture.cpp`。本文此前各日期的通过记录只对应当时的布局、规则和构建。
 
 ## GAS 同步回调与属性边界复查
 
@@ -47,7 +125,7 @@
 | 报告目录 | Normal | Harsh | 范围 |
 | --- | --- | --- | --- |
 | `CombatNormalHarsh` | 通过 | 通过 | 恢复后的 CoopEscape 地图、DX12 渲染客户端与受控技能输入夹具 |
-| `LifecycleNormalHarsh` | 通过 | 通过 | 取消、眩晕、死亡与重新激活，NullRHI |
+| `LifecycleNormalHarsh` | 通过 | 通过 | 取消、权威效果接管后取消、眩晕打断与移动恢复，NullRHI |
 | `ExpansionNormalHarsh` | 通过 | 通过 | 冲刺预测／取消／拒绝、弹反和救援，NullRHI |
 | `ReconnectNormalHarsh` | 通过 | 通过 | 真实断线后的存活、倒地超时与死亡恢复，NullRHI |
 
@@ -75,7 +153,7 @@ Harsh 参数为三端 PktLag 200、PktLagVariance 50、PktLoss 5，不是实测 
 | 完整战斗回归 | 首轮 `Regression/index.json` 153 项通过；补充提交快照测试后的 `RegressionFinal/index.json` 154 项通过，均为 0 测试警告、0 失败；DX12 离屏运行 |
 | 测试脚本契约 | `RunMultiplayerNetworkTests.ps1 -SelfTest` 通过；此项本身不启动 UE、不代表网络测试通过 |
 | Combat | `CombatNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，恢复后的 `CoopEscape` 地图、渲染客户端与受控输入夹具 |
-| CombatLifecycle | `LifecycleNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含取消、眩晕、死亡与重新激活 |
+| CombatLifecycle | `LifecycleNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含取消、权威效果接管后取消、眩晕打断与移动恢复 |
 | CombatExpansion | `ExpansionNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含预测冲刺、弹反与救援 |
 | CombatReconnect | `ReconnectNormalHarsh/report.json`：Normal、Harsh 各 1 轮通过，包含真实断线后的存活、倒地超时与死亡恢复 |
 
@@ -136,8 +214,6 @@ Harsh 参数为三端 PktLag 200、PktLagVariance 50、PktLoss 5，不是实测 
 
 ~~~powershell
 .\Scripts\RunMultiplayerNetworkTests.ps1 -SelfTest
-# 旧 Escape_* 原型布局专用；恢复原埃及图后不使用此全流程入口。
-.\Scripts\RunMultiplayerNetworkTests.ps1 -Scenario CoopEscape -Profiles Normal -Repeat 1 -Map /Game/Combat/Maps/CoopEscape -Offscreen -TimeoutSeconds 600
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Normal,Moderate,Harsh -Repeat 1
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -Repeat 3
 .\Scripts\RunMultiplayerNetworkTests.ps1 -Profiles Harsh -PlatformMotion Static -Repeat 1
@@ -151,7 +227,7 @@ Harsh 参数为三端 PktLag 200、PktLagVariance 50、PktLoss 5，不是实测 
 
 运行前编译 multiplayerEditor。默认采用 UE 5.5.4 Editor Server；-EditorPath 可覆盖引擎路径。默认 NullRHI；-Offscreen 使用客户端 DX12 离屏渲染，-Visible 显示客户端窗口，供人工验收 UI 与表现，DS 始终无画面。打包测试须同时提供 GameExecutablePath 与独立 ServerExecutablePath。
 
-RunLocalDedicatedServer 不带 -Play 时调用旧 `Escape_*` 原型布局的自动撤离验证，不适用于恢复后的原埃及地图。当前原图请使用 -Play：只启动可操作的 DS 和两个客户端；-FromMenu 显示原地址连接菜单，不生成自动通过结论。技能回归使用上述 Combat 系列入口，平台实验使用 RunMultiplayerNetworkTests 的 RideMotion 入口。两种脚本均支持 -PlanOnly；端口为 0 时自动选择。
+RunLocalDedicatedServer 默认只启动可操作的 DS 和两个客户端，`-Play` 保留为旧调用兼容参数；`-FromMenu` 显示原地址连接菜单，不生成自动通过结论。技能回归使用上述 Combat 系列入口，平台实验使用 RunMultiplayerNetworkTests 的 RideMotion 入口。两种脚本均支持 -PlanOnly；端口为 0 时自动选择。
 
 ## 保留的检查
 
@@ -357,7 +433,7 @@ Harsh 使用 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，参数施加于�
 
 接入前备份 20 个目标资产至 `Saved/EnemyARPGFull-20261017/Backup`；`AssetsBefore.json` 和 `AssetChanges.json` 核对全部 2,837 个 Content 文件，实际写入仅限敌人蓝图与 19 个 EnemySource 资产，其他内容校验值不变。
 
-`Saved/EnemyARPGFull-20261017/NetworkLifecycle/report.json` 记录本轮完整模型版本的独立 DS 与两个 DX12 离屏客户端：`CombatLifecycle` 的 Normal、Harsh 各一轮均通过全部必需断言，六个参与进程全部正常退出，未由脚本强制结束。覆盖施法释放与单次伤害、取消／眩晕／死亡打断、后续移动恢复、按键方向快照及 CMC 横移目标命中。Harsh 的进程参数为 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不等于实测 RTT。`FinalSourceVerification.json` 确认网络运行期间业务源码与资产未变，清单差异仅为更新测试说明的 `Tests/README.md`。
+`Saved/EnemyARPGFull-20261017/NetworkLifecycle/report.json` 记录本轮完整模型版本的独立 DS 与两个 DX12 离屏客户端：`CombatLifecycle` 的 Normal、Harsh 各一轮均通过全部必需断言，六个参与进程全部正常退出，未由脚本强制结束。覆盖施法释放与单次伤害、取消、权威效果接管后取消、眩晕打断、后续移动恢复、按键方向快照及 CMC 横移目标命中。Harsh 的进程参数为 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不等于实测 RTT。`FinalSourceVerification.json` 确认网络运行期间业务源码与资产未变，清单差异仅为更新测试说明的 `Tests/README.md`。
 
 ## 2026-10-17：错峰生成与 RVO 避让
 
@@ -600,7 +676,7 @@ Harsh 为模拟器参数 `PktLag=200`、`PktLagVariance=50`、`PktLoss=5`，不�
 
 修正后的 `RegressionFinal/index.json` 为 **120 成功、0 警告、0 失败**（实际渲染，不用 NullRHI 跳过粒子项）。专用 RPC 接收 ASC 在 Proxy 角色下注册并明确验证引擎缓存非权威；旧本地预测键确实被过滤，独立权威结果键各产生一次拥有者／旁观者组件。保存的 `GCN_Heal` 只对不同施法者隔离实例，避免两位施法者冷加载时互相覆盖，不引入通用事件队列。
 
-`Combat/report.json` 的 Normal／Harsh 各 **285 项必需门禁通过、0 错误**，包含真实 E 输入、预测消耗、服务器结算、两端新治疗组件及截图；`Lifecycle/report.json` 的 Normal／Harsh 各 **106 项通过、0 错误**，包含真实 R 按下／释放、原生预测、两端正式范围粒子、一次伤害及取消／眩晕／死亡收尾。四组的 Server／Client／Partner 均 exitCode 0、未由 runner 强停。
+`Combat/report.json` 的 Normal／Harsh 各 **285 项必需门禁通过、0 错误**，包含真实 E 输入、预测消耗、服务器结算、两端新治疗组件及截图；`Lifecycle/report.json` 的 Normal／Harsh 各 **106 项通过、0 错误**，包含真实 R 按下／释放、原生预测、两端正式范围粒子、一次伤害、取消、权威效果接管后取消、眩晕打断与移动恢复。四组的 Server／Client／Partner 均 exitCode 0、未由 runner 强停。
 
 实际逐图检查确认五槽与生命能量分离，R 双端结果粒子出现在落点、施法者黄圈清楚。首轮发现默认操作说明盖住技能栏，最终将两种说明由视口高度 84% 上移至 62%；后续 Lifecycle 双端图确认不再重叠。Client SelfHeal 图可见脚底到身体的治疗粒子；Partner SelfHeal PNG 未清楚显示短粒子，虽然该端正式组件位置／活跃断言已通过，不把这张图宣称为清晰的治疗画面。BasicAttack PNG 是命中后画面，起手方向的证据来自真实 Cascade／Niagara 组件快照测试，不能替代多角度连续操作录像。
 
@@ -709,6 +785,119 @@ Q／R 不再把施法者强行转到镜头方向，受击目标也不随施法�
 四份报告记录的磁盘项目模块 SHA256 相同：`e0404a1a6a2500108b313a4c1b94b9a8193b48d32865275f008fce2d54795409`；运行前采集的脚本清单指纹均为 `f0d9fd3df601f045e5d278e37b6f8df18ce9a345ab08a37341358ef8d7384fe8`。该清单包含 Source、Config、Scripts、Tests、UI／Combat 资产等脚本所列范围，不是整个 Content 的全量证明；未测量进程内已加载模块哈希。本段文档在八轮全部结束后补写，未在回归期间改动业务源码、配置或资产。启动参数保留 `-DDC=InstalledNoZenLocalFallback` 与 `-DDC-ForceMemoryCache`。
 
 最初 `Network_Combat_R1` 原样保留，不计入上述八轮：Normal 已写入通过结果；Harsh 的三端日志各有成功 DONE，且 Server／Client／Partner 分别有 59／134／47 条通过 ASSERT、无失败 ASSERT，但执行会话返回 `0x40010004` 后未完成 runner 的退出核验和最终汇总，`report.json` 仍为 running。因此另建 `Network_Combat_R2` 完整重跑两档，没有覆盖中断证据，也没有将旧 running 当作仍在运行或完整通过。
+
+## 2026-10-25：取消后同实例重开与旧预测拒绝
+
+`Saved/StaleCallbackProof_20261025/BuildEditor.log` 编译通过；`Automation/index.json` 的 DX12 离屏回归为 **180 项成功、0 警告、0 失败**。本轮新增一个确定性测试及现有测试的诊断信息，未修改战斗执行逻辑或正式技能资产。
+
+- `CancelledTaskReactivation` 使用真实 `CastArea/CancelCast`、碰撞与 GE，确认取消前已有活动 `WaitDelay`，取消后旧任务 Finished 且 Ability 清空。用例只在独立配置中缩短冷却，便于立即复用同一 GA；不直接调用释放回调、广播委托或修改伤害结果。
+- 起手分支在世界时间 0.29 秒取消重开，0.94 秒越过旧释放期限但早于新释放，目标 HP 仍 100、新施法仍有效；新一轮随后只结算一次，HP 87。
+- 收招分支保留首轮已结算伤害，在 0.94 秒取消重开；1.49 秒越过旧收招期限，新施法仍有效且 HP 仍 87；新一轮随后只结算一次，HP 74。两分支能量均为 100→78，两次各扣 11，普通取消不退款，最终施法锁为零。
+- `ReentryAudit.MontagePredictionKeyOwnership` 使用非权威 ASC、独立真实本地预测键、同资产的两个动画实例，并调用原生 `ClientActivateAbilityFailed` 接收入口。日志记录 oldKey=1/newKey=2、instance=14/15；旧键拒绝确已触发而新实例仍播放，新键拒绝后自身停止。这是定向接收端测试，不是实际网络传输中乱序的证明。
+
+同一构建的 `NetworkLifecycle/report.json` 为本机 DS 加两个独立客户端、NullRHI：Normal／Harsh 各一轮通过全部 **93 个必需断言**，耗时分别 78.464／132.780 秒；六个进程均 exitCode 0、未由 runner 强停。覆盖主动取消、同键权威施法效果接管后取消、服务器眩晕后越过原释放期限无伤害，以及双方实际输入移动恢复。Harsh 是三端 `PktLag=200/PktLagVariance=50/PktLoss=5` 模拟参数，不是实测 200ms Ping。本轮不称为晚到 AnimNotify、完整视觉或公网验收。
+
+磁盘模块 SHA256 为 `50328f36040f12c716bb84428de06ccda61e5bc7fcfbe0fcd0d6d14c1ae6511d`，报告保持 `loadedByRuntimeVerified=false`。网络运行结束时核对全部 313 个清单输入，无变化；本节及面试说明随后补写。修正旧说明中将当前 `CombatLifecycle` 称为覆盖死亡／重新激活的文字，当前场景没有这两个步骤。
+
+## 2026-10-25：冗余精简与旧原型退休
+
+以本轮开始时 `Saved/Redundancy_20261025/Baseline.json` 为基准，按包含注释、空行的物理行统计，净减少 **765 行**：运行时/构建 12916→12796（120行）、Testing 24192→23576（616行）、Scripts 2988→2959（29行）。不是相对 Git HEAD 的总差异；此前未提交改动保留，代码/脚本/配置的清理前副本在该目录的 Before。
+
+- 冷却查询统一到 `GetSkillCooldownRemaining`，原有五个蓝图 Getter 保留；删除两套 switch 与无用转发。
+- 删除八个按键转发函数，槽位按值绑定到已有预览/松键入口；切换后旧松键过滤保留。
+- HUD 合并状态/倒计时刷新，移除能量和四个状态的重复缓存；事件订阅、WBP 接口及活动计时期间才刷新保持。移除历史治疗诊断日志及无引用的 `GetSlotLevel`。
+- Transporter 使用 Tick 启停状态，删除重复 `bMoving`。旧庭院自动路线、专用导航与碰撞诊断退休，共享截图改放 `CoopVisualFixture.cpp`；现用救援输入状态/退出释放保留并明确命名。
+- 移除重复视觉地面，与数值夹具共用同一复制地面；实际射线、组件身份、物理就绪、法线与10秒等待门禁未放宽。
+
+`BuildEditor_R3.log` 与 `BuildShipping_R2.log` 通过；最终模块 `Automation_R2/index.json` 为 **180 成功、0 警告、0 失败**，没有减少自动化用例。蓝图冷读 `BoundaryAudit.json` 四类验证通过、47个契约资产0错误/0警告，129个受保护Content文件未变；该冷读在最后的测试地面合并之前执行，之后运行时/蓝图代码未再修改。脚本 SelfTest、五份 PowerShell 语法及手动启动 PlanOnly 通过，均不算联机结果。
+
+最终构建的本机 DS＋双客户端功能回归使用 NullRHI：
+
+| 场景 | 每档必需断言 | Normal / 秒 | Harsh / 秒 | 报告 |
+| --- | ---: | ---: | ---: | --- |
+| Combat | 228 | 通过 / 70.817 | 通过 / 115.719 | NetworkCombat/report.json |
+| CombatExpansion | 79 | 通过 / 62.490 | 通过 / 82.740 | NetworkExpansion/report.json |
+| RideMotion | 13 | 通过 / 87.161 | 通过 / 82.335 | NetworkRideMotion/report.json |
+
+以上报告均在 `Saved/Redundancy_20261025`，6/6轮通过、18个peer均exitCode0、未被runner强停。Harsh为三端 `PktLag=200/PktLagVariance=50/PktLoss=5`，不是实测RTT。磁盘模块SHA256为 `1060c89d6a9d27768a8ea46f553de3f4e5618efddf8664e351f067c5609874d3`；三份报告源清单指纹均为 `9e8967ba7faee8cfb29ed24dc4998031ec7a0c78c8dafa8bc27916f6edfd02a0`，结束时核对313个输入无变化，见 `FinalSourceVerification.json`。报告保留 `loadedByRuntimeVerified=false`；本文及架构说明随后补写。
+
+失败记录保留且不计通过：首轮编译误删了救援回归共享输入标记，后恢复为明确的 `bCombatRescueInputHeld` 并统一松键清理。`NetworkCombatVisual` 暴露两块同顶面测试地面，已合并且后续真实落点检查通过。`NetworkCombatVisual_R2` 仍未完整通过：Normal重新入场时敌人骨骼素材重建约15秒，触发正式会话确认超时；Harsh服务器治疗与两端血量结果通过，拥有者实际E输入、预测/确认、特效组件及PNG通过，但观察端未记录到治疗特效与截图。结果Cue使用不可靠传输，现有证据不能确定是丢包还是错过短时表现。未放宽正式连接超时或移除视觉门禁，不把这些失败称为完整视觉、公网或发布包验收。
+
+## 2026-10-25：移除敌人头顶血条
+
+敌人不再创建 `HealthBarWidget` 默认子对象，也不初始化、订阅或逐帧更新头顶血条；相关接线工具入口一并退休。玩家 HUD、敌人生命属性、受伤/死亡、AI 与武器保持原实现。两份旧血条 WBP 及原生父类保留为存量素材兼容，不再接入实际小兵。
+
+`Saved/EnemyNoHealthBar_20261025/BuildEditor.log` 编译通过；`BlueprintUpdate.json` 确认实际 BP_CombatEnemy 默认 WidgetComponent 列表为空，仅该项目蓝图被重新编译保存，其他受保护资产无变化。原敌人蓝图备份位于同目录，玩家 HUD 及地图未改。
+
+`Automation/index.json` 为 **178 成功、0 警告、0 失败**。原三项世界血条显示测试替换为一项 `EnemyWithoutHealthUI`，覆盖 Standalone/DS、原生/实际蓝图敌人、真实伤害与死亡及跨帧后不重建 UI；`EnemyPresentation` 保留网格、骨架、动画与武器检查，玩家 `HUDEventLifecycle` 继续通过。数量从180变178是移除显示功能后的测试替换，不将已删除的血条功能继续记为通过。
+
+<a id="right-click-cancel-20261025"></a>
+
+## 2026-10-25：右键结束 Q 防御与 R 已播放的爆炸
+
+Q 的 GA 已结束时，右键仍向服务器请求移除同次 Defending/Parry GE；不删冷却、不退能量、不撤销已授予的护盾。R 出手前仍走能力取消，出手后只销毁本角色已登记的结果粒子并清除 HUD 结果圈，不撤回伤害、附加效果或消耗。治疗、其他玩家粒子和飞行弹体不受影响。
+
+`Saved/RightClickCancel_20261025/BuildEditor_R3.log` 编译通过；`Automation_R2/index.json` 为 **180 成功、0 警告、0 失败**。新增 `DefenseRightClickCancellation` 经正式 Q／普攻／右键输入检查标签、真实动画采样、成本／冷却／护盾及后发普攻动画；`AreaResultRightClickCancellation` 经真实 R 结算、正式 Cue 与 Cascade／Niagara 检查当前粒子注销、结果保留、其他玩家／治疗隔离及后续 R 可正常播放。旧关系测试改为：R 替换普攻时保留防御，显式右键同时结束 R 与 Q。
+
+首次全量保留在 `Automation/index.json`：178 成功、2 失败。一个是新增输入测试读到上一帧动画快照，改用该夹具已有的真实动画更新入口；另一个是旧用例仍要求右键保留防御，与新需求冲突。没有移除或跳过测试。
+
+同一构建的本机 DS＋双客户端 `CombatLifecycle` 功能回归：Harsh 为 **90.242 秒通过**（`NetworkLifecycle/report.json`），Normal 单独重跑为 **73.700 秒通过**（`NetworkNormal_R2/report.json`），各 **104 个必需断言**、三进程 exitCode 均为 0。新增 11 项断言覆盖远端 Q 预测、同键权威效果接管、两客户端先观察防御再观察取消、服务器在自然期限前结束效果及保留消耗／冷却／护盾。只在该模式的瞬态配置延长防御／弹反至 12 秒以排除自然到期，正式资产不变。原 R 释放、取消、权威接管后取消、眩晕打断与移动恢复检查仍保留。
+
+首轮 Normal 与完整回归并发时失败：服务端构建 `SKM_CombatMannequin` 耗时约 51 秒，已连接的客户端触发正式连接超时，未进入技能阶段；原失败及日志保留在 `NetworkLifecycle`。没有延长正式超时或将该轮记为通过。Harsh 为三端 `PktLag=200 / PktLagVariance=50 / PktLoss=5`，不是实测 RTT；两档使用 NullRHI，验证功能与复制，不证明最终粒子画面或 R 乱序取消。
+
+该阶段的 R 版本只覆盖本端已收到的 Cue 和尚在补载的资源，不是网络施法编号。当时尚未收到的旧结果包、旁观端新旧结果与取消消息乱序时的逐次隔离未实现；本地粒子测试不记为这些网络边界通过。后续关联身份改动与新增证据见下方专项记录，不能回写本阶段结果。手动验收需实际操作 Q 后右键、R 爆炸后右键，并由另一客户端观察；联机加入成功不等于画面验收通过。
+
+<a id="final-boundary-adaptive-20261026"></a>
+## 2026-10-26：最终边界整理与自适应连接等待
+
+- 删除已无代码或 Content 引用的敌人血条组件及其非反射重绘通知链，共 203 行。保留两份旧 WBP 需要的 Widget 父类、反射字段和事件；玩家 HUD 不变。`Saved/FinalBoundary_20261025/WidgetColdAudit.log` 冷读五个 WBP，0 错误／0 警告；116 项受保护项目素材与整理前指纹一致，没有迁移或重存素材。
+- 右键先关闭旧预览，结束清理后再广播这次预览关闭通知。新增 `Targeting.CancelNotificationPreservesNextCast`，经正式 Q 预览／右键输入，在通知内启动下一次真实 R 并检查扣费和实际伤害。不把这一边界扩称为任意能力结束回调都可重入。
+- GI 同文件内的 `FmultiplayerConnectionTiming` 维护 RTT／波动／RTO；每 0.5 秒只读新 ACK 批次均值。连接与统计周期隔离采样游标；同端点断线保留估计，更换端点、主动退出、最终失败和 Shutdown 清理。仍由 UE 负责可靠包和 RPC 重发，不新增 Ping 包、Manager 或通用消息优先队列。
+- RTO 无样本默认 1 秒，测得后限制在 0.25～5 秒。连接保留 20 秒加载／业务预算并增加 RTO 退避余量，总上限 60 秒；重连等待为配置间隔与 RTO 退避取较大者，不对配置重复乘指数。次数预算、首次失败语义和 OperationRevision 过滤保持原职责。服务器 15 秒接纳期限、120 秒恢复期限未改，之前的骨骼冷构建阻塞并未因此修复。
+
+`Saved/AdaptiveConnection_20261025/BuildEditor.log`、`BuildShipping.log` 完整编译通过；`Automation/index.json` 为 **183 成功、0 警告、0 失败、0 未运行**。新增两项 `Multiplayer.Network.ConnectionTiming`／`ConnectionStateTiming` 检查手算参考值、无效样本与限幅、配置不重复退避、真实 GI Timer、有限预算、重复通知、旧编号与 Shutdown。它们是进程内计时验证，不是 UDP 丢包实验。Shipping 编译不等于已打包并运行发布包。
+
+同一磁盘 Editor 模块的本机 DS＋双客户端功能验证，报告在 `Saved/AdaptiveConnection_20261026/`：
+
+| 场景 | 网络档 | 结果 | 必需断言 | 耗时／秒 | 报告 |
+| --- | --- | --- | ---: | ---: | --- |
+| CombatReconnect | Normal | 通过 | 69 | 123.285 | NetworkReconnect/report.json |
+| CombatReconnect | Harsh | 通过 | 69 | 120.692 | NetworkReconnect/report.json |
+| CombatLifecycle | Normal | 通过 | 104 | 82.353 | NetworkLifecycle/report.json |
+| CombatLifecycle | Harsh | 通过 | 104 | 104.375 | NetworkLifecycle/report.json |
+
+四轮的 12 个 peer 均 exitCode 0。重连增加三个必需门禁，在存活／倒地／死亡断开前观察生产 GI 的实际采样，不由夹具注入 RTT 或调用采样。恢复仍覆盖个人资源、成长、冷却／持续效果与共享关卡状态。Harsh 死亡断开前记录 SRTT=0.469883 秒、波动=0.025386 秒、RTO=0.571426 秒；这是该轮新 ACK 批次估计，不能把模拟参数 PktLag=200 当作实测 RTT。
+
+`Inputs.json`／`Verification.json` 绑定该轮源码、两种构建及受保护素材指纹；受测期间没有更改运行源码或构建，之后仅补文档。四轮使用 NullRHI，证明该构建的功能与状态复制；不覆盖人工操作画面、公网、发布包、通用消息优先级或 R 乱序逐次取消。当时 Q／R 粒子注销仅有进程内真实组件证据；后续专项另列，不能用加入成功代替视觉验收。
+
+<a id="activation-identity-20261026"></a>
+## 2026-10-26：复用激活身份与重复机制复查
+
+本轮不新增施法计数器、GUID、Globals、Manager 或确认／重发协议。`FmultiplayerCombatActivationIdentity` 只读取已有 SpecHandle、服务器原有 ActivationRevision 与原生 PredictionKey；客户端本地轮次仅限定已有预测键绑定，不能假定两端轮次相等。身份通过原生类型化 EffectContext 的专用字段传递，不借用 RawMagnitude／AbilityLevel，也不把旁观者收不到或可能回绕的裸预测键永久存成取消历史。
+
+删去本地 R 特效计数器及 Commit 中重复登记的动画拒绝逻辑。动画仍用原生播放号区分具体 Montage，现有本地播放轮次只保护同步重入的播放归属；同一技能可以播放多个动作，不能把二者强并成一个编号。动作键与激活键的拒绝清理统一在 ASC 实际播放入口，相同键只登记一次。
+
+R 的登记组件、最新权威取消状态和未确认拥有者请求职责不同：每个 Spec 仅保留最新权威状态，回执结束预测关联；旧 A 取消／旧结果不能清 B 或复活 A。已结算伤害、资源、冷却不回滚。结果特效补载保留本次 Context；地面标记加载的是共享材质，完成时服务当前有效身份并读取最新缓存落点，再由 StartLoop 检查。持续 Cue 的计数／移除、资产请求及取消继续使用 UE 原生机制，不另设状态机。
+
+证据根目录为 `Saved/ActivationIdentity_20261026/`：
+
+- `AreaResultRightClickCancellation` 使用真实 A／B 激活，捕获实际 Cue Context，B 显示后确定性调用原接收入口重放旧 A 取消及旧 A 结果，检查 B 存活、A 不复活；隔离另一施法者及治疗粒子，已扣费用／冷却／伤害保留。清除预测字段的结构比较只验证权威轮次关联，不能称为真实零键施法实验。
+- 新增 `AreaAsyncLoadCancellation`：通过原生 AssetRegistry 选择实际未加载的 ARPG 粒子，观察 A 的真实未完成 StreamableHandle；取消 A 后在同一 Update 内只推进规则时钟，执行真实 B，在 B 原生路由入口确认 A 仍 Pending，随后只生成 B 粒子。最终日志有 `AREA_ASYNC_PENDING`／`AREA_ASYNC_REPLACEMENT ... pendingAtRoute=1 oldHandleCancelled=1`。没有假延时、第三次施法或生产测试后门；该冷加载资源用于加载边界，不代表正式 R 美术验收。
+- `MontagePredictionKeyOwnership` 增补离开动作预测窗口的真实激活键拒绝，仍保留同资产新旧播放归属检查。共享地面材质 A→B 同实例接替的收口来自原生 Cue 复用与移除条件审查，不能称为已经单独复现了该冷材质场景。
+- `BuildEditor_R8.log`、`BuildShipping_R3.log` 为最终编译；全量 `Automation_R4/index.json` 为 **184 成功、0 警告／失败／未运行**。首轮 `Automation/index.json` 的 183 成功／1 失败保留：错误地假定 Standalone 真实预测键必为零，改为检验实际权威轮次；未修改生产规则迎合断言。
+
+最终磁盘模块的带渲染三进程实验为 `NetworkVisual_R4/report.json`，实际 R／右键输入、正式配置资源、1280×720 DX12 离屏；不是手动整局通关或连续录像：
+
+| 网络档 | 结果 | 门禁 | 耗时／秒 | 实际证据与边界 |
+| --- | --- | ---: | ---: | --- |
+| Normal | 通过 | 148 | 91.314 | 原 104 功能门禁及 44 视觉门禁；双端 A 显示／取消、B 显示／保留与取消；3 个进程 exitCode 0；双端共 16 张当前 token PNG |
+| Harsh | 失败 | 148 要求，未全满足 | 108.899 | A 已权威扣费且目标降至 90；Partner 收到 `AREA_CUE_ROUTE` 并观察真实粒子，Client 没有同次原生路由及粒子回执，阶段超时，3 个进程由 runner 结束；没有走到 B 与后续瞄准验收 |
+
+Harsh 为三端 `PktLag=200 / PktLagVariance=50 / PktLoss=5`，不是实测 200ms Ping，也不能据此声称实际发生了 UDP 乱序。原生 Cue 路由记录位于身份检查之前，只读订阅并在 Finish／Stop 解绑，不补发结果。这一轮缺失发生在拥有者进入项目 Cue 身份检查之前；现有结果 Cue 为不可靠传输，日志不能单独证明某个 UDP 包究竟在哪丢失，但没有依据把它归咎为身份匹配误拒。正常网络通过和确定性旧消息重放不能掩盖这一丢包档表现缺口；没有将结果改成可靠 RPC 或降低粒子门禁来刷通过。
+
+此前失败同样保留：`NetworkVisual` 在原配置验证前已创建测试配置副本，导致路径门禁自相矛盾，修为复制前验证；`NetworkVisual_R2` 的 Harsh 未观察到 B 激活，之后按真实预览处理状态再松键，避免把 KeyDown 误作输入已处理；`NetworkVisual_R3` 的 Harsh 缺少 A 的拥有者粒子，由 R4 增加原生路由记录继续定位。它们不是成功样本。
+
+抽查最终 Normal 的 Partner A／取消后、Client B 保留，以及 Harsh 的 Partner A 四张截图：可见实际角色、HUD、R 范围／粒子；取消后范围圈消失，受击火花仍有自然收尾，不能称为任意特效全部瞬间归零。截图抽查不代表连续动画质量、正式机关布局或完整美术已通过。`Inputs_R4.json`／`Verification.json` 记录源码、模块、脚本和 116 项受保护素材指纹；素材未因该专项改动。模块哈希是磁盘取证，runner 仍保持 `loadedByRuntimeVerified=false`。
 
 ## 历史实验
 

@@ -477,7 +477,7 @@ void UCoopNetTestDriver::ExpansionClientTick(UWorld* World)
 		if (!SentReceipts.Contains(TEXT("RescueRequested:") + Case) && Local->IsCombatReady() && !Local->IsStunned() && !Local->IsMovementBlocked())
 		{
 			SentReceipts.Add(TEXT("RescueRequested:") + Case);
-			if (bVisualAcceptance) { PC->InputKey(FInputKeyParams(EKeys::F,IE_Pressed,1.0)); bEscapeRescueHeld=true; }
+			if (bVisualAcceptance) { bCombatRescueInputHeld=true; PC->InputKey(FInputKeyParams(EKeys::F,IE_Pressed,1.0)); }
 			else Local->Rescue();
 			SendReceipt(TEXT("PartnerExpansionRescue") + Case + TEXT("Requested"), true,bVisualAcceptance
 				? TEXT("FIXTURE: owning player pressed and holds real F through the original input binding; server still must observe the actual GAS rescue")
@@ -487,7 +487,7 @@ void UCoopNetTestDriver::ExpansionClientTick(UWorld* World)
 	if (Phase.StartsWith(TEXT("ExpansionRescueActive:")))
 	{
 		const FString Case = Phase.RightChop(22); auto* Rescuer = Cast<AmultiplayerCombatCharacter>(Probe->CombatTarget.Get());
-		if (bVisualAcceptance && bPartner && bEscapeRescueHeld && Rescuer && Rescuer->GetCoopComponent()->IsRescuing()
+		if (bVisualAcceptance && bPartner && bCombatRescueInputHeld && Rescuer && Rescuer->GetCoopComponent()->IsRescuing()
 			&& !PC->IsInputKeyDown(EKeys::F)) { Assert(TEXT("PartnerVisualFInput"),false,TEXT("Rescue input was not held down")); return; }
 		if (Rescuer && Rescuer->GetCoopComponent()->IsRescuing())
 			if (Case != TEXT("Success") || CaptureSkillView(TEXT("RescueActive"),Subject,Rescuer))
@@ -499,7 +499,7 @@ void UCoopNetTestDriver::ExpansionClientTick(UWorld* World)
 			&& FMath::IsNearlyEqual(Subject->GetHealth(), Subject->GetMaxHealth() * .3f) && !Rescuer->GetCoopComponent()->IsRescuing()
 			&& SentReceipts.Contains(Prefix + TEXT("RescueSuccessActive")))
 		{
-			if (bVisualAcceptance && bEscapeRescueHeld) { PC->InputKey(FInputKeyParams(EKeys::F,IE_Released,0.0)); bEscapeRescueHeld=false; }
+			if (bVisualAcceptance) ClearCombatRescueInput();
 			if (CaptureSkillView(TEXT("RescueDone"),Subject,Rescuer)) SendReceipt(Prefix + TEXT("RescueSuccessDone"), true, TEXT("This connection observed one finished rescue, 30%HP and cleared rescue state"));
 		}
 	}
@@ -509,14 +509,14 @@ void UCoopNetTestDriver::ExpansionClientTick(UWorld* World)
 		if (Cancel && bPartner && !SentReceipts.Contains(TEXT("RescueCancelSent")))
 		{
 			SentReceipts.Add(TEXT("RescueCancelSent"));
-			if (bVisualAcceptance) { PC->InputKey(FInputKeyParams(EKeys::F,IE_Released,0.0)); bEscapeRescueHeld=false; }
+			if (bVisualAcceptance) ClearCombatRescueInput();
 			else Local->CancelRescue();
 			SendReceipt(TEXT("PartnerExpansionRescueCancelSent"), true, TEXT("Owning partner sent real rescue cancellation, without server fixture ending the ability"));
 		}
 		if (Subject && Rescuer && Subject->GetCoopComponent()->IsDowned() && Subject->GetHealth() == 1.f
 			&& !Rescuer->GetCoopComponent()->IsRescuing() && (Cancel || Rescuer->IsStunned()))
 		{
-			if (bVisualAcceptance && bEscapeRescueHeld) { PC->InputKey(FInputKeyParams(EKeys::F,IE_Released,0.0)); bEscapeRescueHeld=false; }
+			if (bVisualAcceptance) ClearCombatRescueInput();
 			SendReceipt(Prefix + (Cancel ? TEXT("RescueCancelStopped") : TEXT("RescueStunStopped")), true,
 				TEXT("Cancelled/interrupted rescue cleared replicated reservation and left the target downed, with no partial revive"));
 		}

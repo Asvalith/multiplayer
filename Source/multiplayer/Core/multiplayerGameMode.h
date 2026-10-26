@@ -10,7 +10,7 @@
 class AmultiplayerCoopPlayerController;
 
 /**
- * 合作玩法的服务器规则入口。
+ * [职责] 合作玩法的服务器规则入口，持有本局接纳票据与个人恢复缓存。
  *
  * GameMode 只存在于服务器，复核插槽和胜利区域上报的进度、人数与胜利状态，防止重复结算。
  * 校验后的结果写入可复制的 CoopGameState，客户端 UI 消费其权威快照。
@@ -94,7 +94,8 @@ private:
 		double SavedAt = 0;
 		double ExpiresAt = 0;
 	};
-	// 仅存本局内存；断线快照保留120秒，当前/备用票据共享一个在线锁，轮换回执丢失也能恢复。
+	// [边界] 仅存当前 GameMode 内存；断线快照保留 120 秒，重开、切图或服务器重启不继承。
+	// 当前/备用票据共享一个在线占用，轮换回执丢失也不能让同份状态同时接入两次。
 	TMap<FGuid, FCombatSession> CombatSessions;
 
 	// 钥匙附着、销毁和进度通知可能同步触发其他事件，拒绝提交期间的嵌套登记。

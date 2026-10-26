@@ -13,23 +13,15 @@
 #include "Combat/multiplayerCombatTargeting.h"
 #include "Core/multiplayerCoopGameState.h"
 #include "Combat/multiplayerCombatTags.h"
-#include "Blueprint/WidgetTree.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
-#include "Components/CanvasPanel.h"
-#include "Components/CanvasPanelSlot.h"
 #include "Components/DecalComponent.h"
 #include "Components/Image.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
-#include "Components/HorizontalBox.h"
-#include "Components/HorizontalBoxSlot.h"
-#include "Components/VerticalBox.h"
-#include "Components/VerticalBoxSlot.h"
-#include "Components/SizeBox.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/AssetManager.h"
@@ -41,8 +33,6 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInterface.h"
-#include "Misc/CommandLine.h"
-#include "Misc/Parse.h"
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "Particles/ParticleSystem.h"
@@ -52,31 +42,23 @@
 
 namespace
 {
-	constexpr float CombatTransientEffectLifetime = 2.f;
-
-	// 只为联机验收区分“Cue未抵达”与“抵达后资源/粒子异常”，不改变正式传输或结算。
-	void TraceCombatHealCue(const TCHAR* Stage, AActor* Target, const FGameplayTag& Tag,
-		const FmultiplayerCombatFeedback* Feedback, const FVector& Location, const USceneComponent* Component = nullptr)
+	// 资源锚点与缩放在 Feedback 中配置；本函数只消费本次事实快照。
+	void ResolveFeedbackTransform(AActor* Target, const FGameplayCueParameters& Parameters,
+		const FmultiplayerCombatFeedback& Feedback, FVector& Location, FRotator& Rotation)
 	{
-#if !UE_BUILD_SHIPPING
-		static const bool bEnabled = []
+		const auto* Character = CastChecked<AmultiplayerCombatCharacter>(Target);
+		Location = Target->GetActorLocation(); Rotation = FRotator::ZeroRotator;
+		switch (Feedback.Anchor)
 		{
-			FString Mode;
-			FParse::Value(FCommandLine::Get(), TEXT("CoopNetTest="), Mode);
-			return Mode == TEXT("Combat") || Mode == TEXT("CombatLifecycle");
-		}();
-		if (!bEnabled || Tag != CombatTags::Cue_Heal) return;
-		const UWorld* World = Target ? Target->GetWorld() : nullptr;
-		const APawn* Pawn = Cast<APawn>(Target);
-		UE_LOG(LogTemp, Display,
-			TEXT("COOP_CUE_DIAG cue=Heal stage=%s target=%s role=%d netmode=%d local=%d world=%.3f real=%.3f frame=%llu cascade=%s cascadeLoaded=%d niagara=%s niagaraLoaded=%d location=%s component=%s active=%d registered=%d"),
-			Stage, *GetNameSafe(Target), Target ? int32(Target->GetLocalRole()) : -1, World ? int32(World->GetNetMode()) : -1,
-			Pawn && Pawn->IsLocallyControlled(), World ? World->GetTimeSeconds() : -1.f, World ? World->GetRealTimeSeconds() : -1.f,
-			static_cast<unsigned long long>(GFrameCounter), Feedback ? *Feedback->CascadeEffect.ToSoftObjectPath().ToString() : TEXT("None"),
-			Feedback && Feedback->CascadeEffect.IsValid(), Feedback ? *Feedback->Effect.ToSoftObjectPath().ToString() : TEXT("None"),
-			Feedback && Feedback->Effect.IsValid(), *Location.ToString(), *GetNameSafe(Component),
-			Component && Component->IsActive(), Component && Component->IsRegistered());
-#endif
+		case EMultiplayerFeedbackAnchor::Feet:
+			Location -= Character->GetActorUpVector() * Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(); break;
+		case EMultiplayerFeedbackAnchor::CueLocation: Location = Parameters.Location; break;
+		case EMultiplayerFeedbackAnchor::Muzzle:
+			Location = !FVector(Parameters.Normal).IsNearlyZero() ? FVector(Parameters.Location) : Character->GetCombatMuzzleLocation();
+			Rotation = !FVector(Parameters.Normal).IsNearlyZero() ? FVector(Parameters.Normal).Rotation() : Character->GetActorRotation(); break;
+		default: break;
+		}
+		Location += Rotation.RotateVector(Feedback.LocalOffset); Rotation += Feedback.RotationOffset;
 	}
 
 	// 按角色配置识别近战小兵，避免把它的施法锁画成玩家 R 预告圈。
@@ -86,35 +68,9 @@ namespace
 			&& Character->GetAttackAbilityClass()
 			&& Character->GetAttackAbilityClass()->IsChildOf(UmultiplayerEnemyMeleeAbility::StaticClass());
 	}
-
-	// 共享只读名称和冷却查询，HUD 与成长菜单不另存一套技能状态。
-	const TCHAR* CombatSkillName(EMultiplayerCombatSkill Skill)
-	{
-		const TCHAR* Names[] = {TEXT("攻击"), TEXT("防御"), TEXT("治疗"), TEXT("范围"), TEXT("冲刺")};
-		return int32(Skill) < UE_ARRAY_COUNT(Names) ? Names[int32(Skill)] : TEXT("未知");
-	}
-	// 返回槽位的固定按键名称；技能装配变化不改变物理按键。
-	const TCHAR* CombatSlotKey(int32 Slot)
-	{
-		const TCHAR* Keys[] = {TEXT("LMB"), TEXT("Q"), TEXT("E"), TEXT("R"), TEXT("Shift")};
-		return Slot >= 0 && Slot < UE_ARRAY_COUNT(Keys) ? Keys[Slot] : TEXT("--");
-	}
-	// 读取技能对应的真实 GE 剩余时间，不维护表现层冷却余额。
-	float CombatSkillCooldown(const AmultiplayerCombatCharacter* Character, EMultiplayerCombatSkill Skill)
-	{
-		if (!Character) return 0.f;
-		switch (Skill)
-		{
-		case EMultiplayerCombatSkill::Attack: return Character->GetAttackCooldownRemaining();
-		case EMultiplayerCombatSkill::Defend: return Character->GetDefenseCooldownRemaining();
-		case EMultiplayerCombatSkill::Heal: return Character->GetHealCooldownRemaining();
-		case EMultiplayerCombatSkill::Area: return Character->GetAreaCooldownRemaining();
-		case EMultiplayerCombatSkill::Dash: return Character->GetDashCooldownRemaining();
-		default: return 0.f;
-		}
-	}
 }
 
+// ===== 1. GameplayCue：只消费结果，拥有自己的异步加载与音画清理 =====
 // Cue 组件按需创建、移除时销毁，不启用常驻 Tick。
 AmultiplayerCombatCue::AmultiplayerCombatCue()
 {
@@ -146,19 +102,38 @@ const FmultiplayerCombatFeedback* AmultiplayerCombatCue::GetFeedback(AActor* Tar
 // 补载只恢复本次 Cue 的音画；沿用已选表现快照，不能重新治疗、扣费或重复发成功提示。
 bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGameplayCueParameters& Parameters)
 {
-	TraceCombatHealCue(bExecutionLoadAttempted ? TEXT("received-after-load") : TEXT("received"), Target, GameplayCueTag,
-		bHasExecutionFeedback ? &ExecutionFeedback : GetFeedback(Target, &Parameters), Parameters.Location);
 	if (GetNetMode() == NM_DedicatedServer) return false;
+	if (GameplayCueTag == CombatTags::Cue_Area && bHasExecutionFeedback)
+	{
+		const auto* Context = FmultiplayerCombatCueContext::Get(Parameters.EffectContext);
+		if (!Context) return false;
+		if (!AreaFeedbackIdentity.Matches(Context->ActivationIdentity))
+		{
+			// 新 B 可以接替仍在加载的 A；只有已过期的 A 回调才应被丢弃。
+			auto* Character = Cast<AmultiplayerCombatCharacter>(Target);
+			if (!Character || !Character->AcceptAreaFeedbackIdentity(Context->ActivationIdentity)) return false;
+			StopPresentation();
+		}
+	}
 	if (!bHasExecutionFeedback)
 	{
 		const auto* SelectedFeedback = GetFeedback(Target, &Parameters);
-		if (!SelectedFeedback)
-		{
-			TraceCombatHealCue(TEXT("assetmissing"), Target, GameplayCueTag, nullptr, Parameters.Location);
-			return false;
-		}
+		if (!SelectedFeedback) return false;
 		ExecutionFeedback = *SelectedFeedback;
 		bHasExecutionFeedback = true;
+		if (GameplayCueTag == CombatTags::Cue_Area)
+		{
+			AreaFeedbackOwner = Cast<AmultiplayerCombatCharacter>(Target);
+			if (const auto* Context = FmultiplayerCombatCueContext::Get(Parameters.EffectContext))
+				AreaFeedbackIdentity = Context->ActivationIdentity;
+		}
+	}
+	if (GameplayCueTag == CombatTags::Cue_Area && (!AreaFeedbackOwner.IsValid()
+		|| !AreaFeedbackOwner->IsAlive() || AreaFeedbackOwner->IsActorBeingDestroyed()
+		|| !AreaFeedbackOwner->AcceptAreaFeedbackIdentity(AreaFeedbackIdentity)))
+	{
+		K2_EndGameplayCue();
+		return false;
 	}
 	const auto* Feedback = &ExecutionFeedback;
 	if (GameplayCueTag == CombatTags::Cue_Heal && !bExecutionHealNotified)
@@ -167,7 +142,7 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 		// 只提示本次确实成功的队友治疗，不给施法者再播放一份假回血粒子。
 		if (auto* Caster = Cast<AmultiplayerCombatCharacter>(Parameters.GetInstigator());
 			Caster && Caster != Target && Caster->IsLocallyControlled())
-			Caster->OnCombatMessage.Broadcast(FText::FromString(TEXT("治疗成功：已为标记队友恢复生命")));
+			if (!Feedback->SuccessfulCasterMessage.IsEmpty()) Caster->OnCombatMessage.Broadcast(Feedback->SuccessfulCasterMessage);
 	}
 	if (GameplayCueTag == CombatTags::Cue_Area && !bExecutionRangeShown)
 	{
@@ -187,7 +162,6 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 	if (!Feedback->Sound.IsNull() && !Feedback->Sound.IsValid()) PendingAssets.Add(Feedback->Sound.ToSoftObjectPath());
 	if (!bExecutionLoadAttempted && !PendingAssets.IsEmpty())
 	{
-		TraceCombatHealCue(TEXT("loading"), Target, GameplayCueTag, Feedback, Parameters.Location);
 		// 正常由角色预载；初次相关漏过预载时只补一次异步请求，失败也不会循环加载。
 		bExecutionLoadAttempted = true;
 		LoadingAssets = UAssetManager::GetStreamableManager().RequestAsyncLoad(PendingAssets,
@@ -198,57 +172,48 @@ bool AmultiplayerCombatCue::OnExecute_Implementation(AActor* Target, const FGame
 			}));
 		return true;
 	}
-	const bool bGround = GameplayCueTag == CombatTags::Cue_Area;
-	FVector Location = bGround || GameplayCueTag == CombatTags::Cue_Impact
-		? FVector(Parameters.Location) : Target->GetActorLocation();
 	const auto* Character = CastChecked<AmultiplayerCombatCharacter>(Target);
-	FRotator Rotation = FRotator::ZeroRotator;
-	if (GameplayCueTag == CombatTags::Cue_Attack)
-	{
-		const bool bHasLaunchSnapshot = !FVector(Parameters.Normal).IsNearlyZero();
-		Location = bHasLaunchSnapshot ? FVector(Parameters.Location) : Character->GetCombatMuzzleLocation();
-		Rotation = bHasLaunchSnapshot ? FVector(Parameters.Normal).Rotation() : Character->GetActorRotation();
-	}
-	else if (GameplayCueTag == CombatTags::Cue_Heal)
-		Location.Z -= Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	if (bUseCascade ? !Feedback->CascadeEffect.IsValid() : !Feedback->Effect.IsValid())
-		TraceCombatHealCue(TEXT("assetmissing"), Target, GameplayCueTag, Feedback, Location);
+	FVector Location; FRotator Rotation;
+	ResolveFeedbackTransform(Target, Parameters, *Feedback, Location, Rotation);
 	// 投射物尾迹由弹体持有；这里的 AttackFeedback 只能配置一次性起手效果。
 	if (bUseCascade)
 	{
 		if (auto* System = Feedback->CascadeEffect.Get())
-			if (auto* Component = UGameplayStatics::SpawnEmitterAtLocation(this, System, Location, Rotation))
+			if (auto* Component = UGameplayStatics::SpawnEmitterAtLocation(this, System, Location, Rotation, Feedback->Scale))
 			{
-				TraceCombatHealCue(TEXT("spawned-Cascade"), Target, GameplayCueTag, Feedback, Location, Component);
+				if (Feedback->bAttachToTarget)
+				{
+					Component->SetAbsolute(false, false, true);
+					Component->AttachToComponent(Target->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+				}
 				FTimerHandle Cleanup;
 				GetWorldTimerManager().SetTimer(Cleanup, FTimerDelegate::CreateWeakLambda(Component,
-					[Component] { Component->DestroyComponent(); }), 5.f, false);
+					[Component] { Component->DestroyComponent(); }), Feedback->CascadeCleanupDelay, false);
+				if (AreaFeedbackOwner.IsValid()) AreaFeedbackOwner->TrackAreaFeedback(Component, AreaFeedbackIdentity);
 			}
-			else TraceCombatHealCue(TEXT("spawnfailed-Cascade"), Target, GameplayCueTag, Feedback, Location);
 	}
 	else if (auto* System = Feedback->Effect.Get())
 	{
 		auto* Component = UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, System, Location, Rotation,
-			FVector::OneVector, true, false);
+			Feedback->Scale, true, false);
 		if (Component)
 		{
-			Component->SetVariableFloat(TEXT("User.Duration"), bGround ? .6f : GameplayCueTag == CombatTags::Cue_Heal ? .8f : .3f);
-			if (bGround) Component->SetVariableFloat(TEXT("User.Scale_All"),
+			if (!Feedback->DurationParameter.IsNone()) Component->SetVariableFloat(Feedback->DurationParameter, Feedback->Duration);
+			if (!Feedback->AreaScaleParameter.IsNone()) Component->SetVariableFloat(Feedback->AreaScaleParameter,
 				Parameters.RawMagnitude / Character->GetCombatConfig().AreaEffectReferenceRadius);
-			if (GameplayCueTag == CombatTags::Cue_Heal)
+			if (Feedback->bAttachToTarget)
 			{
-				// 护体治疗跟随受治疗者，脚底偏移只计算一次；角色缩放不放大粒子。
+				// 世界空间尺寸与位置跟随分开，由资产选择是否附着。
 				Component->SetAbsolute(false, false, true);
 				Component->AttachToComponent(Target->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
 			}
 			Component->Activate(true);
-			TraceCombatHealCue(TEXT("spawned-Niagara"), Target, GameplayCueTag, Feedback, Location, Component);
 			// 素材后续即使被误设为循环，瞬时命中特效也不能无限遗留在场景中。
 			FTimerHandle Cleanup;
 			GetWorldTimerManager().SetTimer(Cleanup, FTimerDelegate::CreateWeakLambda(Component,
-				[Component] { Component->DestroyComponent(); }), CombatTransientEffectLifetime, false);
+				[Component] { Component->DestroyComponent(); }), Feedback->NiagaraCleanupDelay, false);
+			if (AreaFeedbackOwner.IsValid()) AreaFeedbackOwner->TrackAreaFeedback(Component, AreaFeedbackIdentity);
 		}
-		else TraceCombatHealCue(TEXT("spawnfailed-Niagara"), Target, GameplayCueTag, Feedback, Location);
 	}
 	if (auto* Sound = Feedback->Sound.Get()) UGameplayStatics::PlaySoundAtLocation(this, Sound, Location);
 	// 瞬时 Cue 自身无需存活；生成的粒子由 Niagara 自动回收。
@@ -263,10 +228,22 @@ void AmultiplayerCombatCue::StartLoop(AActor* Target, const FGameplayCueParamete
 	if (GetNetMode() == NM_DedicatedServer) return;
 	if (GameplayCueTag == CombatTags::Cue_Casting)
 	{
-		const auto* Character = Cast<AmultiplayerCombatCharacter>(Target);
+		auto* Character = Cast<AmultiplayerCombatCharacter>(Target);
 		if (!Character) return;
 		// 小兵借用施法标签暂停追击，但它的近战扇区不是玩家 R 的地面落点圈。
 		if (UsesEnemyMelee(Character)) return;
+		if (const auto* Context = FmultiplayerCombatCueContext::Get(Parameters.EffectContext))
+		{
+			const auto Current = Character->GetAreaActivationIdentity();
+			if (Character->IsLocallyControlled() && Character->IsCasting() && Current.IsValid()
+				&& !Current.Matches(Context->ActivationIdentity)) return;
+			if (Context->ActivationIdentity.AuthorityRevision != 0)
+			{
+				if (!Character->AcceptAreaFeedbackIdentity(Context->ActivationIdentity)) return;
+			}
+			else if (Character->IsAreaFeedbackCancelled(Context->ActivationIdentity)) return;
+			AreaFeedbackIdentity = Context->ActivationIdentity;
+		}
 		const auto& Config = Character->GetCombatConfig();
 		if (const FHitResult* Hit = Parameters.EffectContext.GetHitResult())
 		{
@@ -277,7 +254,7 @@ void AmultiplayerCombatCue::StartLoop(AActor* Target, const FGameplayCueParamete
 		else if (!bHasMarkerLocation)
 			MarkerLocation = Character->GetAreaTarget(&MarkerNormal);
 		bHasMarkerLocation = true;
-		const FVector Size(32.f, Config.AreaRadius, Config.AreaRadius);
+		const FVector Size(Config.AreaMarkerDepth, Config.AreaRadius, Config.AreaRadius);
 		const FRotator Rotation = (-MarkerNormal).Rotation();
 		if (AreaMarker)
 		{
@@ -293,7 +270,17 @@ void AmultiplayerCombatCue::StartLoop(AActor* Target, const FGameplayCueParamete
 				LoadingAssets = UAssetManager::GetStreamableManager().RequestAsyncLoad(Config.AreaMarkerMaterial.ToSoftObjectPath(),
 					FStreamableDelegate::CreateWeakLambda(this, [this, Weak = TWeakObjectPtr<AActor>(Target)]
 					{
-						if (bLoopRequested && Weak.IsValid()) StartLoop(Weak.Get(), FGameplayCueParameters{});
+						if (!bLoopRequested || !Weak.IsValid()) return;
+						// 加载的是共享材质，不是旧施法结果；同一 Cue 被新轮次接替时服务当前身份。
+						// StartLoop 复核当前取消状态，保留 WhileActive 校正的落点，不重放旧 HitResult。
+						FGameplayCueParameters Resume;
+						if (AreaFeedbackIdentity.IsValid())
+						{
+							auto* Context = new FmultiplayerCombatCueContext();
+							Context->ActivationIdentity = AreaFeedbackIdentity;
+							Resume.EffectContext = FGameplayEffectContextHandle(Context);
+						}
+						StartLoop(Weak.Get(), Resume);
 					}));
 			return;
 		}
@@ -320,28 +307,28 @@ void AmultiplayerCombatCue::StartLoop(AActor* Target, const FGameplayCueParamete
 			}));
 		return;
 	}
-	FVector Location = Target->GetActorLocation();
-	const bool bDefense = GameplayCueTag == CombatTags::Cue_Defense;
-	if (bDefense)
-	{
-		// 护盾素材以脚底为原点，内部已将球心抬高；胶囊半高只在世界坐标中扣除一次。
-		const auto* Character = CastChecked<AmultiplayerCombatCharacter>(Target);
-		Location -= Character->GetActorUpVector() * Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	}
+	FVector Location; FRotator Rotation;
+	ResolveFeedbackTransform(Target, Parameters, *Feedback, Location, Rotation);
 	if (bUseCascade)
 	{
-		LoopCascadeEffect = UGameplayStatics::SpawnEmitterAttached(Feedback->CascadeEffect.Get(), Target->GetRootComponent(), NAME_None,
-			bDefense ? Location : FVector::ZeroVector, FRotator::ZeroRotator,
-			bDefense ? EAttachLocation::KeepWorldPosition : EAttachLocation::SnapToTarget, false);
+		LoopCascadeEffect = UGameplayStatics::SpawnEmitterAtLocation(this, Feedback->CascadeEffect.Get(), Location, Rotation, Feedback->Scale, false);
+		if (LoopCascadeEffect && Feedback->bAttachToTarget)
+		{
+			LoopCascadeEffect->SetAbsolute(false, false, true);
+			LoopCascadeEffect->AttachToComponent(Target->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+		}
 		return;
 	}
 	LoopEffect = UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Feedback->Effect.Get(), Location,
-		FRotator::ZeroRotator, FVector::OneVector, false, false);
+		Rotation, Feedback->Scale, false, false);
 	if (!LoopEffect) return;
-	LoopEffect->SetVariableFloat(TEXT("User.Duration"), 120.f);
+	if (!Feedback->DurationParameter.IsNone()) LoopEffect->SetVariableFloat(Feedback->DurationParameter, Feedback->LoopDuration);
 	// 位置跟随角色，尺寸保留素材的世界大小，避免 Niagara 的绝对位置使附着失效。
-	LoopEffect->SetAbsolute(false, false, true);
-	LoopEffect->AttachToComponent(Target->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+	if (Feedback->bAttachToTarget)
+	{
+		LoopEffect->SetAbsolute(false, false, true);
+		LoopEffect->AttachToComponent(Target->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+	}
 	LoopEffect->Activate(true);
 }
 
@@ -388,6 +375,8 @@ void AmultiplayerCombatCue::StopPresentation()
 	bExecutionLoadAttempted = false;
 	bHasExecutionFeedback = false;
 	ExecutionFeedback = {};
+	AreaFeedbackOwner.Reset();
+	AreaFeedbackIdentity = {};
 	bExecutionRangeShown = false;
 	bExecutionHealNotified = false;
 	bHasMarkerLocation = false;
@@ -397,20 +386,13 @@ void AmultiplayerCombatCue::StopPresentation()
 	if (AreaMarker) { AreaMarker->DestroyComponent(); AreaMarker = nullptr; }
 }
 
-// 缓存原图标并监听拥有者 Pawn 变化，随后订阅当前角色并补读状态。
+// 监听拥有者并初始化只读显示快照；图标资源由实际 WBP 默认值提供。
+// ===== 2. 战斗 HUD 数据适配：订阅 → 补读快照 → WBP 更新控件 =====
+// [亮点] 不把委托当作网络消息；绑定后补读当前值，角色替换/销毁时解绑。
 void UmultiplayerCombatWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
-	if (SkillBrushes.IsEmpty())
-	{
-		UImage* Icons[] = {AttackIcon, DefenseIcon, HealIcon, AreaIcon, DashIcon};
-		SkillBrushes.SetNum(5);
-		for (int32 Index = 0; Index < 5; ++Index)
-		{
-			if (Icons[Index]) SkillBrushes[Index] = Icons[Index]->GetBrush();
-			else SkillBrushes[Index].DrawAs = ESlateBrushDrawType::NoDrawType;
-		}
-	}
+	bPresentationReady = true;
 	ClearFeedback();
 	if (auto* Controller = GetOwningPlayer())
 	{
@@ -423,7 +405,9 @@ void UmultiplayerCombatWidget::NativeConstruct()
 void UmultiplayerCombatWidget::NativeDestruct()
 {
 	if (auto* Controller = GetOwningPlayer()) Controller->OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::BindPawn);
+	// 解绑先提交最后一份空快照，让真实 WBP 清除退出前的提示；之后再停止向已拆除的控件发布。
 	BindPawn(nullptr, nullptr);
+	bPresentationReady = false;
 	Super::NativeDestruct();
 }
 // 先释放旧 Pawn/ASC/整局状态的订阅，再绑定新对象并读取当前快照。
@@ -502,222 +486,150 @@ void UmultiplayerCombatWidget::HandleObjectiveChanged(int32 Activated, int32 Req
 // 按属性事件刷新血条与能量，再更新依赖资源的技能外观。
 void UmultiplayerCombatWidget::RefreshStats(float Health, float MaxHealth, float Energy, float MaxEnergy)
 {
-	CachedEnergy = Energy;
-	if (HealthBar) HealthBar->SetPercent(Health / FMath::Max(1.f, MaxHealth));
-	if (EnergyBar) EnergyBar->SetPercent(Energy / FMath::Max(1.f, MaxEnergy));
-	if (HealthText) HealthText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Health, MaxHealth)));
-	if (EnergyText) EnergyText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Energy, MaxEnergy)));
+	ViewHealthPercent = Health / FMath::Max(1.f, MaxHealth);
+	ViewEnergyPercent = Energy / FMath::Max(1.f, MaxEnergy);
+	ViewHealthText = FText::Format(TemplateText(TEXT("Vitals")), FormatNumber(Health, 0), FormatNumber(MaxHealth, 0));
+	ViewEnergyText = FText::Format(TemplateText(TEXT("Vitals")), FormatNumber(Energy, 0), FormatNumber(MaxEnergy, 0));
 	RefreshState();
 }
-// 从当前角色重新生成施法/救援显示与可用状态，不把缓存布尔值作为玩法依据。
-void UmultiplayerCombatWidget::RefreshState()
+// 文案模板由真实 WBP 配置，缺省时显示空文本。
+const FText& UmultiplayerCombatWidget::TemplateText(FName Key) const
 {
-	const auto* Current = Character.Get();
-	bAlive = Current && Current->IsAlive();
-	bReady = Current && Current->IsCombatReady();
-	const bool bRescuing = Current && Current->GetCoopComponent()->IsRescuing();
-	bCasting = Current && (Current->IsCasting() || bRescuing);
-	bStunned = Current && Current->IsStunned();
-	const ESlateVisibility CastVisibility = bCasting ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed;
-	if (CastingPanel) CastingPanel->SetVisibility(CastVisibility);
-	if (CastBar) CastBar->SetVisibility(CastVisibility);
-	if (CastText)
-	{
-		CastText->SetText(bCasting ? FText::FromString(bRescuing ? TEXT("救援引导") : TEXT("范围施法")) : FText::GetEmpty());
-		CastText->SetVisibility(CastVisibility);
-	}
-	RefreshTimers();
+	if (const FText* Value = TextTemplates.Find(Key)) return *Value;
+	return FText::GetEmpty();
 }
 
-// 只在事件或活动倒计时期间刷新；默认未成长的闲时 HUD 仍保留原来的空状态区。
+FText UmultiplayerCombatWidget::FormatNumber(float Value, int32 DecimalPlaces) const
+{
+	FNumberFormattingOptions Format; Format.MinimumFractionalDigits = Format.MaximumFractionalDigits = DecimalPlaces;
+	return FText::AsNumber(Value, &Format);
+}
+
 void UmultiplayerCombatWidget::RefreshStatusText()
 {
-	const auto* Current = Character.Get();
-	const auto* Coop = Current ? Current->GetCoopComponent() : nullptr;
-	const auto* SharedState = BoundGameState.Get();
-	if (StateText)
+	const auto* Current = Character.Get(); const auto* Coop = Current ? Current->GetCoopComponent() : nullptr; const auto* SharedState = BoundGameState.Get();
 	{
-		// 沿用原 HUD 的状态栏；多个效果同时显示，不用优先级覆盖把另一种限制藏起来。
-		TArray<FString> Status;
-		if (SharedState && SharedState->HasGameLost()) Status.Add(TEXT("本局失败 · Enter 重开"));
-		else if (SharedState && SharedState->HasGameWon()) Status.Add(TEXT("撤离成功 · Enter 重开"));
-		else if (!Current) Status.Add(TEXT("等待角色"));
-		else if (!bAlive) Status.Add(TEXT("已死亡 · Enter 重开"));
-		else if (Coop && Coop->IsDowned()) Status.Add(FString::Printf(TEXT("倒地 · 等待救援 %.1fs"), Coop->GetDownedRemaining()));
-		else if (!bReady) Status.Add(TEXT("正在连接"));
+		TArray<FText> Status;
+		if (SharedState && SharedState->HasGameLost()) Status.Add(TemplateText(TEXT("Lost")));
+		else if (SharedState && SharedState->HasGameWon()) Status.Add(TemplateText(TEXT("Won")));
+		else if (!Current) Status.Add(TemplateText(TEXT("Waiting")));
+		else if (!Current->IsAlive()) Status.Add(TemplateText(TEXT("Dead")));
+		else if (Coop && Coop->IsDowned()) Status.Add(FText::Format(TemplateText(TEXT("Downed")), FormatNumber(Coop->GetDownedRemaining(), 1)));
+		else if (!Current->IsCombatReady()) Status.Add(TemplateText(TEXT("Connecting")));
 		else
 		{
 			if (const auto* State = BoundGameState.Get(); State && State->GetEncounterState().TotalWaves > 0)
 			{
-				const auto Round = State->GetEncounterState();
-				const auto& Objective = State->GetObjectiveState();
-				const FString WaveLabel = Round.Wave == 0 ? TEXT("等待队友加入")
-					: FString::Printf(TEXT("波次 %d/%d · 敌人 %d"), Round.Wave, Round.TotalWaves, Round.LivingEnemies);
-				Status.Add(FString::Printf(TEXT("%s · 钥匙 %d/%d\n集齐钥匙 → 双人踩板 → 一起撤离\nShift 冲刺 · F 救援"),
-					*WaveLabel,Objective.ActivatedKeys,Objective.RequiredKeys));
+				const auto Round = State->GetEncounterState(); const auto& Objective = State->GetObjectiveState();
+				const FText WaveLabel = Round.Wave == 0 ? TemplateText(TEXT("WaitingPartner")) : FText::Format(TemplateText(TEXT("Wave")), Round.Wave, Round.TotalWaves, Round.LivingEnemies);
+				Status.Add(FText::Format(TemplateText(TEXT("Objectives")), WaveLabel, Objective.ActivatedKeys, Objective.RequiredKeys));
 			}
-			if (Current->GetShield() > 0) Status.Add(FString::Printf(TEXT("护盾 %.0f"), Current->GetShield()));
-			if (bStunned) Status.Add(TEXT("眩晕中"));
-			if (Current->IsRooted()) Status.Add(TEXT("禁锢中"));
-			if (Current->IsBurning()) Status.Add(TEXT("燃烧中"));
-			if (Current->IsDefending()) Status.Add(TEXT("防御中"));
-			if (Coop && Coop->IsRescuing()) Status.Add(FString::Printf(TEXT("救援中 %.0f%%"), Coop->GetRescueProgress() * 100.f));
-			if (Current->GetDashCooldownRemaining() > 0.f) Status.Add(FString::Printf(TEXT("冲刺 %.1fs"), Current->GetDashCooldownRemaining()));
-			if (const auto* Progression = BoundProgression.Get(); Progression &&
-				(Progression->GetState().Level > 1 || Progression->GetState().SkillPoints != 2))
-				Status.Add(FString::Printf(TEXT("Lv.%d · 点数%d · B成长"), Progression->GetState().Level, Progression->GetState().SkillPoints));
+			if (Current->GetShield() > 0) Status.Add(FText::Format(TemplateText(TEXT("Shield")), FormatNumber(Current->GetShield(), 0)));
+			if (Current->IsStunned()) Status.Add(TemplateText(TEXT("Stunned")));
+			if (Current->IsRooted()) Status.Add(TemplateText(TEXT("Rooted")));
+			if (Current->IsBurning()) Status.Add(TemplateText(TEXT("Burning")));
+			if (Current->IsDefending()) Status.Add(TemplateText(TEXT("Defending")));
+			if (Coop && Coop->IsRescuing()) Status.Add(FText::Format(TemplateText(TEXT("Rescuing")), FormatNumber(Coop->GetRescueProgress() * 100.f, 0)));
+			if (Current->GetDashCooldownRemaining() > 0.f) Status.Add(FText::Format(TemplateText(TEXT("DashCooldown")), FormatNumber(Current->GetDashCooldownRemaining(), 1)));
+			if (const auto* Progression = BoundProgression.Get(); Progression && (Progression->GetState().Level > 1 || Progression->GetState().SkillPoints != 2))
+				Status.Add(FText::Format(TemplateText(TEXT("ShortProgression")), Progression->GetState().Level, Progression->GetState().SkillPoints));
 		}
-		const FText State = FText::FromString(FString::Join(Status, TEXT(" · ")));
-		StateText->SetText(State);
-		StateText->SetVisibility(State.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+		ViewStateText = FText::Join(TemplateText(TEXT("Separator")), Status);
+		ViewStateVisibility = ViewStateText.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible;
 	}
-	if (ProgressionText)
 	{
 		const auto* Progression = BoundProgression.Get();
-		ProgressionText->SetText(Progression ? FText::FromString(FString::Printf(TEXT("Lv.%d  XP %d/%d  技能点 %d  [B 成长]"),
-			Progression->GetState().Level, Progression->GetState().Experience, Progression->GetState().Level * 100,
-			Progression->GetState().SkillPoints)) : FText::GetEmpty());
+		ViewProgressionText = Progression ? FText::Format(TemplateText(TEXT("Progression")), Progression->GetState().Level,
+			Progression->GetState().Experience, Progression->GetState().Level * 100, Progression->GetState().SkillPoints) : FText::GetEmpty();
 	}
 }
 // 用短时区域显示本次提示，新的消息替换旧消息并重置隐藏时间。
 void UmultiplayerCombatWidget::ShowFeedback(FText Message)
 {
-	if (FeedbackText) FeedbackText->SetText(Message);
-	if (FeedbackPanel) FeedbackPanel->SetVisibility(Message.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	ViewFeedbackText = Message;
+	ViewFeedbackVisibility = Message.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible;
+	if (bPresentationReady) PresentCombatSnapshot();
 	GetWorld()->GetTimerManager().ClearTimer(FeedbackTimer);
-	if (!Message.IsEmpty()) GetWorld()->GetTimerManager().SetTimer(FeedbackTimer, this, &ThisClass::ClearFeedback, 2.f, false);
+	if (!Message.IsEmpty()) GetWorld()->GetTimerManager().SetTimer(FeedbackTimer, this, &ThisClass::ClearFeedback, FeedbackLifetime, false);
 }
 // 撤销提示计时并清空显示；空文本不会遗留可见背景。
 void UmultiplayerCombatWidget::ClearFeedback()
 {
 	GetWorld()->GetTimerManager().ClearTimer(FeedbackTimer);
-	if (FeedbackText) FeedbackText->SetText(FText::GetEmpty());
-	if (FeedbackPanel) FeedbackPanel->SetVisibility(ESlateVisibility::Collapsed);
+	ViewFeedbackText = FText::GetEmpty();
+	ViewFeedbackVisibility = ESlateVisibility::Collapsed;
+	if (bPresentationReady) PresentCombatSnapshot();
 }
-// 更新活动冷却/读条数字和槽位图标；全部计时结束后停掉低频 Timer。
-void UmultiplayerCombatWidget::RefreshTimers()
+// 事件与活动倒计时共用一次快照刷新，不再缓存另一份角色权限或能量。
+// 全部计时结束后停掉低频 Timer，闲时仍只响应事件。
+void UmultiplayerCombatWidget::RefreshState()
 {
 	const auto* Current = Character.Get();
-	const auto& Config = Current ? Current->GetCombatConfig() : *GetDefault<UmultiplayerCombatConfig>();
-	UTextBlock* Labels[] = { AttackCooldownText, DefenseCooldownText, HealCooldownText, AreaCooldownText, DashCooldownText };
-	UProgressBar* Bars[] = { AttackCooldownBar, DefenseCooldownBar, HealCooldownBar, AreaCooldownBar, DashCooldownBar };
-	UBorder* Slots[] = { AttackSlot, DefenseSlot, HealSlot, AreaSlot, DashSlot };
-	UImage* Icons[] = { AttackIcon, DefenseIcon, HealIcon, AreaIcon, DashIcon };
 	const auto* Coop = Current ? Current->GetCoopComponent() : nullptr;
+	const bool bReady = Current && Current->IsCombatReady();
+	const bool bRescuing = Coop && Coop->IsRescuing();
+	const bool bCasting = Current && (Current->IsCasting() || bRescuing);
+	const bool bStunned = Current && Current->IsStunned();
+	const float Energy = Current ? Current->GetEnergy() : 0.f;
+	ViewCastVisibility = bCasting ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed;
+	ViewCastText = bCasting ? TemplateText(bRescuing ? TEXT("CastRescue") : TEXT("CastArea")) : FText::GetEmpty();
+	const auto& Config = Current ? Current->GetCombatConfig() : *GetDefault<UmultiplayerCombatConfig>();
+	FText* CooldownTexts[] = { &ViewAttackCooldownText, &ViewDefenseCooldownText, &ViewHealCooldownText, &ViewAreaCooldownText, &ViewDashCooldownText };
+	float* CooldownPercents[] = { &ViewAttackCooldownPercent, &ViewDefenseCooldownPercent, &ViewHealCooldownPercent, &ViewAreaCooldownPercent, &ViewDashCooldownPercent };
+	FText* Names[] = { &ViewAttackName, &ViewDefenseName, &ViewHealName, &ViewAreaName, &ViewDashName };
+	FSlateBrush* Brushes[] = { &ViewAttackBrush, &ViewDefenseBrush, &ViewHealBrush, &ViewAreaBrush, &ViewDashBrush };
+	FLinearColor* Tints[] = { &ViewAttackTint, &ViewDefenseTint, &ViewHealTint, &ViewAreaTint, &ViewDashTint };
 	const auto* Progression = BoundProgression.Get();
-	bool bHasActiveTimer = bCasting || (Coop && (Coop->IsDowned() || Coop->IsRescuing()));
+	bool bHasActiveTimer = bCasting || (Coop && Coop->IsDowned());
 	RefreshStatusText();
 	for (int32 Index = 0; Index < 5; ++Index)
 	{
 		const auto Skill = Progression ? Progression->GetSlotSkill(Index) : EMultiplayerCombatSkill(Index);
-		const float Remaining = CombatSkillCooldown(Current, Skill);
+		const float Remaining = Current ? Current->GetSkillCooldownRemaining(Skill) : 0.f;
 		const auto Rule = Current ? Current->GetSkillRule(Skill) : Config.GetSkill(Skill);
 		const bool bCoolingDown = Remaining > 0;
-		// 图标低成本概括资源与自身状态，不逐槽扫描目标/几何，也不承诺本次必能释放。
-		// 目标资格交给瞄准预览和正式能力；此处不作为第二套权威 CanActivate。
+		// This snapshot summarizes local resource/state only; it does not grant the skill or query targets.
 		const bool bAvailable = bReady && !bStunned && !bCasting && !bCoolingDown
-			&& CachedEnergy >= Rule.Cost && (!Progression || Progression->GetSkillLevel(Skill) > 0);
+			&& Energy >= Rule.Cost && (!Progression || Progression->GetSkillLevel(Skill) > 0);
 		bHasActiveTimer |= bCoolingDown;
-		if (Labels[Index]) Labels[Index]->SetText(bCoolingDown
-			? FText::FromString(FString::Printf(TEXT("%.1f"), Remaining)) : FText::GetEmpty());
-		if (Bars[Index]) Bars[Index]->SetPercent(FMath::Clamp(Remaining / FMath::Max(.05f, Rule.Cooldown), 0.f, 1.f));
-		if (auto* Name = Cast<UTextBlock>(GetWidgetFromName(FName(*FString::Printf(TEXT("SkillLabel%d"), Index)))))
-			Name->SetText(FText::FromString(CombatSkillName(Skill)));
-		if (Slots[Index])
-		{
-			// 技能槽只展示状态；不禁用整个容器，避免冷却数字一起变灰而难以辨认。
-			Slots[Index]->SetBrushColor(FLinearColor::Transparent);
-		}
-		// 可用性只改变图标亮度，不重画背景，也不影响冷却数字的可读性。
-		if (Icons[Index])
-		{
-			if (SkillBrushes.IsValidIndex(int32(Skill))) Icons[Index]->SetBrush(SkillBrushes[int32(Skill)]);
-			Icons[Index]->SetColorAndOpacity(bAvailable ? FLinearColor::White : FLinearColor(.4f, .4f, .4f, 1.f));
-		}
+		*CooldownTexts[Index] = bCoolingDown ? FormatNumber(Remaining, 1) : FText::GetEmpty();
+		*CooldownPercents[Index] = FMath::Clamp(Remaining / FMath::Max(.05f, Rule.Cooldown), 0.f, 1.f);
+		*Names[Index] = SkillNames.IsValidIndex(int32(Skill)) ? SkillNames[int32(Skill)] : FText::GetEmpty();
+		*Brushes[Index] = SkillIcons.IsValidIndex(int32(Skill)) ? SkillIcons[int32(Skill)] : FSlateBrush();
+		*Tints[Index] = bAvailable ? AvailableIconColor : UnavailableIconColor;
 	}
-	if (CastBar) CastBar->SetPercent(bCasting && Current
-		? (Coop && Coop->IsRescuing() ? Coop->GetRescueProgress() : Current->GetCastProgress()) : 0);
-	// 只有活动冷却或读条需要短时更新数字；空闲界面没有常驻轮询，也不重复查询血量。
+	ViewCastPercent = bCasting && Current ? (bRescuing ? Coop->GetRescueProgress() : Current->GetCastProgress()) : 0;
+	if (bPresentationReady) PresentCombatSnapshot();
+	// Keep the existing event-driven idle behavior: poll only while a countdown or cast is active.
 	FTimerManager& Timers = GetWorld()->GetTimerManager();
 	if (bHasActiveTimer)
 	{
-		if (!Timers.IsTimerActive(RefreshTimer)) Timers.SetTimer(RefreshTimer, this, &ThisClass::RefreshTimers, .1f, true);
+		if (!Timers.IsTimerActive(RefreshTimer)) Timers.SetTimer(RefreshTimer, this, &ThisClass::RefreshState, CountdownRefreshInterval, true);
 	}
 	else Timers.ClearTimer(RefreshTimer);
 }
 
-// 原生成长面板在 Slate 构建前生成树，不要求迁移或替换原来的 HUD 蓝图。
-TSharedRef<SWidget> UmultiplayerCombatProgressionWidget::RebuildWidget()
-{
-	if (!WidgetTree || !WidgetTree->RootWidget) BuildLayout();
-	return Super::RebuildWidget();
-}
-
-// 文字大小和控件名称固定，便于真实按钮测试；只影响附加面板自身。
-UTextBlock* UmultiplayerCombatProgressionWidget::AddLabel(UVerticalBox* Parent, FName Name, int32 Size)
-{
-	auto* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
-	FSlateFontInfo Font = Label->GetFont(); Font.Size = Size; Label->SetFont(Font);
-	Label->SetColorAndOpacity(FSlateColor(FLinearColor(.92f, .94f, .98f)));
-	Label->SetAutoWrapText(true); Parent->AddChildToVerticalBox(Label)->SetPadding(FMargin(0, 3)); return Label;
-}
-
-// 按钮只绑定窄业务入口，不把服务器快照直接写回客户端组件。
-UButton* UmultiplayerCombatProgressionWidget::AddButton(UHorizontalBox* Parent, FName Name, const TCHAR* Label)
-{
-	auto* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
-	auto* Text = WidgetTree->ConstructWidget<UTextBlock>(); Text->SetText(FText::FromString(Label));
-	FSlateFontInfo Font = Text->GetFont(); Font.Size = 15; Text->SetFont(Font);
-	Button->SetContent(Text); Button->SetBackgroundColor(FLinearColor(.16f, .24f, .34f));
-	auto* ButtonSlot = Parent->AddChildToHorizontalBox(Button); ButtonSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ButtonSlot->SetPadding(FMargin(2, 4));
-	return Button;
-}
-
-// 一个小面板覆盖在游戏上，保留原界面所有组件与位置。
-void UmultiplayerCombatProgressionWidget::BuildLayout()
-{
-	if (!WidgetTree) WidgetTree = NewObject<UWidgetTree>(this, TEXT("WidgetTree"));
-	SetIsFocusable(true);
-	auto* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(); WidgetTree->RootWidget = Canvas;
-	auto* Panel = WidgetTree->ConstructWidget<UBorder>(); Panel->SetPadding(FMargin(18));
-	Panel->SetBrushColor(FLinearColor(.025f, .035f, .055f, .96f));
-	auto* Position = Canvas->AddChildToCanvas(Panel); Position->SetAnchors(FAnchors(.5f, .5f));
-	Position->SetAlignment(FVector2D(.5f, .5f)); Position->SetAutoSize(true);
-	auto* Size = WidgetTree->ConstructWidget<USizeBox>(); Size->SetWidthOverride(620); Panel->SetContent(Size);
-	auto* Lines = WidgetTree->ConstructWidget<UVerticalBox>(); Size->SetContent(Lines);
-	AddLabel(Lines, TEXT("ProgressionTitle"), 22)->SetText(FText::FromString(TEXT("成长与技能  [B / Esc 关闭]")));
-	SummaryText = AddLabel(Lines, TEXT("ProgressionSummary"), 18);
-	SkillsText = AddLabel(Lines, TEXT("ProgressionSkills"));
-	SelectedSkillText = AddLabel(Lines, TEXT("ProgressionSelectedSkill"));
-	auto* SkillRow = WidgetTree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(SkillRow);
-	AddButton(SkillRow, TEXT("PreviousSkillButton"), TEXT("上个技能"))->OnClicked.AddDynamic(this, &ThisClass::PreviousSkill);
-	AddButton(SkillRow, TEXT("NextSkillButton"), TEXT("下个技能"))->OnClicked.AddDynamic(this, &ThisClass::NextSkill);
-	LearnSkillButton = AddButton(SkillRow, TEXT("LearnSkillButton"), TEXT("学习 / 升级 (-1点)")); LearnSkillButton->OnClicked.AddDynamic(this, &ThisClass::LearnSkill);
-	SlotText = AddLabel(Lines, TEXT("ProgressionSelectedSlot"));
-	auto* SlotRow = WidgetTree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(SlotRow);
-	AddButton(SlotRow, TEXT("PreviousSlotButton"), TEXT("上个槽位"))->OnClicked.AddDynamic(this, &ThisClass::PreviousSlot);
-	AddButton(SlotRow, TEXT("NextSlotButton"), TEXT("下个槽位"))->OnClicked.AddDynamic(this, &ThisClass::NextSlot);
-	EquipSkillButton = AddButton(SlotRow, TEXT("EquipSkillButton"), TEXT("装配所选技能")); EquipSkillButton->OnClicked.AddDynamic(this, &ThisClass::EquipSkill);
-	PassivesText = AddLabel(Lines, TEXT("ProgressionPassives")); SelectedPassiveText = AddLabel(Lines, TEXT("ProgressionSelectedPassive"));
-	auto* PassiveRow = WidgetTree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(PassiveRow);
-	AddButton(PassiveRow, TEXT("PreviousPassiveButton"), TEXT("上个被动"))->OnClicked.AddDynamic(this, &ThisClass::PreviousPassive);
-	AddButton(PassiveRow, TEXT("NextPassiveButton"), TEXT("下个被动"))->OnClicked.AddDynamic(this, &ThisClass::NextPassive);
-	LearnPassiveButton = AddButton(PassiveRow, TEXT("LearnPassiveButton"), TEXT("学习被动 (-1点)")); LearnPassiveButton->OnClicked.AddDynamic(this, &ThisClass::LearnPassive);
-	auto* EquipRow = WidgetTree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(EquipRow);
-	EquipPassiveButton = AddButton(EquipRow, TEXT("EquipPassiveButton"), TEXT("装配被动")); EquipPassiveButton->OnClicked.AddDynamic(this, &ThisClass::EquipPassive);
-	UnequipPassiveButton = AddButton(EquipRow, TEXT("UnequipPassiveButton"), TEXT("卸下被动")); UnequipPassiveButton->OnClicked.AddDynamic(this, &ThisClass::UnequipPassive);
-	auto* FileRow = WidgetTree->ConstructWidget<UHorizontalBox>(); Lines->AddChildToVerticalBox(FileRow);
-	SaveButton = AddButton(FileRow, TEXT("SaveProgressButton"), TEXT("保存成长 [F5]")); SaveButton->OnClicked.AddDynamic(this, &ThisClass::SaveProgress);
-	LoadButton = AddButton(FileRow, TEXT("LoadProgressButton"), TEXT("读取成长 [F9]")); LoadButton->OnClicked.AddDynamic(this, &ThisClass::LoadProgress);
-	AddButton(FileRow, TEXT("CloseProgressionButton"), TEXT("关闭"))->OnClicked.AddDynamic(this, &ThisClass::CloseMenu);
-	MenuMessage = AddLabel(Lines, TEXT("ProgressionMessage"), 14);
-	MenuMessage->SetText(FText::FromString(TEXT("学习每级花1点，技能等级不能超过角色等级。装配已有技能会交换槽位；施法期间不能换装。")));
-}
-
 // 打开先监听角色替换，再绑定当前角色并补读快照；真实视口中接管焦点和鼠标。
+// ===== 3. 成长菜单：本地选择与业务请求，不持有第二份成长状态 =====
 void UmultiplayerCombatProgressionWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	bPresentationReady = true;
+	// 绑定真实蓝图按钮；重复创建 Slate 时不重复注册请求。
+	if (PreviousSkillButton) PreviousSkillButton->OnClicked.AddUniqueDynamic(this, &ThisClass::PreviousSkill);
+	if (NextSkillButton) NextSkillButton->OnClicked.AddUniqueDynamic(this, &ThisClass::NextSkill);
+	if (LearnSkillButton) LearnSkillButton->OnClicked.AddUniqueDynamic(this, &ThisClass::LearnSkill);
+	if (PreviousSlotButton) PreviousSlotButton->OnClicked.AddUniqueDynamic(this, &ThisClass::PreviousSlot);
+	if (NextSlotButton) NextSlotButton->OnClicked.AddUniqueDynamic(this, &ThisClass::NextSlot);
+	if (EquipSkillButton) EquipSkillButton->OnClicked.AddUniqueDynamic(this, &ThisClass::EquipSkill);
+	if (PreviousPassiveButton) PreviousPassiveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::PreviousPassive);
+	if (NextPassiveButton) NextPassiveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::NextPassive);
+	if (LearnPassiveButton) LearnPassiveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::LearnPassive);
+	if (EquipPassiveButton) EquipPassiveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::EquipPassive);
+	if (UnequipPassiveButton) UnequipPassiveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::UnequipPassive);
+	if (SaveProgressButton) SaveProgressButton->OnClicked.AddUniqueDynamic(this, &ThisClass::SaveProgress);
+	if (LoadProgressButton) LoadProgressButton->OnClicked.AddUniqueDynamic(this, &ThisClass::LoadProgress);
+	if (CloseProgressionButton) CloseProgressionButton->OnClicked.AddUniqueDynamic(this, &ThisClass::CloseMenu);
 	if (auto* Controller = GetOwningPlayer())
 	{
 		Controller->OnPossessedPawnChanged.AddUniqueDynamic(this, &ThisClass::BindPawn);
@@ -734,6 +646,21 @@ void UmultiplayerCombatProgressionWidget::NativeConstruct()
 // 关闭先解绑，之后恢复游戏输入；没有轮询计时器需要继续留在后台。
 void UmultiplayerCombatProgressionWidget::NativeDestruct()
 {
+	bPresentationReady = false;
+	if (PreviousSkillButton) PreviousSkillButton->OnClicked.RemoveDynamic(this, &ThisClass::PreviousSkill);
+	if (NextSkillButton) NextSkillButton->OnClicked.RemoveDynamic(this, &ThisClass::NextSkill);
+	if (LearnSkillButton) LearnSkillButton->OnClicked.RemoveDynamic(this, &ThisClass::LearnSkill);
+	if (PreviousSlotButton) PreviousSlotButton->OnClicked.RemoveDynamic(this, &ThisClass::PreviousSlot);
+	if (NextSlotButton) NextSlotButton->OnClicked.RemoveDynamic(this, &ThisClass::NextSlot);
+	if (EquipSkillButton) EquipSkillButton->OnClicked.RemoveDynamic(this, &ThisClass::EquipSkill);
+	if (PreviousPassiveButton) PreviousPassiveButton->OnClicked.RemoveDynamic(this, &ThisClass::PreviousPassive);
+	if (NextPassiveButton) NextPassiveButton->OnClicked.RemoveDynamic(this, &ThisClass::NextPassive);
+	if (LearnPassiveButton) LearnPassiveButton->OnClicked.RemoveDynamic(this, &ThisClass::LearnPassive);
+	if (EquipPassiveButton) EquipPassiveButton->OnClicked.RemoveDynamic(this, &ThisClass::EquipPassive);
+	if (UnequipPassiveButton) UnequipPassiveButton->OnClicked.RemoveDynamic(this, &ThisClass::UnequipPassive);
+	if (SaveProgressButton) SaveProgressButton->OnClicked.RemoveDynamic(this, &ThisClass::SaveProgress);
+	if (LoadProgressButton) LoadProgressButton->OnClicked.RemoveDynamic(this, &ThisClass::LoadProgress);
+	if (CloseProgressionButton) CloseProgressionButton->OnClicked.RemoveDynamic(this, &ThisClass::CloseMenu);
 	if (auto* Controller = GetOwningPlayer()) Controller->OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::BindPawn);
 	BindPawn(nullptr, nullptr);
 	if (bOwnsInputMode)
@@ -786,44 +713,41 @@ void UmultiplayerCombatProgressionWidget::HandlePawnDestroyed(AActor* Actor) { B
 // 属性通知仅用于更新可操作资格，真正数据仍读取成长快照。
 void UmultiplayerCombatProgressionWidget::HandleStats(float Health, float MaxHealth, float Energy, float MaxEnergy) { RefreshMenu(); }
 // 存取结果由服务器消息进入菜单，客户端不假定异步请求已经成功。
-void UmultiplayerCombatProgressionWidget::ShowMessage(FText Message) { if (MenuMessage) MenuMessage->SetText(Message); }
+void UmultiplayerCombatProgressionWidget::ShowMessage(FText Message) { ViewMessage = Message; if (bPresentationReady) PresentProgressionSnapshot(); }
 
-// 只有事件或选择改变才刷新，等级、装配和按钮资格使用同一个已提交快照。
+// 文案模板和名称取自真实 WBP，原生只填充快照数值并刷新按钮请求资格。
 void UmultiplayerCombatProgressionWidget::RefreshMenu()
 {
-	if (!SummaryText) return;
 	const auto* Current = Character.Get(); const auto* Progression = BoundProgression.Get();
 	const FmultiplayerCombatProgressionState State = Progression ? Progression->CaptureState() : FmultiplayerCombatProgressionState();
 	const bool bHasProfile = Progression && State.ProfileId.IsValid();
-	SummaryText->SetText(bHasProfile ? FText::FromString(FString::Printf(TEXT("Lv.%d    XP %d / %d    技能点 %d"), State.Level, State.Experience, State.Level * 100, State.SkillPoints))
-		: FText::FromString(TEXT("等待角色 / 成长数据同步")));
-	TArray<FString> SkillLines;
+	const auto Name = [](const TArray<FText>& Names, int32 Index) { return Names.IsValidIndex(Index) ? Names[Index] : FText::GetEmpty(); };
+	ViewSummary = bHasProfile ? FText::Format(SummaryFormat, State.Level, State.Experience, State.Level * 100, State.SkillPoints) : WaitingText;
+	TArray<FText> SkillLines;
 	for (int32 Index = 0; Index < 5; ++Index)
 	{
 		const auto Skill = EMultiplayerCombatSkill(Index); const int32 Level = Progression ? Progression->GetSkillLevel(Skill) : 0;
 		const int32 SkillSlotIndex = State.Slots.IndexOfByKey(Skill);
-		SkillLines.Add(FString::Printf(TEXT("%s  %s  ·  槽%d [%s]"), CombatSkillName(Skill),
-			*(Level > 0 ? FString::Printf(TEXT("Lv.%d"), Level) : FString(TEXT("未学习"))), SkillSlotIndex + 1, CombatSlotKey(SkillSlotIndex)));
+		SkillLines.Add(FText::Format(SkillLineFormat, Name(SkillNames, Index), Level > 0 ? FText::Format(SkillLevelFormat, Level) : UnlearnedText,
+			SkillSlotIndex + 1, Name(SlotKeys, SkillSlotIndex)));
 	}
-	SkillsText->SetText(FText::FromString(FString::Join(SkillLines, TEXT("\n"))));
+	ViewSkills = FText::Join(FText::FromString(TEXT("\n")), SkillLines);
 	const int32 SkillLevel = Progression ? Progression->GetSkillLevel(EMultiplayerCombatSkill(SelectedSkill)) : 0;
-	const FString SkillLevelLabel = SkillLevel > 0 ? FString::Printf(TEXT("Lv.%d"), SkillLevel) : TEXT("未学习（可花1点解锁）");
-	SelectedSkillText->SetText(FText::FromString(FString::Printf(TEXT("当前技能：%s  %s"), CombatSkillName(EMultiplayerCombatSkill(SelectedSkill)),
-		*SkillLevelLabel)));
-	SlotText->SetText(FText::FromString(FString::Printf(TEXT("目标槽%d [%s]：%s"), SelectedSlot + 1, CombatSlotKey(SelectedSlot), CombatSkillName(State.Slots[SelectedSlot]))));
-	const TCHAR* PassiveNames[] = {TEXT("无"), TEXT("坚韧"), TEXT("强攻")};
-	PassivesText->SetText(FText::FromString(FString::Printf(TEXT("被动：坚韧 Lv.%d (+20生命/级)  ·  强攻 Lv.%d (+5攻击/级)\n当前装配：%s"),
-		State.PassiveLevels[0], State.PassiveLevels[1], PassiveNames[int32(State.EquippedPassive)])));
+	ViewSelectedSkill = FText::Format(SelectedSkillFormat, Name(SkillNames, SelectedSkill),
+		SkillLevel > 0 ? FText::Format(SkillLevelFormat, SkillLevel) : UnlockText);
+	ViewSelectedSlot = FText::Format(SlotFormat, SelectedSlot + 1, Name(SlotKeys, SelectedSlot), Name(SkillNames, int32(State.Slots[SelectedSlot])));
+	ViewPassives = FText::Format(PassivesFormat, State.PassiveLevels[0], State.PassiveLevels[1], Name(PassiveNames, int32(State.EquippedPassive)));
 	const int32 PassiveLevel = State.PassiveLevels[SelectedPassive];
-	SelectedPassiveText->SetText(FText::FromString(FString::Printf(TEXT("选择被动：%s  Lv.%d"), PassiveNames[SelectedPassive + 1], PassiveLevel)));
+	ViewSelectedPassive = FText::Format(SelectedPassiveFormat, Name(PassiveNames, SelectedPassive + 1), PassiveLevel);
 	bool bCanChange = bHasProfile && Current && Current->IsCombatReady();
 	if (const auto* ASC = BoundAbilitySystem.Get()) for (const auto& Spec : ASC->GetActivatableAbilities()) if (Spec.IsActive()) bCanChange = false;
-	LearnSkillButton->SetIsEnabled(bCanChange && SkillLevel < 3 && State.SkillPoints > 0 && State.Level >= SkillLevel + 1);
-	EquipSkillButton->SetIsEnabled(bCanChange && SkillLevel > 0);
-	LearnPassiveButton->SetIsEnabled(bCanChange && PassiveLevel < 3 && State.SkillPoints > 0 && State.Level >= PassiveLevel + 1);
-	EquipPassiveButton->SetIsEnabled(bCanChange && PassiveLevel > 0);
-	UnequipPassiveButton->SetIsEnabled(bCanChange && State.EquippedPassive != EMultiplayerCombatPassive::None);
-	SaveButton->SetIsEnabled(bHasProfile && Current && Current->IsCombatReady()); LoadButton->SetIsEnabled(bCanChange);
+	ViewCanLearnSkill = bCanChange && SkillLevel < 3 && State.SkillPoints > 0 && State.Level >= SkillLevel + 1;
+	ViewCanEquipSkill = bCanChange && SkillLevel > 0;
+	ViewCanLearnPassive = bCanChange && PassiveLevel < 3 && State.SkillPoints > 0 && State.Level >= PassiveLevel + 1;
+	ViewCanEquipPassive = bCanChange && PassiveLevel > 0;
+	ViewCanUnequipPassive = bCanChange && State.EquippedPassive != EMultiplayerCombatPassive::None;
+	ViewCanSaveProgress = bHasProfile && Current && Current->IsCombatReady(); ViewCanLoadProgress = bCanChange;
+	if (bPresentationReady) PresentProgressionSnapshot();
 }
 
 // 前后选择仅改变本地菜单光标，不向服务器提交成长状态。
@@ -853,163 +777,7 @@ void UmultiplayerCombatProgressionWidget::SaveProgress() { if (auto* P = Charact
 // 经角色所属连接请求读档，不在本地自行替换成长快照。
 void UmultiplayerCombatProgressionWidget::LoadProgress() { if (auto* P = Character.Get()) P->LoadProgress(); }
 
-// 创建各端独立的世界血条组件，不复制朝向或 UI 对象。
-// 只同步玩法数值，朝向本地镜头；内容事件重绘不等于取消距离/朝向更新或保证固定帧率。
-UmultiplayerEnemyHealthWidgetComponent::UmultiplayerEnemyHealthWidgetComponent()
-{
-	ConfigureWorldDefaults();
-	SetIsReplicatedByDefault(false);
-}
-
-// 统一世界空间、深度遮挡与手动重绘设置，保留原素材内部布局。
-void UmultiplayerEnemyHealthWidgetComponent::ConfigureWorldDefaults()
-{
-	SetWidgetSpace(EWidgetSpace::World);
-	SetDrawSize(FVector2D(180.f, 30.f));
-	SetDrawAtDesiredSize(false);
-	SetPivot(FVector2D(.5f, 1.f));
-	SetBlendMode(EWidgetBlendMode::Masked);
-	SetTwoSided(true);
-	SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	SetGenerateOverlapEvents(false);
-	SetWindowFocusable(false);
-	bReceiveHardwareInput = false;
-	SetCastShadow(false);
-	SetVisibleInRayTracing(false);
-	SetManuallyRedraw(true);
-	SetRedrawTime(0.f);
-	SetTickWhenOffscreen(false);
-	SetMaterial(0, nullptr); // 使用正常深度检测的引擎 Masked 材质，不穿墙。
-}
-
-// 仅在有画面的世界创建 UMG，专服连 Widget 实例也不生成。
-void UmultiplayerEnemyHealthWidgetComponent::InitWidget()
-{
-	// PIE 的 DS 世界也不创建 UI，不能只依赖进程级 IsRunningDedicatedServer。
-	if (GetWorld() && GetWorld()->GetNetMode() == NM_DedicatedServer)
-	{
-		SetTickMode(ETickMode::Disabled);
-		return;
-	}
-	Super::InitWidget();
-}
-
-// 在引擎创建 Renderer 前落实世界空间，防止旧蓝图值把血条切回屏幕空间。
-void UmultiplayerEnemyHealthWidgetComponent::OnRegister()
-{
-	// Renderer 在 Super::OnRegister 按 Space 创建；先消除旧蓝图的 Screen 覆盖，不能等 BeginPlay 才改。
-	ConfigureWorldDefaults();
-	Super::OnRegister();
-}
-
-// 绑定观察角色并设置头顶锚点、独立尺寸和事件驱动内容。
-void UmultiplayerEnemyHealthWidgetComponent::InitializeForCharacter(AmultiplayerCombatCharacter* NewCharacter)
-{
-	Character = NewCharacter;
-	if (!NewCharacter || NewCharacter->GetNetMode() == NM_DedicatedServer)
-	{
-		StopPresentation();
-		return;
-	}
-	bPresentationStopped = false;
-	// BP 可能存有旧 Screen/绝对变换；这里只纠正本实例，不改原素材布局。
-	ConfigureWorldDefaults();
-	const FVector Anchor = NewCharacter->GetCapsuleComponent()->GetComponentTransform().TransformPosition(
-		FVector(0.f, 0.f, NewCharacter->GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight() + 28.f));
-	AttachToComponent(NewCharacter->GetMesh(), FAttachmentTransformRules::KeepWorldTransform);
-	SetAbsolute(false, true, true);
-	SetWorldLocation(Anchor);
-	// 180x30 像素对应 72x12cm；不受源角色 Mesh 的缩放和旋转影响。
-	SetWorldScale3D(FVector(.4f));
-	SetTickMode(ETickMode::Enabled);
-	SetHiddenInGame(false);
-	InitWidget();
-	if (auto* Health = Cast<UmultiplayerEnemyHealthWidget>(GetUserWidgetObject()))
-	{
-		Health->SetPresentationComponent(this);
-		Health->BindCharacter(NewCharacter);
-	}
-	RequestRedraw();
-}
-
-// 隐藏并解绑血条、释放 Widget、停止 Tick；死亡和 EndPlay 共用此入口。
-void UmultiplayerEnemyHealthWidgetComponent::StopPresentation()
-{
-	bPresentationStopped = true;
-	SetHiddenInGame(true);
-	if (auto* Health = Cast<UmultiplayerEnemyHealthWidget>(GetUserWidgetObject()))
-	{
-		Health->BindCharacter(nullptr);
-		Health->SetPresentationComponent(nullptr);
-	}
-	SetWidget(nullptr);
-	SetTickMode(ETickMode::Disabled);
-}
-
-// 只有显示数据变化时请求 RenderTarget 重绘，死亡则立即停止表现。
-void UmultiplayerEnemyHealthWidgetComponent::NotifyContentChanged()
-{
-	if (bPresentationStopped) return;
-	++ContentRevision;
-	if (const auto* Enemy = Character.Get(); !Enemy || !Enemy->IsAlive()) StopPresentation();
-	else RequestRedraw();
-}
-
-// 按本地镜头调整朝向并做距离隐藏；重新可见时补读数值，不同步展示旋转。
-void UmultiplayerEnemyHealthWidgetComponent::UpdateForView(const FVector& ViewLocation)
-{
-	if (bPresentationStopped) return;
-	const auto* Enemy = Character.Get();
-	if (!Enemy || !Enemy->IsAlive()) { StopPresentation(); return; }
-	const bool bInRange = FVector::DistSquared(ViewLocation, GetComponentLocation()) <= FMath::Square(3000.f);
-	const bool bWasHidden = bHiddenInGame;
-	SetHiddenInGame(!bInRange);
-	if (!bInRange) return;
-	FRotator Facing = (ViewLocation - GetComponentLocation()).Rotation();
-	Facing.Roll = 0.f;
-	SetWorldRotation(Facing);
-	if (bWasHidden)
-	{
-		if (auto* Health = Cast<UmultiplayerEnemyHealthWidget>(GetUserWidgetObject())) Health->RefreshSnapshot();
-		RequestRedraw();
-	}
-}
-
-// Tick 做镜头朝向、距离/存活筛选与可见绘制；血量文本和进度内容由属性事件刷新。
-void UmultiplayerEnemyHealthWidgetComponent::TickComponent(float DeltaSeconds, ELevelTick TickType,
-	FActorComponentTickFunction* TickFunction)
-{
-	if (bPresentationStopped) return;
-	if (auto* Viewer = GetWorld()->GetFirstPlayerController(); Viewer && Viewer->IsLocalController())
-	{
-		FVector Location; FRotator Rotation;
-		Viewer->GetPlayerViewPoint(Location, Rotation);
-		UpdateForView(Location);
-	}
-	// 镜头朝向只改组件变换；纯数值未变时，手动重绘不会再次生成 RenderTarget 内容。
-	if (!bPresentationStopped && !bHiddenInGame) Super::TickComponent(DeltaSeconds, TickType, TickFunction);
-}
-
-// 退出世界前结束观察与绘制，避免旧角色血条继续工作。
-void UmultiplayerEnemyHealthWidgetComponent::EndPlay(EEndPlayReason::Type Reason)
-{
-	StopPresentation();
-	Super::EndPlay(Reason);
-}
-
-// 将重绘接收器传给实际条形控件，兼容素材的外层嵌套 Widget。
-void UmultiplayerEnemyHealthWidget::SetPresentationComponent(UmultiplayerEnemyHealthWidgetComponent* Component)
-{
-	PresentationComponent = Component;
-	if (Health) Health->SetPresentationComponent(Component);
-}
-
-// 主动补读当前生命，用于刚绑定、重建或从距离隐藏恢复时的初始化。
-void UmultiplayerEnemyHealthWidget::RefreshSnapshot()
-{
-	if (Health) Health->RefreshSnapshot();
-	else if (auto* Enemy = ObservedCharacter.Get()) RefreshHealth(Enemy->GetHealth(), Enemy->GetMaxHealth(), 0.f, 0.f);
-}
+// ===== 4. 存量血条 Widget 父类：只供旧素材读取，当前敌人不创建或绑定 =====
 
 // 先解绑旧观察对象，再由最内层血条订阅一次生命事件并补读快照。
 void UmultiplayerEnemyHealthWidget::BindCharacter(AmultiplayerCombatCharacter* NewCharacter)
@@ -1021,9 +789,9 @@ void UmultiplayerEnemyHealthWidget::BindCharacter(AmultiplayerCombatCharacter* N
 	if (Health)
 	{
 		// 外层只转交观察对象，实际生命事件由内层条形控件订阅一次。
-		Health->SetPresentationComponent(PresentationComponent.Get());
 		Health->BindCharacter(NewCharacter);
-		SetVisibility(NewCharacter ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		ViewVisibility = NewCharacter ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed;
+		if (bPresentationReady) PresentHealthSnapshot();
 		return;
 	}
 	if (NewCharacter)
@@ -1032,43 +800,43 @@ void UmultiplayerEnemyHealthWidget::BindCharacter(AmultiplayerCombatCharacter* N
 		NewCharacter->OnCombatStatsChanged.AddUniqueDynamic(this, &ThisClass::RefreshHealth);
 		RefreshHealth(NewCharacter->GetHealth(), NewCharacter->GetMaxHealth(), 0, 0);
 	}
-	else SetVisibility(ESlateVisibility::Collapsed);
+	else { ViewVisibility = ESlateVisibility::Collapsed; if (bPresentationReady) PresentHealthSnapshot(); }
 }
 
 // Slate 重建后恢复对弱观察对象的订阅。
 void UmultiplayerEnemyHealthWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	bPresentationReady = true;
 	BindCharacter(ObservedCharacter.Get());
 }
 
 // 解除活动订阅但保留弱观察意图，以便正常的 Slate 重建恢复。
 void UmultiplayerEnemyHealthWidget::NativeDestruct()
 {
+	bPresentationReady = false;
 	if (auto* Previous = BoundCharacter.Get()) Previous->OnCombatStatsChanged.RemoveDynamic(this, &ThisClass::RefreshHealth);
 	BoundCharacter.Reset();
 	LastDisplayedHealth = LastDisplayedMaxHealth = -1.f;
 	if (Health) Health->BindCharacter(nullptr);
-	// 保留弱观察对象，Slate 重建后重新订阅；敌人 EndPlay 会明确 BindCharacter(nullptr)。
+	// 仅保留存量素材的 Slate 重建语义；当前敌人没有绑定或展示这套 Widget。
 	Super::NativeDestruct();
 }
 
-// 生命显示实际变化才更新文字/进度并通知重绘；不复用源素材的独立属性逻辑。
+// 保留存量布局的只读快照更新，不再持有世界组件或申请 RenderTarget 重绘。
 void UmultiplayerEnemyHealthWidget::RefreshHealth(float CurrentHealth, float MaxHealth, float Energy, float MaxEnergy)
 {
-	// 角色的能量/护盾也广播 Stats；生命显示未变化时不格式化文字、不请求 RT 重绘。
 	if (CurrentHealth == LastDisplayedHealth && MaxHealth == LastDisplayedMaxHealth) return;
-	LastDisplayedHealth = CurrentHealth;
-	LastDisplayedMaxHealth = MaxHealth;
-	const float Percent = FMath::Clamp(CurrentHealth / FMath::Max(1.f, MaxHealth), 0.f, 1.f);
-	if (HealthBar) HealthBar->SetPercent(Percent);
-	// 保留源布局的底层条形样式，不运行源蓝图的平滑计时器或逐帧查询。
-	if (LerpAttributeBar) LerpAttributeBar->SetPercent(Percent);
-	if (HealthText) HealthText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), CurrentHealth, MaxHealth)));
-	SetVisibility(CurrentHealth > 0 && ObservedCharacter.IsValid() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-	if (auto* Component = PresentationComponent.Get()) Component->NotifyContentChanged();
+	LastDisplayedHealth = CurrentHealth; LastDisplayedMaxHealth = MaxHealth;
+	ViewHealthPercent = FMath::Clamp(CurrentHealth / FMath::Max(1.f, MaxHealth), 0.f, 1.f);
+	FNumberFormattingOptions Format; Format.MinimumFractionalDigits = Format.MaximumFractionalDigits = 0;
+	ViewHealthText = FText::Format(HealthTextFormat, FText::AsNumber(CurrentHealth, &Format), FText::AsNumber(MaxHealth, &Format));
+	ViewVisibility = CurrentHealth > 0 && ObservedCharacter.IsValid() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed;
+	if (bPresentationReady) PresentHealthSnapshot();
 }
 
+// ===== 5. Canvas 范围数据：C++ 查询/投影，唯一 HUD 蓝图执行绘制 =====
+// [边界] 预览是本地当前结果，不是服务器授权；粒子大小也不代表伤害范围。
 // 本地创建一份已配置 HUD 控件并恢复游戏输入，专服不参与 UI 构建。
 void AmultiplayerCombatHUD::BeginPlay()
 {
@@ -1119,38 +887,67 @@ bool AmultiplayerCombatHUD::IsRangePointVisible(const FVector& Location)
 	return bVisible;
 }
 
+// 屏幕记录只保存本帧只读结果；这些方法不提交 Canvas 绘制命令。
+void AmultiplayerCombatHUD::AppendScreenSegment(float AX, float AY, float BX, float BY, const FLinearColor& Color, float Thickness)
+{
+	auto& Line = HUDLines.AddDefaulted_GetRef(); Line.StartScreenX = AX; Line.StartScreenY = AY;
+	Line.EndScreenX = BX; Line.EndScreenY = BY; Line.LineColor = Color; Line.LineThickness = Thickness;
+}
+
+void AmultiplayerCombatHUD::AppendScreenLabel(const FText& Text, float X, float Y, const FLinearColor& Color, float Scale)
+{
+	const auto Add = [this, &Text, Scale](float PX, float PY, const FLinearColor& Tint)
+	{
+		auto& Label = HUDTexts.AddDefaulted_GetRef(); Label.Text = Text.ToString(); Label.ScreenX = PX; Label.ScreenY = PY;
+		Label.TextColor = Tint; Label.Font = Presentation.Font; Label.Scale = Scale;
+	};
+	Add(X + Presentation.ShadowOffset.X, Y + Presentation.ShadowOffset.Y, Presentation.ShadowColor); Add(X, Y, Color);
+}
+
+FText AmultiplayerCombatHUD::FormatDistance(float Value) const
+{
+	FNumberFormattingOptions Format; Format.MinimumFractionalDigits = Format.MaximumFractionalDigits = FMath::Clamp(Presentation.DecimalPlaces, 0, 3);
+	return FText::AsNumber(Value, &Format);
+}
+
+// AHUD::DrawHUD 同步触发 ReceiveDrawHUD，先更新快照以免蓝图绘制上一帧的数据。
+void AmultiplayerCombatHUD::DrawHUD()
+{
+	HUDLines.Reset(); HUDTexts.Reset(); BuildHUDFrame(); if (Canvas) Super::DrawHUD();
+}
+
 // 将可见世界线段投影到 Canvas；被场景挡住的边界不穿墙绘制。
-void AmultiplayerCombatHUD::DrawWorldSegment(const FVector& Start, const FVector& End,
+void AmultiplayerCombatHUD::AppendWorldSegment(const FVector& Start, const FVector& End,
 	const FLinearColor& Color, float Thickness)
 {
 	FVector2D A, B;
 	if (ProjectTargetPoint(Start, A) && ProjectTargetPoint(End, B)
 		&& IsRangePointVisible(Start) && IsRangePointVisible(End)
 		&& (FVector::DistSquared(Start, End) <= FMath::Square(100.f) || IsRangePointVisible((Start + End) * .5f)))
-		DrawLine(A.X, A.Y, B.X, B.Y, Color, Thickness);
+		AppendScreenSegment(A.X, A.Y, B.X, B.Y, Color, Thickness);
 }
 
 // 按给定平面绘制圆环，尺寸取查询半径，不从粒子包围盒反推。
-void AmultiplayerCombatHUD::DrawWorldRing(const FVector& Center, const FVector& Normal,
+void AmultiplayerCombatHUD::AppendWorldRing(const FVector& Center, const FVector& Normal,
 	float Radius, const FLinearColor& Color)
 {
 	if (Radius <= 0.f) return;
 	FVector X, Y;
 	Normal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector).FindBestAxisVectors(X, Y);
-	constexpr int32 Segments = 48;
+	const int32 Segments = FMath::Max(3, Presentation.RingSegments);
 	FVector Previous = Center + X * Radius;
 	for (int32 Index = 1; Index <= Segments; ++Index)
 	{
 		const float Angle = float(Index) * UE_TWO_PI / Segments;
 		const FVector Next = Center + (X * FMath::Cos(Angle) + Y * FMath::Sin(Angle)) * Radius;
-		DrawWorldSegment(Previous, Next, Color);
+		AppendWorldSegment(Previous, Next, Color, Presentation.LineThickness);
 		Previous = Next;
 	}
 }
 
 // 目标由同源范围查询选择；这里只标出哪些对象当前确实满足阵营、距离和遮挡条件。
-void AmultiplayerCombatHUD::DrawTargetMarker(const AmultiplayerCombatCharacter* Target,
-	const FLinearColor& Color, const FString& Label)
+void AmultiplayerCombatHUD::BuildTargetMarker(const AmultiplayerCombatCharacter* Target,
+	const FLinearColor& Color, const FText& Label)
 {
 	if (!Target || Target == PlayerOwner->GetPawn()) return;
 	FVector2D Top, Bottom, Side;
@@ -1164,41 +961,39 @@ void AmultiplayerCombatHUD::DrawTargetMarker(const AmultiplayerCombatCharacter* 
 		|| !ProjectTargetPoint(Center + Right * Capsule->GetScaledCapsuleRadius(), Side)
 		|| !IsRangePointVisible(Center)) return;
 	const float MidX = (Top.X + Bottom.X) * .5f;
-	const float HalfWidth = FMath::Max(8.f, FMath::Abs(Side.X - MidX) + 3.f);
+	const float HalfWidth = FMath::Max(Presentation.MarkerMinHalfWidth, FMath::Abs(Side.X - MidX) + Presentation.MarkerSidePadding);
 	const float Left = MidX - HalfWidth, RightX = MidX + HalfWidth;
-	const float TopY = FMath::Min(Top.Y, Bottom.Y) - 4.f, BottomY = FMath::Max(Top.Y, Bottom.Y) + 3.f;
-	const float Corner = FMath::Min(HalfWidth * .6f, 12.f);
+	const float TopY = FMath::Min(Top.Y, Bottom.Y) - Presentation.MarkerTopPadding, BottomY = FMath::Max(Top.Y, Bottom.Y) + Presentation.MarkerBottomPadding;
+	const float Corner = FMath::Min(HalfWidth * Presentation.MarkerCornerRatio, Presentation.MarkerCornerMax);
 	for (float X : {Left, RightX})
 	{
 		const float Inward = X == Left ? Corner : -Corner;
-		DrawLine(X, TopY, X + Inward, TopY, Color, 2.f);
-		DrawLine(X, TopY, X, TopY + Corner, Color, 2.f);
-		DrawLine(X, BottomY, X + Inward, BottomY, Color, 2.f);
-		DrawLine(X, BottomY, X, BottomY - Corner, Color, 2.f);
+		AppendScreenSegment(X, TopY, X + Inward, TopY, Color, Presentation.MarkerThickness);
+		AppendScreenSegment(X, TopY, X, TopY + Corner, Color, Presentation.MarkerThickness);
+		AppendScreenSegment(X, BottomY, X + Inward, BottomY, Color, Presentation.MarkerThickness);
+		AppendScreenSegment(X, BottomY, X, BottomY - Corner, Color, Presentation.MarkerThickness);
 	}
 	if (!Label.IsEmpty())
 	{
 		float Width, Height;
-		GetTextSize(Label, Width, Height, GEngine->GetSmallFont(), 1.f);
-		DrawText(Label, FLinearColor::Black, MidX - Width * .5f + 1.f, TopY - Height - 3.f, GEngine->GetSmallFont());
-		DrawText(Label, Color, MidX - Width * .5f, TopY - Height - 4.f, GEngine->GetSmallFont());
+		GetTextSize(Label.ToString(), Width, Height, Presentation.Font, Presentation.MarkerTextScale);
+		AppendScreenLabel(Label, MidX - Width * .5f, TopY - Height - Presentation.MarkerLabelGap, Color, Presentation.MarkerTextScale);
 	}
 }
 
 // 按视口宽度居中显示操作或失败说明，黑色偏移仅用于保证可读性。
-void AmultiplayerCombatHUD::DrawCenteredPrompt(const FString& Text, float Y, const FLinearColor& Color)
+void AmultiplayerCombatHUD::AppendCenteredPrompt(const FText& Text, float Y, const FLinearColor& Color)
 {
 	if (Text.IsEmpty()) return;
-	const float Scale = FMath::Clamp(Canvas->ClipX / 960.f, 1.f, 1.35f);
+	const float Scale = FMath::Clamp(Canvas->ClipX / FMath::Max(1.f, Presentation.PromptReferenceWidth), Presentation.PromptMinScale, Presentation.PromptMaxScale);
 	float Width, Height;
-	GetTextSize(Text, Width, Height, GEngine->GetSmallFont(), Scale);
+	GetTextSize(Text.ToString(), Width, Height, Presentation.Font, Scale);
 	const float X = (Canvas->ClipX - Width) * .5f;
-	DrawText(Text, FLinearColor::Black, X + 1.f, Y + 1.f, GEngine->GetSmallFont(), Scale);
-	DrawText(Text, Color, X, Y, GEngine->GetSmallFont(), Scale);
+	AppendScreenLabel(Text, X, Y, Color, Scale);
 }
 
 // 按技能绘制查询几何；普攻/防御不叠调试射线，R 显示真实伤害圆柱的水平边界。
-void AmultiplayerCombatHUD::DrawTargetPreview(const FmultiplayerCombatTargetPreview& Preview, const FLinearColor& Color)
+void AmultiplayerCombatHUD::BuildTargetPreview(const FmultiplayerCombatTargetPreview& Preview, const FLinearColor& Color)
 {
 	const auto* Character = Cast<AmultiplayerCombatCharacter>(PlayerOwner->GetPawn());
 	const float HalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
@@ -1213,28 +1008,28 @@ void AmultiplayerCombatHUD::DrawTargetPreview(const FmultiplayerCombatTargetPrev
 		{
 			// 只标记本次治疗对象，不把整个三维搜索球画满屏幕；真实选人规则仍由同源查询决定。
 			const auto* Capsule = Target->GetCapsuleComponent();
-			const FVector Feet = Target->GetActorLocation() - FVector::UpVector * (Capsule->GetScaledCapsuleHalfHeight() - 3.f);
-			DrawWorldRing(Feet, FVector::UpVector, Capsule->GetScaledCapsuleRadius(), Color);
+			const FVector Feet = Target->GetActorLocation() - FVector::UpVector * (Capsule->GetScaledCapsuleHalfHeight() - Presentation.TargetGroundLift);
+			AppendWorldRing(Feet, FVector::UpVector, Capsule->GetScaledCapsuleRadius(), Color);
 		}
 		break;
 	case EMultiplayerCombatSkill::Area:
 	{
 		// 只保留落点的伤害边界，删除角色外围的最大射程圈与连接线。
 		// 判定是有限高度的水平圆柱；斜坡法线只供粒子贴地，不能旋转真实半径边界。
-		DrawWorldRing(Preview.End + FVector::UpVector * 2.f, FVector::UpVector, Preview.Radius, Color);
-		DrawWorldSegment(Preview.End - FVector(14.f, 0.f, 0.f), Preview.End + FVector(14.f, 0.f, 0.f), Color);
-		DrawWorldSegment(Preview.End - FVector(0.f, 14.f, 0.f), Preview.End + FVector(0.f, 14.f, 0.f), Color);
+		AppendWorldRing(Preview.End + FVector::UpVector * Presentation.GroundLift, FVector::UpVector, Preview.Radius, Color);
+		AppendWorldSegment(Preview.End - FVector(Presentation.CrossHalfSize, 0.f, 0.f), Preview.End + FVector(Presentation.CrossHalfSize, 0.f, 0.f), Color, Presentation.LineThickness);
+		AppendWorldSegment(Preview.End - FVector(0.f, Presentation.CrossHalfSize, 0.f), Preview.End + FVector(0.f, Presentation.CrossHalfSize, 0.f), Color, Presentation.LineThickness);
 		break;
 	}
 	case EMultiplayerCombatSkill::Dash:
 	{
-		const FVector Offset = FVector::UpVector * (3.f - HalfHeight);
+		const FVector Offset = FVector::UpVector * (Presentation.TargetGroundLift - HalfHeight);
 		const FVector Start = Preview.Origin + Offset, End = Preview.End + Offset;
 		const FVector Forward = (End - Start).GetSafeNormal2D();
 		const FVector Side = FVector::CrossProduct(Forward, FVector::UpVector) * Preview.Radius;
-		DrawWorldRing(End, FVector::UpVector, Preview.Radius, Color);
-		DrawWorldSegment(End, End - Forward * 45.f + Side * .65f, Color, 2.f);
-		DrawWorldSegment(End, End - Forward * 45.f - Side * .65f, Color, 2.f);
+		AppendWorldRing(End, FVector::UpVector, Preview.Radius, Color);
+		AppendWorldSegment(End, End - Forward * Presentation.DashArrowLength + Side * Presentation.DashArrowSideScale, Color, Presentation.MarkerThickness);
+		AppendWorldSegment(End, End - Forward * Presentation.DashArrowLength - Side * Presentation.DashArrowSideScale, Color, Presentation.MarkerThickness);
 		break;
 	}
 	}
@@ -1245,19 +1040,19 @@ void AmultiplayerCombatHUD::ShowResolvedArea(const FVector& Center, float Radius
 {
 	ResolvedAreaCenter = Center;
 	ResolvedAreaRadius = Radius;
-	ResolvedAreaUntil = GetWorld()->GetTimeSeconds() + CombatTransientEffectLifetime;
+	ResolvedAreaUntil = GetWorld()->GetTimeSeconds() + Presentation.ResolvedDuration;
 }
 
 // 客户端只显示复制后的起手阶段；判定几何与服务器共用，绝不读取服务端专有 AI 黑板。
-void AmultiplayerCombatHUD::DrawEnemyTelegraphs(const AmultiplayerCombatCharacter* LocalCharacter)
+void AmultiplayerCombatHUD::BuildEnemyTelegraphs(const AmultiplayerCombatCharacter* LocalCharacter)
 {
 	bool bInMeleeRange = false;
-	const FLinearColor Danger(1.f, .18f, .08f);
+	const FLinearColor Danger = Presentation.DangerColor;
 	for (TActorIterator<AmultiplayerCombatEnemy> It(GetWorld()); It; ++It)
 	{
 		const auto* Enemy = *It;
 		if (!Enemy->IsCasting() || !Enemy->IsAlive() || !UsesEnemyMelee(Enemy)
-			|| FVector::DistSquared(Enemy->GetActorLocation(), LocalCharacter->GetActorLocation()) > FMath::Square(1500.f)) continue;
+			|| FVector::DistSquared(Enemy->GetActorLocation(), LocalCharacter->GetActorLocation()) > FMath::Square(Presentation.TelegraphDistance)) continue;
 		const auto Rule = Enemy->GetSkillRule(EMultiplayerCombatSkill::Attack);
 		const float TotalDuration = Rule.Windup + Rule.Recovery;
 		if (TotalDuration <= 0.f || Rule.Windup <= 0.f
@@ -1271,37 +1066,37 @@ void AmultiplayerCombatHUD::DrawEnemyTelegraphs(const AmultiplayerCombatCharacte
 		if (RadiusSquared <= 0.f) continue;
 		const float Radius = FMath::Sqrt(RadiusSquared);
 		const FVector Center = Enemy->GetActorLocation() - FVector::UpVector
-			* (Enemy->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - 3.f);
+			* (Enemy->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - Presentation.TargetGroundLift);
 		const FVector Forward = Enemy->GetActorForwardVector().GetSafeNormal2D();
 		const float HalfAngle = FMath::RadiansToDegrees(FMath::Acos(CombatTargeting::MeleeFrontDot));
 		FVector Previous = Center + Forward.RotateAngleAxis(-HalfAngle, FVector::UpVector) * Radius;
-		DrawWorldSegment(Center, Previous, Danger, 2.f);
-		for (int32 Index = 1; Index <= 24; ++Index)
+		AppendWorldSegment(Center, Previous, Danger, Presentation.MarkerThickness);
+		const int32 Segments = FMath::Max(1, Presentation.TelegraphSegments);
+		for (int32 Index = 1; Index <= Segments; ++Index)
 		{
-			const FVector Next = Center + Forward.RotateAngleAxis(FMath::Lerp(-HalfAngle, HalfAngle, float(Index) / 24.f), FVector::UpVector) * Radius;
-			DrawWorldSegment(Previous, Next, Danger, 2.f);
+			const FVector Next = Center + Forward.RotateAngleAxis(FMath::Lerp(-HalfAngle, HalfAngle, float(Index) / Segments), FVector::UpVector) * Radius;
+			AppendWorldSegment(Previous, Next, Danger, Presentation.MarkerThickness);
 			Previous = Next;
 		}
-		DrawWorldSegment(Center, Previous, Danger, 2.f);
-		DrawWorldSegment(Center, Center + Forward * Radius, Danger.CopyWithNewOpacity(.45f));
-		DrawTargetMarker(Enemy, Danger, TEXT("近战起手"));
+		AppendWorldSegment(Center, Previous, Danger, Presentation.MarkerThickness);
+		AppendWorldSegment(Center, Center + Forward * Radius, Danger.CopyWithNewOpacity(Presentation.TelegraphCenterOpacity), Presentation.LineThickness);
+		BuildTargetMarker(Enemy, Danger, Presentation.MeleeWindup);
 		bInMeleeRange |= CombatTargeting::CanMeleeHit(*Enemy, *LocalCharacter, true);
 	}
 	if (bInMeleeRange)
-		DrawCenteredPrompt(TEXT("处于近战攻击范围 · 离开红色扇区可躲避"), Canvas->ClipY * .13f, Danger);
+		AppendCenteredPrompt(Presentation.MeleeDanger, Canvas->ClipY * Presentation.MeleePromptHeightRatio, Danger);
 }
 
 // Canvas 每帧查询预览资格并绘制瞄准几何和敌人预警；UMG 数值与计时仍走事件/活动计时器。
-void AmultiplayerCombatHUD::DrawHUD()
+void AmultiplayerCombatHUD::BuildHUDFrame()
 {
-	Super::DrawHUD();
 	const auto* Character = PlayerOwner ? Cast<AmultiplayerCombatCharacter>(PlayerOwner->GetPawn()) : nullptr;
 	if (!Canvas || !Character || !PlayerOwner->IsLocalController() || !Character->IsLocallyControlled()
 		|| PlayerOwner->bShowMouseCursor || !Character->IsAlive()) return;
 	FRotator ViewRotation;
 	PlayerOwner->GetPlayerViewPoint(RangeViewLocation, ViewRotation);
 	RangeVisibilityCache.Reset();
-	const FLinearColor Ready(.2f, .9f, 1.f), Blocked(1.f, .25f, .2f), Hint(.9f, .94f, 1.f);
+	const FLinearColor Ready = Presentation.ReadyColor, Blocked = Presentation.BlockedColor, Hint = Presentation.HintColor;
 	const bool bTargeting = Character->IsTargetingSkill();
 	const bool bAreaCasting = Character->IsCasting();
 	const auto Skill = bTargeting ? Character->GetTargetingSkill()
@@ -1312,48 +1107,46 @@ void AmultiplayerCombatHUD::DrawHUD()
 	if (bTargeting) ResolvedAreaUntil = 0;
 	const bool bShowingResolvedArea = ResolvedAreaUntil > GetWorld()->GetTimeSeconds();
 	if (bTargeting || (bAreaCasting && !bShowingResolvedArea))
-		DrawTargetPreview(Preview, bAreaCasting ? FLinearColor(1.f, .75f, .18f) : bAvailable ? Ready : Blocked);
+		BuildTargetPreview(Preview, bAreaCasting ? Presentation.CastingColor : bAvailable ? Ready : Blocked);
 	if (bShowingResolvedArea)
-		DrawWorldRing(ResolvedAreaCenter + FVector::UpVector * 2.f, FVector::UpVector, ResolvedAreaRadius, FLinearColor(1.f, .65f, .1f));
-	DrawEnemyTelegraphs(Character);
-	const float PromptY = Canvas->ClipY * .20f;
+		AppendWorldRing(ResolvedAreaCenter + FVector::UpVector * Presentation.GroundLift, FVector::UpVector, ResolvedAreaRadius, Presentation.ResolvedColor);
+	BuildEnemyTelegraphs(Character);
+	const float PromptY = Canvas->ClipY * Presentation.PromptHeightRatio;
 	if (bTargeting)
 	{
-		FString InputKey;
+		int32 SlotIndex = INDEX_NONE;
 		const auto* Progression = Character->GetProgressionComponent();
 		for (int32 Slot = 0; Slot < 5; ++Slot)
-			if (Progression->GetSlotSkill(Slot) == Skill) { InputKey = CombatSlotKey(Slot); break; }
-		const FString Action = InputKey == TEXT("LMB") ? TEXT("左键确认 · 右键取消")
-			: FString::Printf(TEXT("松开 %s 释放 · 右键取消"), *InputKey);
-		DrawCenteredPrompt(FString::Printf(TEXT("%s · %s"), CombatSkillName(Skill), *Action), PromptY, Hint);
-		FString Detail;
+			if (Progression->GetSlotSkill(Slot) == Skill) { SlotIndex = Slot; break; }
+		const FText InputKey = Presentation.SlotKeys.IsValidIndex(SlotIndex) ? Presentation.SlotKeys[SlotIndex] : FText::GetEmpty();
+		const FText SkillName = Presentation.SkillNames.IsValidIndex(int32(Skill)) ? Presentation.SkillNames[int32(Skill)] : FText::GetEmpty();
+		const FText Action = SlotIndex == 0 ? Presentation.ConfirmAttack : FText::Format(Presentation.ConfirmReleaseFormat, InputKey);
+		AppendCenteredPrompt(FText::Format(Presentation.SkillActionFormat, SkillName, Action), PromptY, Hint);
+		FText Detail;
 		if (Skill == EMultiplayerCombatSkill::Heal)
 		{
-			const FString Selection = !Failure.IsEmpty() ? Failure.ToString()
-				: Preview.Target.Get() == Character ? TEXT("本次治疗自己") : TEXT("本次治疗标记队友，优先最低血量比例");
-			Detail = FString::Printf(TEXT("半径 %.1f m 球形 · 必须可见 · %s"), Preview.Radius / 100.f, *Selection);
+			const FText Selection = !Failure.IsEmpty() ? Failure : Preview.Target.Get() == Character ? Presentation.HealSelf : Presentation.HealTeammate;
+			Detail = FText::Format(Presentation.HealDetailFormat, FormatDistance(Preview.Radius / 100.f), Selection);
 		}
-		else if (!Failure.IsEmpty()) Detail = Failure.ToString();
+		else if (!Failure.IsEmpty()) Detail = Failure;
 		else if (!Preview.bValid) Detail = Character->GetSkillFailureText(Skill,
 			Skill == EMultiplayerCombatSkill::Area ? CombatTags::Failure_InvalidGround
 			: Skill == EMultiplayerCombatSkill::Heal ? CombatTags::Failure_NoHealTarget
-			: Skill == EMultiplayerCombatSkill::Dash ? CombatTags::Failure_DashBlocked : CombatTags::Failure_MuzzleBlocked).ToString();
+			: Skill == EMultiplayerCombatSkill::Dash ? CombatTags::Failure_DashBlocked : CombatTags::Failure_MuzzleBlocked);
 		else if (Skill == EMultiplayerCombatSkill::Defend)
-			Detail = FString::Printf(TEXT("正面格挡 · 前 %.1f 秒可弹反正面投射物"), Character->GetCombatConfig().ParryWindow);
+			Detail = FText::Format(Presentation.DefenseDetailFormat, FormatDistance(Character->GetCombatConfig().ParryWindow));
 		else if (Skill == EMultiplayerCombatSkill::Area)
-			Detail = FString::Printf(TEXT("射程 %.1f m · 落点 %.1f m · 伤害半径 %.1f m · %d 个目标"),
-				Character->GetSkillRule(Skill).Range / 100.f, FVector::Dist2D(Preview.Origin, Preview.End) / 100.f,
-				Preview.Radius / 100.f, Preview.AffectedTargets.Num());
+			Detail = FText::Format(Presentation.AreaDetailFormat, FormatDistance(Character->GetSkillRule(Skill).Range / 100.f),
+				FormatDistance(FVector::Dist2D(Preview.Origin, Preview.End) / 100.f), FormatDistance(Preview.Radius / 100.f), Preview.AffectedTargets.Num());
 		else if (Skill == EMultiplayerCombatSkill::Dash)
-			Detail = FString::Printf(TEXT("预计水平距离 %.1f m · 静态障碍截断；落差/动态障碍可能改变落点"),
-				FVector::Dist2D(Preview.Origin, Preview.End) / 100.f);
-		DrawCenteredPrompt(Detail, PromptY + 24.f, bAvailable ? Ready : Blocked);
+			Detail = FText::Format(Presentation.DashDetailFormat, FormatDistance(FVector::Dist2D(Preview.Origin, Preview.End) / 100.f));
+		AppendCenteredPrompt(Detail, PromptY + Presentation.DetailOffset, bAvailable ? Ready : Blocked);
 	}
-	else if (bAreaCasting) DrawCenteredPrompt(TEXT("施法中 · 右键打断（已提交消耗不返还）"), PromptY, Hint);
+	else if (bAreaCasting) AppendCenteredPrompt(Presentation.Casting, PromptY, Hint);
 	if (bShowingResolvedArea)
-		DrawCenteredPrompt(TEXT("黄色圈为已结算范围，粒子消散不代表持续伤害"), PromptY + 24.f, FLinearColor(1.f, .75f, .18f));
+		AppendCenteredPrompt(Presentation.Resolved, PromptY + Presentation.DetailOffset, Presentation.CastingColor);
 	else if (!bTargeting && !bAreaCasting)
-		DrawCenteredPrompt(TEXT("Q / E / R / Shift 按住预览、松开释放 · 右键取消 · 左键普攻"), PromptY, Hint.CopyWithNewOpacity(.8f));
+		AppendCenteredPrompt(Presentation.Idle, PromptY, Hint.CopyWithNewOpacity(Presentation.HintOpacity));
 }
 
 // HUD 退出时移除自己创建的控件，不留下第二份视口界面。
@@ -1363,6 +1156,7 @@ void AmultiplayerCombatHUD::EndPlay(EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
+// ===== 6. 动画采样：读取 CMC 与 GAS，不写角色 Transform 或战斗结果 =====
 // 在动画更新开始时采样角色速度，动画图直接读取结果，不反向修改角色移动。
 void UmultiplayerCombatAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 {

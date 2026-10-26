@@ -19,14 +19,28 @@
 #include "Combat/multiplayerCombatProjectile.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Engine/World.h"
+#include "Engine/HitResult.h"
 #include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 #include "GameplayCueManager.h"
 
 namespace
 {
-	// 这些结果 Cue 没有在客户端预测播放，不能继承激活键后被拥有者当作重复预测而丢弃。
-	void ExecuteAuthorityResultCue(UAbilitySystemComponent* TargetASC, FGameplayTag Tag, const FGameplayCueParameters& Parameters)
+	// 只给需要跨端关联的 Cue/施法效果包一层已有身份，保留来源、命中和其他原生上下文。
+	FGameplayEffectContextHandle MakeActivationContext(const FGameplayEffectContextHandle& Source,
+		const FmultiplayerCombatActivationIdentity& Identity)
 	{
+		auto* Context = new FmultiplayerCombatCueContext();
+		if (const auto* Existing = Source.Get()) static_cast<FGameplayEffectContext&>(*Context) = *Existing;
+		Context->ActivationIdentity = Identity;
+		return FGameplayEffectContextHandle(Context);
+	}
+
+	// 这些结果 Cue 没有在客户端预测播放，不能继承激活键后被拥有者当作重复预测而丢弃。
+	// 关联身份在专用 Context 中；传输预测键仍为空，不改变原生预测账本和拥有者去重规则。
+	void ExecuteAuthorityResultCue(UAbilitySystemComponent* TargetASC, FGameplayTag Tag, FGameplayCueParameters Parameters,
+		const FmultiplayerCombatActivationIdentity& Identity)
+	{
+		Parameters.EffectContext = MakeActivationContext(Parameters.EffectContext, Identity);
 		UAbilitySystemGlobals::Get().GetGameplayCueManager()->InvokeGameplayCueExecuted_WithParams(
 			TargetASC, Tag, FPredictionKey(), Parameters);
 	}
@@ -56,6 +70,67 @@ namespace
 	}
 }
 
+// 跨端关联必须有真实的能力授予，不能把默认空结构当作一次施法。
+bool FmultiplayerCombatActivationIdentity::IsValid() const
+{
+	return SpecHandle.IsValid() && (AuthorityRevision != 0 || PredictionKey > 0);
+}
+
+// 预测轮次与服务器轮次并不要求同步；得到权威轮次后不再只凭可回绕的预测键匹配。
+bool FmultiplayerCombatActivationIdentity::Matches(const FmultiplayerCombatActivationIdentity& Other) const
+{
+	if (!IsValid() || !Other.IsValid() || SpecHandle != Other.SpecHandle) return false;
+	if (AuthorityRevision != 0 && Other.AuthorityRevision != 0) return AuthorityRevision == Other.AuthorityRevision;
+	return PredictionKey > 0 && PredictionKey == Other.PredictionKey && bServerInitiated == Other.bServerInitiated;
+}
+
+bool FmultiplayerCombatActivationIdentity::operator==(const FmultiplayerCombatActivationIdentity& Other) const
+{
+	return SpecHandle == Other.SpecHandle && AuthorityRevision == Other.AuthorityRevision
+		&& PredictionKey == Other.PredictionKey && bServerInitiated == Other.bServerInitiated;
+}
+
+bool FmultiplayerCombatActivationIdentity::NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess)
+{
+	Ar << SpecHandle;
+	Ar << AuthorityRevision;
+	Ar << PredictionKey;
+	uint8 ServerInitiated = bServerInitiated ? 1 : 0;
+	Ar.SerializeBits(&ServerInitiated, 1);
+	if (Ar.IsLoading()) bServerInitiated = ServerInitiated != 0;
+	bOutSuccess = !Ar.IsError();
+	return true;
+}
+
+UScriptStruct* FmultiplayerCombatCueContext::GetScriptStruct() const
+{
+	return StaticStruct();
+}
+
+// Context 被复制时深拷贝命中记录，关联身份本身是值，不延长能力实例生命。
+FmultiplayerCombatCueContext* FmultiplayerCombatCueContext::Duplicate() const
+{
+	auto* Context = new FmultiplayerCombatCueContext(*this);
+	if (HitResult.IsValid()) Context->HitResult = MakeShared<FHitResult>(*HitResult);
+	return Context;
+}
+
+bool FmultiplayerCombatCueContext::NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess)
+{
+	bool bBaseSuccess = false, bIdentitySuccess = false;
+	const bool bBaseMapped = FGameplayEffectContext::NetSerialize(Ar, Map, bBaseSuccess);
+	const bool bIdentityMapped = ActivationIdentity.NetSerialize(Ar, Map, bIdentitySuccess);
+	bOutSuccess = bBaseSuccess && bIdentitySuccess && !Ar.IsError();
+	return bBaseMapped && bIdentityMapped;
+}
+
+const FmultiplayerCombatCueContext* FmultiplayerCombatCueContext::Get(const FGameplayEffectContextHandle& Context)
+{
+	const auto* Data = Context.Get();
+	return Data && Data->GetScriptStruct()->IsChildOf(StaticStruct())
+		? static_cast<const FmultiplayerCombatCueContext*>(Data) : nullptr;
+}
+
 // 预测客户端的消耗、冷却和表现；伤害、发弹及治疗结果仍只在服务器提交。
 // 取舍：复用 GAS 预测账本，不另写资源回滚；LocalPredicted 不代表任意 C++ 副作用都能自动撤销。
 // InstancedPerActor 会复用对象，后续必须区分“同一个实例”和“同一轮激活”。
@@ -64,6 +139,18 @@ UmultiplayerCombatAbility::UmultiplayerCombatAbility()
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
 	// 共用状态要求由角色实际 CombatConfig 提供，不在每个能力 CDO 再复制一份。
+}
+
+// 服务器沿用实例已有轮次；客户端只交回 GAS 原生激活键，不能自行声明权威轮次。
+FmultiplayerCombatActivationIdentity UmultiplayerCombatAbility::GetActivationIdentity() const
+{
+	FmultiplayerCombatActivationIdentity Identity;
+	Identity.SpecHandle = CurrentSpecHandle;
+	const FPredictionKey& Key = CurrentActivationInfo.GetActivationPredictionKey();
+	Identity.PredictionKey = Key.Current;
+	Identity.bServerInitiated = Key.IsServerInitiatedKey();
+	if (CurrentActorInfo && CurrentActorInfo->IsNetAuthority()) Identity.AuthorityRevision = ActivationRevision;
+	return Identity;
 }
 
 // 从角色读取结合等级后的有效数值，调用点决定是即时读取还是固定本次局部规则。
@@ -88,7 +175,6 @@ bool UmultiplayerCombatAbility::CheckCooldown(FGameplayAbilitySpecHandle Handle,
 	FGameplayTagContainer* OptionalRelevantTags) const
 {
 	const bool bReady = Super::CheckCooldown(Handle, ActorInfo, OptionalRelevantTags);
-	// 保留原生冷却标签查询，只把真实失败映射为项目提示，不在角色里再维护一套判断。
 	if (!bReady && OptionalRelevantTags) OptionalRelevantTags->AddTag(CombatTags::Failure_Cooldown);
 	return bReady;
 }
@@ -136,29 +222,11 @@ void UmultiplayerCombatAbility::CommitExecute(FGameplayAbilitySpecHandle Handle,
 	FGameplayAbilityActivationInfo ActivationInfo)
 {
 	const uint32 Revision = ActivationRevision;
-	const auto* CommitCharacter = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
+	auto* CommitCharacter = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
 	if (!CommitCharacter) return;
 	// 仅锁定本次提交的成本/CD；扣费通知同步修改等级时，冷却不能改读成另一份规则。
 	// 伤害、目标和出手合法性仍由具体技能在生效阶段决定，不宣称全量技能快照。
 	const FmultiplayerCombatSkillRule Rule = CommitCharacter->GetSkillRule(Skill);
-	if (!ActorInfo->IsNetAuthority())
-	{
-		// 预测拒绝只清理仍归属于本次预测键的动作；资源／冷却撤销仍交 GAS，原因另走失败通知。
-		FPredictionKey Key = ActivationInfo.GetActivationPredictionKey();
-		if (Key.IsLocalClientKey())
-			Key.NewRejectedDelegate().BindWeakLambda(ActorInfo->AvatarActor.Get(), [Weak = TWeakObjectPtr<AmultiplayerCombatCharacter>(Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get())),
-				WeakAbility = TWeakObjectPtr<UmultiplayerCombatAbility>(this), RejectedKey = Key.Current]
-			{
-				if (auto* Character = Weak.Get())
-				{
-					UAbilitySystemComponent* ASC = Character->GetAbilitySystemComponent();
-					if (auto* Ability = WeakAbility.Get(); Ability && ASC->GetAnimatingAbility() == Ability
-						&& Ability->GetCurrentActivationInfo().GetActivationPredictionKey().Current == RejectedKey)
-						ASC->CurrentMontageStop(.15f);
-					// 精确业务原因由服务器拒绝通知提供；此处仅清理预测动作，不覆盖较早到达的原因。
-				}
-			});
-	}
 	// 先扣资源再通知冷却变化，阻止冷却监听回调用同一份旧余额嵌套施放另一技能。
 	ApplyRuleCost(Handle, ActorInfo, ActivationInfo, Rule);
 	if (Revision == ActivationRevision && IsActive() && IsValid(CommitCharacter) && CommitCharacter->IsCombatReady())
@@ -256,7 +324,7 @@ UmultiplayerAttackCooldownEffect::UmultiplayerAttackCooldownEffect()
 	ConfigureTimedTagEffect(*this, *Tags, 0.5f, CombatTags::Cooldown_Attack);
 }
 
-// 攻击只设置冷却，不额外引入弹药或自动连发状态。
+// 普攻共用成本提交并持有独立冷却，不额外维护弹药或自动连发状态。
 UmultiplayerAttackAbility::UmultiplayerAttackAbility()
 {
 	SetAssetTags(FGameplayTagContainer(CombatTags::Ability_Attack));
@@ -339,7 +407,7 @@ void UmultiplayerAttackAbility::ReleaseProjectile()
 			FGameplayCueParameters Feedback(CurrentActorInfo->AbilitySystemComponent->MakeEffectContext());
 			Feedback.Location = Launch.Origin;
 			Feedback.Normal = (Launch.End - Launch.Origin).GetSafeNormal();
-			ExecuteAuthorityResultCue(Character->GetAbilitySystemComponent(), CombatTags::Cue_Attack, Feedback);
+			ExecuteAuthorityResultCue(Character->GetAbilitySystemComponent(), CombatTags::Cue_Attack, Feedback, GetActivationIdentity());
 		}
 	}
 	if (Revision != ActivationRevision || !IsActive()) return;
@@ -364,6 +432,13 @@ void UmultiplayerAttackAbility::EndAbility(FGameplayAbilitySpecHandle Handle, co
 {
 	if (!IsEndAbilityValid(Handle, ActorInfo)
 		|| ActivationInfo.GetActivationPredictionKey() != CurrentActivationInfo.GetActivationPredictionKey()) return;
+	// Super 会在作用域锁内延后结束；动画清理也必须随完整收尾排队。
+	if (ScopeLockCount > 0)
+	{
+		WaitingToExecute.Add(FPostLockDelegate::CreateUObject(this, &ThisClass::EndAbility,
+			Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled));
+		return;
+	}
 	const uint32 Revision = ActivationRevision;
 	if (bWasCancelled && ActorInfo->AbilitySystemComponent->GetAnimatingAbility() == this)
 		ActorInfo->AbilitySystemComponent->CurrentMontageStop(.15f);
@@ -497,7 +572,7 @@ UmultiplayerEnergyCostEffect::UmultiplayerEnergyCostEffect()
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
 }
 
-// 防御冷却长于防御持续时间，不能连续施放维持永久格挡。
+// 默认防御冷却长于格挡时长；实际持续时间仍由本次规则覆盖。
 UmultiplayerDefendCooldownEffect::UmultiplayerDefendCooldownEffect()
 {
 	UTargetTagsGameplayEffectComponent* Tags = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("DefendCooldownTags"));
@@ -614,6 +689,8 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 	const FGameplayEventData* TriggerEventData)
 {
 	const uint32 Revision = ++ActivationRevision;
+	// 回血通知可同步取消/重激活；已经结算的治疗结果仍属于这次原激活。
+	const FmultiplayerCombatActivationIdentity Identity = GetActivationIdentity();
 	AmultiplayerCombatCharacter* Character = Cast<AmultiplayerCombatCharacter>(ActorInfo->AvatarActor.Get());
 	if (Character == nullptr || !Character->IsAlive())
 	{
@@ -621,7 +698,7 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 		return;
 	}
 
-	// 无目标直接结束；只有确认目标合法后才提交资源与冷却。
+	// 提交前无目标直接结束；提交期间的回调若令所有目标失效，不回滚已扣资源或已挂冷却。
 	const bool bCommitted = (!ActorInfo->IsNetAuthority() || Character->GetHealTarget() != nullptr)
 		&& CommitAbility(Handle, ActorInfo, ActivationInfo);
 	if (Revision != ActivationRevision) return;
@@ -650,7 +727,7 @@ void UmultiplayerHealAbility::ActivateAbility(const FGameplayAbilitySpecHandle H
 			{
 				FGameplayCueParameters Feedback(HealSpec.Data->GetEffectContext());
 				Feedback.Location = Target->GetActorLocation();
-				ExecuteAuthorityResultCue(Target->GetAbilitySystemComponent(), CombatTags::Cue_Heal, Feedback);
+				ExecuteAuthorityResultCue(Target->GetAbilitySystemComponent(), CombatTags::Cue_Heal, Feedback, Identity);
 			}
 		}
 	}
@@ -706,7 +783,8 @@ UmultiplayerAreaAbility::UmultiplayerAreaAbility()
 }
 
 // 一次释放只遍历查询到的唯一角色；友军、死亡、越界或隔墙目标都不参与结算。
-void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Character, const FVector& Center)
+void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Character, const FVector& Center,
+	const FmultiplayerCombatActivationIdentity& Identity)
 {
 	if (!Character.HasAuthority() || !Character.IsCombatReady() || Character.IsStunned()) return;
 	const auto& Config = Character.GetCombatConfig();
@@ -723,7 +801,7 @@ void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Charac
 	for (auto Weak : Targets)
 	{
 		auto* Target = Weak.Get();
-		// 候选收集不做射线；应用前检查一次完整合法性，前一目标的回调改动也能及时生效。
+		// 每个候选开始结算前复核范围、阵营和遮挡；前一目标的同步回调可改变后续候选。
 		if (!Target || !CombatTargeting::CanAffectArea(Character, *Target, Center, Radius)) continue;
 		Character.ApplyCombatDamage(Target, Rule.Amount, nullptr, &NoDirection);
 		if (IsValid(Target) && Target->IsCombatReady()) Target->ApplyStun(Rule.Duration);
@@ -735,10 +813,15 @@ void UmultiplayerAreaAbility::ResolveTargets(AmultiplayerCombatCharacter& Charac
 		}
 		if (!Character.IsCombatReady() || Character.IsStunned()) break;
 	}
-	FGameplayCueParameters Feedback;
-	Feedback.Location = Center;
-	Feedback.RawMagnitude = Radius;
-	Character.GetAbilitySystemComponent()->ExecuteGameplayCue(CombatTags::Cue_Area, Feedback);
+	// 独立结算测试未经过真实激活，不为其伪造表现身份或结果 Cue。
+	if (Identity.IsValid())
+	{
+		Character.AcceptAreaFeedbackIdentity(Identity);
+		FGameplayCueParameters Feedback(Character.GetAbilitySystemComponent()->MakeEffectContext());
+		Feedback.Location = Center;
+		Feedback.RawMagnitude = Radius;
+		ExecuteAuthorityResultCue(Character.GetAbilitySystemComponent(), CombatTags::Cue_Area, Feedback, Identity);
+	}
 }
 
 // 先验证并锁定落点，再提交资源／冷却、挂施法锁和起手任务；通知中的取消必须及时截断旧栈。
@@ -772,6 +855,7 @@ void UmultiplayerAreaAbility::ActivateAbility(FGameplayAbilitySpecHandle Handle,
 	// 范围攻击只锁定本轮落点，不改变身体朝向；起手后转镜头也不追改落点。
 	Character->SetAreaCastTarget(Preview.End, Preview.Normal);
 	FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(UmultiplayerCastingEffect::StaticClass());
+	Spec.Data->SetContext(MakeActivationContext(Spec.Data->GetContext(), GetActivationIdentity()));
 	FHitResult TargetHit; TargetHit.Location = TargetHit.ImpactPoint = TargetLocation;
 	TargetHit.Normal = TargetHit.ImpactNormal = GroundNormal;
 	Spec.Data->GetContext().AddHitResult(TargetHit);
@@ -827,7 +911,7 @@ void UmultiplayerAreaAbility::ReleaseArea()
 	if (Revision != ActivationRevision || !IsActive()) return;
 	// 结算回调可能复用技能实例，本次已经释放的落点不能随成员变量一起改变。
 	const FVector ReleaseLocation = TargetLocation;
-	if (CurrentActorInfo->IsNetAuthority()) ResolveTargets(*Character, ReleaseLocation);
+	if (CurrentActorInfo->IsNetAuthority()) ResolveTargets(*Character, ReleaseLocation, GetActivationIdentity());
 	if (Revision != ActivationRevision || !IsActive()) return;
 	auto* Delay = UAbilityTask_WaitDelay::WaitDelay(this, GetRule().Recovery);
 	Delay->OnFinish.AddDynamic(this, &ThisClass::FinishRecovery);
@@ -849,6 +933,13 @@ void UmultiplayerAreaAbility::EndAbility(FGameplayAbilitySpecHandle Handle, cons
 {
 	if (!IsEndAbilityValid(Handle, ActorInfo)
 		|| ActivationInfo.GetActivationPredictionKey() != CurrentActivationInfo.GetActivationPredictionKey()) return;
+	// 不能在 Super 延后结束时先摘句柄或解锁；任务与施法锁必须一起等待作用域锁释放。
+	if (ScopeLockCount > 0)
+	{
+		WaitingToExecute.Add(FPostLockDelegate::CreateUObject(this, &ThisClass::EndAbility,
+			Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled));
+		return;
+	}
 	const uint32 Revision = ActivationRevision;
 	// 任务随 Super::EndAbility 销毁；先解除效果句柄，避免取消回调重复移除同一状态。
 	const auto Effect = CastingEffect;

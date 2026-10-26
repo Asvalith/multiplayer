@@ -23,7 +23,6 @@
 #include "Particles/ParticleSystem.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 
 // 根球体承担扫掠碰撞，可见网格不参与碰撞；投射物不依赖角色动画或额外美术资源。
 AmultiplayerCombatProjectile::AmultiplayerCombatProjectile()
@@ -50,12 +49,7 @@ AmultiplayerCombatProjectile::AmultiplayerCombatProjectile()
 	ProjectileMesh->SetupAttachment(CollisionSphere);
 	ProjectileMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ProjectileMesh->SetVisibility(false);
-	ProjectileMesh->SetRelativeScale3D(FVector(0.24f));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (SphereMesh.Succeeded())
-	{
-		ProjectileMesh->SetStaticMesh(SphereMesh.Object);
-	}
+	// 网格和展示变换由正式 Projectile 蓝图配置，原生类仅提供服务器查询根。
 
 	ProjectileMovement = CreateDefaultSubobject<UProjectileMovementComponent>(TEXT("ProjectileMovement"));
 	ProjectileMovement->SetUpdatedComponent(CollisionSphere);
@@ -75,6 +69,8 @@ bool AmultiplayerCombatProjectile::FireFromSkill(AmultiplayerCombatCharacter& So
 	const FRotator* AimSnapshot)
 {
 	if (!Source.HasAuthority() || !Source.IsCombatReady() || !FMath::IsFinite(Damage) || !FMath::IsFinite(Speed)) return false;
+	const TSubclassOf<AmultiplayerCombatProjectile> ProjectileClass = Source.GetCombatConfig().ProjectileClass;
+	if (!ProjectileClass) return false;
 	UWorld* World = Source.GetWorld();
 	const FRotator Aim = AimSnapshot ? *AimSnapshot : Source.GetControlRotation();
 	if (Aim.ContainsNaN()) return false;
@@ -92,7 +88,7 @@ bool AmultiplayerCombatProjectile::FireFromSkill(AmultiplayerCombatCharacter& So
 	const FRotator LaunchRotation = (Preview.End - MuzzleStart).Rotation();
 	const FTransform Transform(LaunchRotation, MuzzleStart);
 	AmultiplayerCombatProjectile* Projectile = World->SpawnActorDeferred<AmultiplayerCombatProjectile>(
-		StaticClass(), Transform, &Source, &Source, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		ProjectileClass, Transform, &Source, &Source, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Projectile) return false;
 	Projectile->Initialize(&Source, Damage, Speed, Source.GetSkillRule(EMultiplayerCombatSkill::Attack).Range);
 	Projectile->FinishSpawning(Transform);
@@ -196,6 +192,8 @@ void AmultiplayerCombatProjectile::RequestProjectileEffect()
 	if (!Source) return;
 	ProjectileEffectAsset = Source->GetCombatConfig().ProjectileEffect;
 	ProjectileCascadeAsset = Source->GetCombatConfig().ProjectileCascadeEffect;
+	ProjectileEffectTransform = Source->GetCombatConfig().ProjectileEffectTransform;
+	ProjectileDurationParameter = Source->GetCombatConfig().ProjectileDurationParameter;
 	const bool bUseCascade = !ProjectileCascadeAsset.IsNull();
 	const FSoftObjectPath EffectPath = bUseCascade ? ProjectileCascadeAsset.ToSoftObjectPath() : ProjectileEffectAsset.ToSoftObjectPath();
 	if (EffectPath.IsNull()) return;
@@ -221,17 +219,18 @@ void AmultiplayerCombatProjectile::AttachProjectileEffect()
 	{
 		if (auto* System = ProjectileCascadeAsset.Get())
 			ProjectileCascadeEffect = UGameplayStatics::SpawnEmitterAttached(System, CollisionSphere, NAME_None,
-				FVector::ZeroVector, FRotator::ZeroRotator, EAttachLocation::SnapToTarget, false);
+				ProjectileEffectTransform.GetLocation(), ProjectileEffectTransform.Rotator(), ProjectileEffectTransform.GetScale3D(), EAttachLocation::KeepRelativeOffset, false);
 		if (ProjectileCascadeEffect) ProjectileMesh->SetVisibility(false);
 		return;
 	}
 	UNiagaraSystem* System = ProjectileEffectAsset.Get();
 	if (!System) return;
 	ProjectileEffect = UNiagaraFunctionLibrary::SpawnSystemAttached(System, CollisionSphere, NAME_None,
-		FVector::ZeroVector, FRotator::ZeroRotator, EAttachLocation::SnapToTarget, false, false,
+		ProjectileEffectTransform.GetLocation(), ProjectileEffectTransform.Rotator(), EAttachLocation::KeepRelativeOffset, false, false,
 		ENCPoolMethod::None, false);
 	if (!ProjectileEffect) return;
-	ProjectileEffect->SetVariableFloat(TEXT("User.Duration"), float(SegmentLifetime - FMath::Max(0.0, Age)));
+	ProjectileEffect->SetRelativeScale3D(ProjectileEffectTransform.GetScale3D());
+	if (!ProjectileDurationParameter.IsNone()) ProjectileEffect->SetVariableFloat(ProjectileDurationParameter, float(SegmentLifetime - FMath::Max(0.0, Age)));
 	ProjectileEffect->Activate(true);
 	ProjectileMesh->SetVisibility(false);
 }

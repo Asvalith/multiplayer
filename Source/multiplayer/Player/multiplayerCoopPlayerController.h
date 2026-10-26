@@ -23,7 +23,7 @@ enum class ECoopVictoryAction : uint8
 };
 
 /**
- * 所属玩家的重开/退出请求入口；服务器规则仍由 GameMode 决定。
+ * [职责] 所属连接的握手、重开与退出入口；服务器规则仍由 GameMode 决定。
  * 重开经 RPC 交给 GameMode，断开连接交给 GameInstance，操作反馈通过本地委托交给 UI。
  * 不订阅胜利结果、不创建界面、不切换鼠标焦点；这些由本地 HUD 负责。
  */
@@ -35,7 +35,7 @@ class MULTIPLAYER_API AmultiplayerCoopPlayerController : public APlayerControlle
 public:
 	// 只表示本控制器已经过服务器接纳，不把进入 PlayingState 当作恢复完成。
 	bool HasAcceptedCombatSession() const { return bCombatSessionAccepted; }
-	// 所属客户端提交一次不透明票据；服务器负责校验与恢复，不接受客户端资源或位置。
+	// [边界] 所属客户端只提交票据和本机操作编号；服务器校验与恢复，不接受客户端资源或位置。
 	UFUNCTION(Server, Reliable)
 	void ServerEstablishCombatSession(FGuid Ticket, uint64 Operation);
 

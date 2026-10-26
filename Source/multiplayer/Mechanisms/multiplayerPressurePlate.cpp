@@ -11,7 +11,6 @@
 #include "Mechanisms/multiplayerMeshMovement.h"
 #include "Mechanisms/multiplayerPlayerOccupancyComponent.h"
 #include "Net/UnrealNetwork.h"
-#include "UObject/ConstructorHelpers.h"
 
 // 压力板规则层：服务器按当前人数、目标和锁存配置决定开关，门/平台只订阅结果。
 // 客户端仅按复制开关播放网格按压，不维护第二份占用或逐帧向服务器上报。
@@ -35,7 +34,6 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 	PlateMesh->SetMobility(EComponentMobility::Movable);
 	PlateMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	PlateMesh->SetGenerateOverlapEvents(false);
-	PlateMesh->SetRelativeScale3D(FVector(1.5f, 1.5f, 0.1f));
 
 	ActivationTrigger = CreateDefaultSubobject<UBoxComponent>(TEXT("ActivationTrigger"));
 	ActivationTrigger->SetupAttachment(SceneRoot);
@@ -48,11 +46,7 @@ AmultiplayerPressurePlate::AmultiplayerPressurePlate()
 
 	PlayerOccupancy = CreateDefaultSubobject<UmultiplayerPlayerOccupancyComponent>(TEXT("PlayerOccupancy"));
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (CubeMesh.Succeeded())
-	{
-		PlateMesh->SetStaticMesh(CubeMesh.Object);
-	}
+	// 正式机关蓝图持有网格与展示变换，碰撞策略和过渡继续由原组件执行。
 }
 
 // 各端保存编辑器初始位置；仅服务器读取规则并绑定人数/目标，客户端关闭触发器。
@@ -61,7 +55,6 @@ void AmultiplayerPressurePlate::BeginPlay()
 	Super::BeginPlay();
 
 	ReleasedRelativeLocation = PlateMesh->GetRelativeLocation();
-	PlateMesh->SetRelativeLocation(GetMeshTargetLocation());
 	SetActorTickEnabled(false);
 
 	if (!HasAuthority())

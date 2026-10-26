@@ -455,6 +455,16 @@ void UCoopNetTestDriver::ReconnectClientTick(UWorld* World)
 		const FString Name = Phase == TEXT("ReconnectLiveDrop") ? TEXT("PrimaryReconnectLiveDrop")
 			: Phase == TEXT("ReconnectDownedDrop") ? TEXT("PrimaryReconnectDownedDrop") : TEXT("PrimaryReconnectDeadDrop");
 		if (SentReceipts.Contains(Name)) return;
+		// 等待生产 GI 的低频 Timer 从真实 ACK 累计数据得到样本；不由夹具注入 RTT 或触发采样。
+		const auto& Timing = GameInstance->GetConnectionTiming();
+		if (Timing.SampleCount == 0) return;
+		const FString TimingName = Phase == TEXT("ReconnectLiveDrop") ? TEXT("PrimaryReconnectTimingLive")
+			: Phase == TEXT("ReconnectDownedDrop") ? TEXT("PrimaryReconnectTimingDowned") : TEXT("PrimaryReconnectTimingDead");
+		SendReceipt(TimingName, Timing.SmoothedRTT > 0 && Timing.RTTVariation >= 0
+			&& FMath::IsFinite(Timing.GetRTOSeconds()) && Timing.GetRTOSeconds() >= .25 && Timing.GetRTOSeconds() <= 5.,
+			FString::Printf(TEXT("Production ACK-batch sampler: samples=%d SRTT=%.6fs variation=%.6fs RTO=%.6fs; no fixture RTT injection"),
+				Timing.SampleCount, Timing.SmoothedRTT, Timing.RTTVariation, Timing.GetRTOSeconds()));
+		if (bDone) return;
 		SentReceipts.Add(Name);
 		UNetDriver* Net = World->GetNetDriver();
 		Assert(Name, Net && Net->ServerConnection && GEngine, TEXT("Closing the real server connection; GI, not the fixture, owns retry scheduling"));

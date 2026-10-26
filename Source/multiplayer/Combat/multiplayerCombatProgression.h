@@ -82,8 +82,6 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Combat|Progression") EMultiplayerCombatSkill GetSlotSkill(int32 Slot) const;
 	// 未学习或无效技能返回零，不在查询时自动授予。
 	UFUNCTION(BlueprintPure, Category = "Combat|Progression") int32 GetSkillLevel(EMultiplayerCombatSkill Skill) const;
-	// 由同一槽位映射读取技能等级，HUD 不另存一份配装。
-	UFUNCTION(BlueprintPure, Category = "Combat|Progression") int32 GetSlotLevel(int32 Slot) const;
 	// None 或无效被动返回零，学习等级与是否装配分开。
 	UFUNCTION(BlueprintPure, Category = "Combat|Progression") int32 GetPassiveLevel(EMultiplayerCombatPassive Passive) const;
 	// 客户端只能请求枚举和槽位，最终等级、点数和角色资格由拥有该组件的服务器重新检查。

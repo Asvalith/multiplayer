@@ -1,0 +1,2671 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "curated-network-excerpt",
+  "sourceCommit": "2efa683616770e05d915276bb074fbcccff6bc0a",
+  "sourceTree": "704ea2b98c0a35f78f2539d4e6f5be80f77b5218",
+  "sourceReport": {
+    "relativePath": "Saved/ActivationIdentity_20261026/NetworkVisual_R4/report.json",
+    "sha256": "1BB9C241700F8281D660AE66B3F26991CA3DFBE000FD92E159F3B6292DB8D74B",
+    "status": "failed"
+  },
+  "measuredProvenance": {
+    "gitHead": "7477ca913b58e297ab40fc380bbe6027da4f7a0e",
+    "dirty": true,
+    "sourceFilesVerified": 119
+  },
+  "environment": {
+    "engineAssociation": "5.5",
+    "buildKind": "editor-game",
+    "map": "/Game/Combat/Maps/CombatTest",
+    "offscreenDx12": true,
+    "topology": "One local dedicated server and two separate remote client processes",
+    "visualValidation": false
+  },
+  "module": {
+    "sha256": "e28dd35ecef44af5b793c19bd2267cc4e2cfd69cfad23eeb5e9c9e8c69f360ab",
+    "loadedByRuntimeVerified": false
+  },
+  "cases": [
+    {
+      "mode": "CombatLifecycle",
+      "profile": "Normal",
+      "iteration": 1,
+      "status": "passed",
+      "durationSeconds": 91.314,
+      "requiredAssertions": [
+        "DedicatedAuthority",
+        "PartnerReady",
+        "Join",
+        "ServerLifecycleFloor",
+        "ServerLifecycleLateState",
+        "ServerLifecycleFixture",
+        "ServerLifecycleRules",
+        "PrimaryLifecycleRules",
+        "PartnerLifecycleRules",
+        "PrimaryLifecycleLateState",
+        "PartnerLifecycleLateState",
+        "PrimaryDefenseCancelReady",
+        "PartnerDefenseCancelReady",
+        "PrimaryDefenseCancelPredicted",
+        "PrimaryDefenseCancelObserved",
+        "PartnerDefenseCancelObserved",
+        "PrimaryDefenseCancelAuthorityObserved",
+        "ServerDefenseCancelActive",
+        "PrimaryDefenseCancelSent",
+        "ServerDefenseCancelOutcome",
+        "PrimaryDefenseCancelOutcome",
+        "PartnerDefenseCancelOutcome",
+        "ServerAreaSingleDamage",
+        "ServerAreaCancelNoDamage",
+        "ServerAreaStunInterrupt",
+        "ServerAreaStunNoDamage",
+        "ServerAreaCancelCooldownRetained",
+        "ServerAreaConfirmedCancelCooldownRetained",
+        "ServerAreaConfirmedCancelNoDamage",
+        "PrimaryAreaConfirmedCancelAuthorityObserved",
+        "PrimaryAreaConfirmedCancelSent",
+        "PrimaryAreaReleaseInputPreview",
+        "PrimaryAreaReleaseInputReleased",
+        "PrimaryAreaCancelSent",
+        "PrimaryAreaStunObserved",
+        "PartnerAreaStunObserved",
+        "Complete",
+        "PartnerComplete",
+        "PrimaryAreaReleaseReady",
+        "PartnerAreaReleaseReady",
+        "PrimaryAreaReleasePredicted",
+        "PrimaryAreaReleaseRepeatedInput",
+        "PrimaryAreaReleaseOutcome",
+        "PartnerAreaReleaseOutcome",
+        "PrimaryAreaCancelReady",
+        "PartnerAreaCancelReady",
+        "PrimaryAreaCancelPredicted",
+        "PrimaryAreaCancelRepeatedInput",
+        "PrimaryAreaCancelOutcome",
+        "PartnerAreaCancelOutcome",
+        "PrimaryAreaConfirmedCancelReady",
+        "PartnerAreaConfirmedCancelReady",
+        "PrimaryAreaConfirmedCancelPredicted",
+        "PrimaryAreaConfirmedCancelRepeatedInput",
+        "PrimaryAreaConfirmedCancelOutcome",
+        "PartnerAreaConfirmedCancelOutcome",
+        "PrimaryAreaStunReady",
+        "PartnerAreaStunReady",
+        "PrimaryAreaStunPredicted",
+        "PrimaryAreaStunRepeatedInput",
+        "PrimaryAreaStunOutcome",
+        "PartnerAreaStunOutcome",
+        "PrimaryMovementJoinReady",
+        "PartnerMovementJoinReady",
+        "PrimaryMovementJoin",
+        "PartnerMovementJoin",
+        "ServerMovementJoin",
+        "PrimaryMovementReleaseReady",
+        "PartnerMovementReleaseReady",
+        "PrimaryMovementRelease",
+        "PartnerMovementRelease",
+        "ServerMovementRelease",
+        "PrimaryMovementCancelReady",
+        "PartnerMovementCancelReady",
+        "PrimaryMovementCancel",
+        "PartnerMovementCancel",
+        "ServerMovementCancel",
+        "PrimaryMovementConfirmedCancelReady",
+        "PartnerMovementConfirmedCancelReady",
+        "PrimaryMovementConfirmedCancel",
+        "PartnerMovementConfirmedCancel",
+        "ServerMovementConfirmedCancel",
+        "PrimaryMovementStunReady",
+        "PartnerMovementStunReady",
+        "PrimaryMovementStun",
+        "PartnerMovementStun",
+        "ServerMovementStun",
+        "PrimaryAimSnapshotReady",
+        "PartnerAimSnapshotReady",
+        "PrimaryAimSnapshotPredicted",
+        "ServerAimSnapshotDirection",
+        "ServerAimSnapshotLaunch",
+        "ServerAimSnapshotSingleDamage",
+        "PrimaryAimSnapshotOutcome",
+        "PartnerAimSnapshotOutcome",
+        "PrimaryAimMovingReady",
+        "PartnerAimMovingReady",
+        "PrimaryAimMovingPredicted",
+        "ServerAimMovingDirection",
+        "ServerAimMovingLaunch",
+        "ServerAimMovingSingleDamage",
+        "PrimaryAimMovingOutcome",
+        "PartnerAimMovingOutcome",
+        "ServerAimMovingCMC",
+        "ServerVisualFixture",
+        "PrimaryVisualPresentationReady",
+        "PartnerVisualPresentationReady",
+        "PrimaryVisualAreaReleaseCasting",
+        "PrimaryVisualAreaReleaseResult",
+        "PrimaryVisualAreaStunCasting",
+        "PrimaryVisualAreaStunStopped",
+        "PrimaryVisualAreaIdentityA",
+        "PrimaryVisualAreaIdentityACancelled",
+        "PrimaryVisualAreaIdentityB",
+        "PrimaryVisualAreaIdentityBRetained",
+        "PartnerVisualAreaReleaseCasting",
+        "PartnerVisualAreaReleaseResult",
+        "PartnerVisualAreaStunCasting",
+        "PartnerVisualAreaStunStopped",
+        "PartnerVisualAreaIdentityA",
+        "PartnerVisualAreaIdentityACancelled",
+        "PartnerVisualAreaIdentityB",
+        "PartnerVisualAreaIdentityBRetained",
+        "PrimaryAreaReleaseEffectObserved",
+        "PartnerAreaReleaseEffectObserved",
+        "ServerAreaIdentityRules",
+        "ServerAreaIdentityAReleased",
+        "ServerAreaIdentityACancelled",
+        "ServerAreaIdentityBReleased",
+        "ServerAreaIdentityBRetained",
+        "ServerAreaIdentityRestored",
+        "PrimaryAreaIdentityAInput",
+        "PrimaryAreaIdentityBInput",
+        "PrimaryAreaIdentityACancelActive",
+        "PrimaryAreaIdentityReady",
+        "PrimaryAreaIdentityAEffect",
+        "PrimaryAreaIdentityACancelled",
+        "PrimaryAreaIdentityBReady",
+        "PrimaryAreaIdentityBEffect",
+        "PrimaryAreaIdentityBRetained",
+        "PrimaryAreaIdentityRestored",
+        "PartnerAreaIdentityReady",
+        "PartnerAreaIdentityAEffect",
+        "PartnerAreaIdentityACancelled",
+        "PartnerAreaIdentityBReady",
+        "PartnerAreaIdentityBEffect",
+        "PartnerAreaIdentityBRetained",
+        "PartnerAreaIdentityRestored"
+      ],
+      "events": [
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "Boot",
+          "assertion": "DedicatedAuthority",
+          "passed": true,
+          "elapsed": 4.617387101054192
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "Boot",
+          "assertion": "ServerVisualFixture",
+          "passed": true,
+          "elapsed": 4.621627099812031
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ReadyForPartner",
+          "assertion": "ServerLifecycleFloor",
+          "passed": true,
+          "elapsed": 17.373195100575686
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ReadyForPartner",
+          "assertion": "ServerLifecycleLateState",
+          "passed": true,
+          "elapsed": 17.378120202571154
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "elapsed": 34.665111001580954
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ScenarioStart",
+          "assertion": "ServerLifecycleFixture",
+          "passed": true,
+          "elapsed": 34.66521989926696
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ScenarioStart",
+          "assertion": "ServerLifecycleRules",
+          "passed": true,
+          "elapsed": 34.665655601769686
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "ServerMovementJoin",
+          "passed": true,
+          "elapsed": 36.917507000267506
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "ServerDefenseCancelActive",
+          "passed": true,
+          "elapsed": 37.35023970156908
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "ServerDefenseCancelOutcome",
+          "passed": true,
+          "elapsed": 37.45192340016365
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "ServerAreaSingleDamage",
+          "passed": true,
+          "elapsed": 42.10347820073366
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "ServerMovementRelease",
+          "passed": true,
+          "elapsed": 44.5435402020812
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "ServerAreaCancelCooldownRetained",
+          "passed": true,
+          "elapsed": 44.762179501354694
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "ServerAreaCancelNoDamage",
+          "passed": true,
+          "elapsed": 49.08808970078826
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "ServerMovementCancel",
+          "passed": true,
+          "elapsed": 51.36862840130925
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "ServerAreaConfirmedCancelCooldownRetained",
+          "passed": true,
+          "elapsed": 51.68666139990091
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "ServerAreaConfirmedCancelNoDamage",
+          "passed": true,
+          "elapsed": 55.877316899597645
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "ServerMovementConfirmedCancel",
+          "passed": true,
+          "elapsed": 58.43341889977455
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "ServerAreaStunInterrupt",
+          "passed": true,
+          "elapsed": 58.93729789927602
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "ServerAreaStunNoDamage",
+          "passed": true,
+          "elapsed": 62.54783650115132
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "ServerMovementStun",
+          "passed": true,
+          "elapsed": 66.23242000117898
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "ServerAreaIdentityRules",
+          "passed": true,
+          "elapsed": 66.23317850008607
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "ServerAreaIdentityAReleased",
+          "passed": true,
+          "elapsed": 67.36238420009613
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityCancelA",
+          "assertion": "ServerAreaIdentityACancelled",
+          "passed": true,
+          "elapsed": 67.89704539999366
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityB",
+          "assertion": "ServerAreaIdentityBReleased",
+          "passed": true,
+          "elapsed": 72.54293980076909
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityKeepB",
+          "assertion": "ServerAreaIdentityBRetained",
+          "passed": true,
+          "elapsed": 73.29546039924026
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityKeepB",
+          "assertion": "ServerAreaIdentityRestored",
+          "passed": true,
+          "elapsed": 73.29576919972897
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Snapshot",
+          "assertion": "ServerAimSnapshotDirection",
+          "passed": true,
+          "elapsed": 73.97182410210371
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Snapshot",
+          "assertion": "ServerAimSnapshotLaunch",
+          "passed": true,
+          "elapsed": 73.97270080074668
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Snapshot",
+          "assertion": "ServerAimSnapshotSingleDamage",
+          "passed": true,
+          "elapsed": 74.96819750219584
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "ServerAimMovingDirection",
+          "passed": true,
+          "elapsed": 75.57389080151916
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "ServerAimMovingLaunch",
+          "passed": true,
+          "elapsed": 75.5914475992322
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "ServerAimMovingCMC",
+          "passed": true,
+          "elapsed": 76.09755200147629
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "ServerAimMovingSingleDamage",
+          "passed": true,
+          "elapsed": 76.60305630043149
+        },
+        {
+          "role": "Server",
+          "status": "DONE",
+          "phase": "Complete",
+          "assertion": null,
+          "passed": true,
+          "elapsed": 76.80575450137258
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Connecting",
+          "assertion": "Join",
+          "passed": true,
+          "elapsed": 9.020317699760199
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleLateState",
+          "assertion": "PrimaryLifecycleLateState",
+          "passed": true,
+          "elapsed": 9.020383100956678
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Join",
+          "assertion": "PrimaryMovementJoinReady",
+          "passed": true,
+          "elapsed": 9.12518659979105
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PrimaryViewportInputJoin",
+          "passed": true,
+          "elapsed": 9.231509197503328
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PrimaryMovementJoin",
+          "passed": true,
+          "elapsed": 11.055951200425625
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PrimaryVisualPresentationReady",
+          "passed": true,
+          "elapsed": 11.29030229896307
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PrimaryDefenseCancelReady",
+          "passed": true,
+          "elapsed": 11.29061359912157
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PrimaryDefenseCancelPredicted",
+          "passed": true,
+          "elapsed": 11.511168699711561
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PrimaryDefenseCancelObserved",
+          "passed": true,
+          "elapsed": 11.623319000005722
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PrimaryDefenseCancelAuthorityObserved",
+          "passed": true,
+          "elapsed": 11.623409699648619
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "PrimaryDefenseCancelSent",
+          "passed": true,
+          "elapsed": 11.739195000380278
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "PrimaryDefenseCancelOutcome",
+          "passed": true,
+          "elapsed": 11.855399798601866
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PrimaryLifecycleRules",
+          "passed": true,
+          "elapsed": 11.974843099713326
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PrimaryAreaReleaseReady",
+          "passed": true,
+          "elapsed": 11.975136797875166
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseInputPreview",
+          "passed": true,
+          "elapsed": 12.202237199991941
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleasePredicted",
+          "passed": true,
+          "elapsed": 12.22059639915824
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseInputReleased",
+          "passed": true,
+          "elapsed": 12.220697298645973
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseRepeatedInput",
+          "passed": true,
+          "elapsed": 12.258961498737335
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryVisualAreaReleaseCasting",
+          "passed": true,
+          "elapsed": 12.819071400910616
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseEffectObserved",
+          "passed": true,
+          "elapsed": 15.284560199826956
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PrimaryVisualAreaReleaseResult",
+          "passed": true,
+          "elapsed": 16.70601699873805
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PrimaryAreaReleaseOutcome",
+          "passed": true,
+          "elapsed": 16.706062000244856
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Release",
+          "assertion": "PrimaryMovementReleaseReady",
+          "passed": true,
+          "elapsed": 16.805703997612
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PrimaryViewportInputRelease",
+          "passed": true,
+          "elapsed": 16.905278399586678
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PrimaryMovementRelease",
+          "passed": true,
+          "elapsed": 18.83867770060897
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Cancel",
+          "assertion": "PrimaryAreaCancelReady",
+          "passed": true,
+          "elapsed": 18.951906997710466
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "PrimaryAreaCancelPredicted",
+          "passed": true,
+          "elapsed": 19.064389400184155
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "PrimaryAreaCancelRepeatedInput",
+          "passed": true,
+          "elapsed": 19.064472198486328
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "PrimaryAreaCancelSent",
+          "passed": true,
+          "elapsed": 19.06467979773879
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Cancel",
+          "assertion": "PrimaryAreaCancelOutcome",
+          "passed": true,
+          "elapsed": 23.46182329952717
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Cancel",
+          "assertion": "PrimaryMovementCancelReady",
+          "passed": true,
+          "elapsed": 23.573556400835514
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PrimaryViewportInputCancel",
+          "passed": true,
+          "elapsed": 23.688414100557566
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PrimaryMovementCancel",
+          "passed": true,
+          "elapsed": 25.6122444011271
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:ConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 25.726446699351072
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelPredicted",
+          "passed": true,
+          "elapsed": 25.839619800448418
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelRepeatedInput",
+          "passed": true,
+          "elapsed": 25.83976259827614
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelAuthorityObserved",
+          "passed": true,
+          "elapsed": 25.950884997844696
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelSent",
+          "passed": true,
+          "elapsed": 25.951458998024464
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:ConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelOutcome",
+          "passed": true,
+          "elapsed": 30.312919698655605
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:ConfirmedCancel",
+          "assertion": "PrimaryMovementConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 30.53688319772482
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PrimaryViewportInputConfirmedCancel",
+          "passed": true,
+          "elapsed": 30.74576899781823
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PrimaryMovementConfirmedCancel",
+          "passed": true,
+          "elapsed": 32.657662600278854
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Stun",
+          "assertion": "PrimaryAreaStunReady",
+          "passed": true,
+          "elapsed": 32.88227389752865
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PrimaryAreaStunPredicted",
+          "passed": true,
+          "elapsed": 32.99486009776592
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PrimaryAreaStunRepeatedInput",
+          "passed": true,
+          "elapsed": 32.995030000805855
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PrimaryVisualAreaStunCasting",
+          "passed": true,
+          "elapsed": 33.20320159941912
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PrimaryVisualAreaStunStopped",
+          "passed": true,
+          "elapsed": 33.459750298410654
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PrimaryAreaStunObserved",
+          "passed": true,
+          "elapsed": 33.45980869978666
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Stun",
+          "assertion": "PrimaryAreaStunOutcome",
+          "passed": true,
+          "elapsed": 37.00845089927316
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Stun",
+          "assertion": "PrimaryMovementStunReady",
+          "passed": true,
+          "elapsed": 38.358814399689436
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PrimaryViewportInputStun",
+          "passed": true,
+          "elapsed": 38.58268219977617
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PrimaryMovementStun",
+          "passed": true,
+          "elapsed": 40.49318689852953
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityReady",
+          "assertion": "PrimaryAreaIdentityReady",
+          "passed": true,
+          "elapsed": 40.606100898236036
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PrimaryAreaIdentityAInput",
+          "passed": true,
+          "elapsed": 41.056947000324726
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PrimaryVisualAreaIdentityA",
+          "passed": true,
+          "elapsed": 41.57341209799051
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PrimaryAreaIdentityAEffect",
+          "passed": true,
+          "elapsed": 41.57347679883242
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityCancelA",
+          "assertion": "PrimaryAreaIdentityACancelActive",
+          "passed": true,
+          "elapsed": 41.77236760035157
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityCancelA",
+          "assertion": "PrimaryVisualAreaIdentityACancelled",
+          "passed": true,
+          "elapsed": 42.10907470062375
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityCancelA",
+          "assertion": "PrimaryAreaIdentityACancelled",
+          "passed": true,
+          "elapsed": 42.10913769900799
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityBReady",
+          "assertion": "PrimaryAreaIdentityBReady",
+          "passed": true,
+          "elapsed": 45.99362549930811
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityB",
+          "assertion": "PrimaryAreaIdentityBInput",
+          "passed": true,
+          "elapsed": 46.334104999899864
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityB",
+          "assertion": "PrimaryVisualAreaIdentityB",
+          "passed": true,
+          "elapsed": 46.80771839991212
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityB",
+          "assertion": "PrimaryAreaIdentityBEffect",
+          "passed": true,
+          "elapsed": 46.807784497737885
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityKeepB",
+          "assertion": "PrimaryVisualAreaIdentityBRetained",
+          "passed": true,
+          "elapsed": 47.59295799955726
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityKeepB",
+          "assertion": "PrimaryAreaIdentityBRetained",
+          "passed": true,
+          "elapsed": 47.59300829842687
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityRestored",
+          "assertion": "PrimaryAreaIdentityRestored",
+          "passed": true,
+          "elapsed": 47.89252479746938
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleAimReady:Snapshot",
+          "assertion": "PrimaryAimSnapshotReady",
+          "passed": true,
+          "elapsed": 47.999988697469234
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Snapshot",
+          "assertion": "PrimaryAimSnapshotPredicted",
+          "passed": true,
+          "elapsed": 48.111375000327826
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Snapshot",
+          "assertion": "PrimaryAimSnapshotOutcome",
+          "passed": true,
+          "elapsed": 48.86724619939923
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleAimReady:Moving",
+          "assertion": "PrimaryAimMovingReady",
+          "passed": true,
+          "elapsed": 49.49606740102172
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "PrimaryAimMovingPredicted",
+          "passed": true,
+          "elapsed": 49.70824809744954
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "PrimaryAimMovingOutcome",
+          "passed": true,
+          "elapsed": 50.43682489916682
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Complete",
+          "assertion": "Complete",
+          "passed": true,
+          "elapsed": 51.053934298455715
+        },
+        {
+          "role": "Client",
+          "status": "DONE",
+          "phase": "Complete",
+          "assertion": null,
+          "passed": true,
+          "elapsed": 51.0541354008019
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "Connecting",
+          "assertion": "PartnerReady",
+          "passed": true,
+          "elapsed": 4.025962699204683
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleLateState",
+          "assertion": "PartnerLifecycleLateState",
+          "passed": true,
+          "elapsed": 21.804267399013042
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Join",
+          "assertion": "PartnerMovementJoinReady",
+          "passed": true,
+          "elapsed": 21.904697999358177
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PartnerViewportInputJoin",
+          "passed": true,
+          "elapsed": 22.004739500582218
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PartnerMovementJoin",
+          "passed": true,
+          "elapsed": 23.893930800259113
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PartnerVisualPresentationReady",
+          "passed": true,
+          "elapsed": 24.12358320131898
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PartnerDefenseCancelReady",
+          "passed": true,
+          "elapsed": 24.12387629970908
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PartnerDefenseCancelObserved",
+          "passed": true,
+          "elapsed": 24.340209398418665
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "PartnerDefenseCancelOutcome",
+          "passed": true,
+          "elapsed": 24.570685397833586
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PartnerLifecycleRules",
+          "passed": true,
+          "elapsed": 24.685725398361683
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PartnerAreaReleaseReady",
+          "passed": true,
+          "elapsed": 24.68601519986987
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PartnerVisualAreaReleaseCasting",
+          "passed": true,
+          "elapsed": 25.53597230091691
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PartnerAreaReleaseEffectObserved",
+          "passed": true,
+          "elapsed": 28.125781998038292
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PartnerVisualAreaReleaseResult",
+          "passed": true,
+          "elapsed": 29.450440797954798
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PartnerAreaReleaseOutcome",
+          "passed": true,
+          "elapsed": 29.45049300044775
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Release",
+          "assertion": "PartnerMovementReleaseReady",
+          "passed": true,
+          "elapsed": 29.549691699445248
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PartnerViewportInputRelease",
+          "passed": true,
+          "elapsed": 29.64977579936385
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PartnerMovementRelease",
+          "passed": true,
+          "elapsed": 31.484036300331354
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Cancel",
+          "assertion": "PartnerAreaCancelReady",
+          "passed": true,
+          "elapsed": 31.706527698785067
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Cancel",
+          "assertion": "PartnerAreaCancelOutcome",
+          "passed": true,
+          "elapsed": 36.22405590116978
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Cancel",
+          "assertion": "PartnerMovementCancelReady",
+          "passed": true,
+          "elapsed": 36.33711029961705
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PartnerViewportInputCancel",
+          "passed": true,
+          "elapsed": 36.45207849889994
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PartnerMovementCancel",
+          "passed": true,
+          "elapsed": 38.28055329993367
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:ConfirmedCancel",
+          "assertion": "PartnerAreaConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 38.50400219857693
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:ConfirmedCancel",
+          "assertion": "PartnerAreaConfirmedCancelOutcome",
+          "passed": true,
+          "elapsed": 43.106451500207186
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:ConfirmedCancel",
+          "assertion": "PartnerMovementConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 43.335921101272106
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PartnerViewportInputConfirmedCancel",
+          "passed": true,
+          "elapsed": 43.438444297760725
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PartnerMovementConfirmedCancel",
+          "passed": true,
+          "elapsed": 45.263725500553846
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Stun",
+          "assertion": "PartnerAreaStunReady",
+          "passed": true,
+          "elapsed": 45.60471269860864
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PartnerVisualAreaStunCasting",
+          "passed": true,
+          "elapsed": 45.9957332983613
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PartnerVisualAreaStunStopped",
+          "passed": true,
+          "elapsed": 46.2428518012166
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PartnerAreaStunObserved",
+          "passed": true,
+          "elapsed": 46.24289669841528
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Stun",
+          "assertion": "PartnerAreaStunOutcome",
+          "passed": true,
+          "elapsed": 49.718402698636055
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Stun",
+          "assertion": "PartnerMovementStunReady",
+          "passed": true,
+          "elapsed": 49.935949098318815
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PartnerViewportInputStun",
+          "passed": true,
+          "elapsed": 51.28198979794979
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PartnerMovementStun",
+          "passed": true,
+          "elapsed": 53.10525630041957
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityReady",
+          "assertion": "PartnerAreaIdentityReady",
+          "passed": true,
+          "elapsed": 53.44193020090461
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PartnerVisualAreaIdentityA",
+          "passed": true,
+          "elapsed": 54.330019399523735
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PartnerAreaIdentityAEffect",
+          "passed": true,
+          "elapsed": 54.3301597982645
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityCancelA",
+          "assertion": "PartnerVisualAreaIdentityACancelled",
+          "passed": true,
+          "elapsed": 54.824656799435616
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityCancelA",
+          "assertion": "PartnerAreaIdentityACancelled",
+          "passed": true,
+          "elapsed": 54.824710197746754
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityBReady",
+          "assertion": "PartnerAreaIdentityBReady",
+          "passed": true,
+          "elapsed": 55.02406619861722
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityB",
+          "assertion": "PartnerVisualAreaIdentityB",
+          "passed": true,
+          "elapsed": 59.56237319856882
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityB",
+          "assertion": "PartnerAreaIdentityBEffect",
+          "passed": true,
+          "elapsed": 59.56243449822068
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityKeepB",
+          "assertion": "PartnerVisualAreaIdentityBRetained",
+          "passed": true,
+          "elapsed": 60.35549999773502
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityKeepB",
+          "assertion": "PartnerAreaIdentityBRetained",
+          "passed": true,
+          "elapsed": 60.35554439947009
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityRestored",
+          "assertion": "PartnerAreaIdentityRestored",
+          "passed": true,
+          "elapsed": 60.55513009801507
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleAimReady:Snapshot",
+          "assertion": "PartnerAimSnapshotReady",
+          "passed": true,
+          "elapsed": 60.75550980120897
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Snapshot",
+          "assertion": "PartnerAimSnapshotOutcome",
+          "passed": true,
+          "elapsed": 61.61241250112653
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleAimReady:Moving",
+          "assertion": "PartnerAimMovingReady",
+          "passed": true,
+          "elapsed": 62.2538239993155
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleAimFire:Moving",
+          "assertion": "PartnerAimMovingOutcome",
+          "passed": true,
+          "elapsed": 63.22680610045791
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "Complete",
+          "assertion": "PartnerComplete",
+          "passed": true,
+          "elapsed": 63.7486214004457
+        },
+        {
+          "role": "Partner",
+          "status": "DONE",
+          "phase": "Complete",
+          "assertion": null,
+          "passed": true,
+          "elapsed": 63.74870469793677
+        }
+      ],
+      "nativeAreaRouteObservations": [
+        {
+          "role": "Client",
+          "phase": "LifecycleIdentityA"
+        },
+        {
+          "role": "Client",
+          "phase": "LifecycleIdentityB"
+        },
+        {
+          "role": "Partner",
+          "phase": "LifecycleIdentityA"
+        },
+        {
+          "role": "Partner",
+          "phase": "LifecycleIdentityB"
+        }
+      ],
+      "peers": [
+        {
+          "role": "Server",
+          "exitCode": 0,
+          "stoppedByRunner": false
+        },
+        {
+          "role": "Partner",
+          "exitCode": 0,
+          "stoppedByRunner": false
+        },
+        {
+          "role": "Client",
+          "exitCode": 0,
+          "stoppedByRunner": false
+        }
+      ]
+    },
+    {
+      "mode": "CombatLifecycle",
+      "profile": "Harsh",
+      "iteration": 1,
+      "status": "failed",
+      "durationSeconds": 108.899,
+      "requiredAssertions": [
+        "DedicatedAuthority",
+        "PartnerReady",
+        "Join",
+        "ServerLifecycleFloor",
+        "ServerLifecycleLateState",
+        "ServerLifecycleFixture",
+        "ServerLifecycleRules",
+        "PrimaryLifecycleRules",
+        "PartnerLifecycleRules",
+        "PrimaryLifecycleLateState",
+        "PartnerLifecycleLateState",
+        "PrimaryDefenseCancelReady",
+        "PartnerDefenseCancelReady",
+        "PrimaryDefenseCancelPredicted",
+        "PrimaryDefenseCancelObserved",
+        "PartnerDefenseCancelObserved",
+        "PrimaryDefenseCancelAuthorityObserved",
+        "ServerDefenseCancelActive",
+        "PrimaryDefenseCancelSent",
+        "ServerDefenseCancelOutcome",
+        "PrimaryDefenseCancelOutcome",
+        "PartnerDefenseCancelOutcome",
+        "ServerAreaSingleDamage",
+        "ServerAreaCancelNoDamage",
+        "ServerAreaStunInterrupt",
+        "ServerAreaStunNoDamage",
+        "ServerAreaCancelCooldownRetained",
+        "ServerAreaConfirmedCancelCooldownRetained",
+        "ServerAreaConfirmedCancelNoDamage",
+        "PrimaryAreaConfirmedCancelAuthorityObserved",
+        "PrimaryAreaConfirmedCancelSent",
+        "PrimaryAreaReleaseInputPreview",
+        "PrimaryAreaReleaseInputReleased",
+        "PrimaryAreaCancelSent",
+        "PrimaryAreaStunObserved",
+        "PartnerAreaStunObserved",
+        "Complete",
+        "PartnerComplete",
+        "PrimaryAreaReleaseReady",
+        "PartnerAreaReleaseReady",
+        "PrimaryAreaReleasePredicted",
+        "PrimaryAreaReleaseRepeatedInput",
+        "PrimaryAreaReleaseOutcome",
+        "PartnerAreaReleaseOutcome",
+        "PrimaryAreaCancelReady",
+        "PartnerAreaCancelReady",
+        "PrimaryAreaCancelPredicted",
+        "PrimaryAreaCancelRepeatedInput",
+        "PrimaryAreaCancelOutcome",
+        "PartnerAreaCancelOutcome",
+        "PrimaryAreaConfirmedCancelReady",
+        "PartnerAreaConfirmedCancelReady",
+        "PrimaryAreaConfirmedCancelPredicted",
+        "PrimaryAreaConfirmedCancelRepeatedInput",
+        "PrimaryAreaConfirmedCancelOutcome",
+        "PartnerAreaConfirmedCancelOutcome",
+        "PrimaryAreaStunReady",
+        "PartnerAreaStunReady",
+        "PrimaryAreaStunPredicted",
+        "PrimaryAreaStunRepeatedInput",
+        "PrimaryAreaStunOutcome",
+        "PartnerAreaStunOutcome",
+        "PrimaryMovementJoinReady",
+        "PartnerMovementJoinReady",
+        "PrimaryMovementJoin",
+        "PartnerMovementJoin",
+        "ServerMovementJoin",
+        "PrimaryMovementReleaseReady",
+        "PartnerMovementReleaseReady",
+        "PrimaryMovementRelease",
+        "PartnerMovementRelease",
+        "ServerMovementRelease",
+        "PrimaryMovementCancelReady",
+        "PartnerMovementCancelReady",
+        "PrimaryMovementCancel",
+        "PartnerMovementCancel",
+        "ServerMovementCancel",
+        "PrimaryMovementConfirmedCancelReady",
+        "PartnerMovementConfirmedCancelReady",
+        "PrimaryMovementConfirmedCancel",
+        "PartnerMovementConfirmedCancel",
+        "ServerMovementConfirmedCancel",
+        "PrimaryMovementStunReady",
+        "PartnerMovementStunReady",
+        "PrimaryMovementStun",
+        "PartnerMovementStun",
+        "ServerMovementStun",
+        "PrimaryAimSnapshotReady",
+        "PartnerAimSnapshotReady",
+        "PrimaryAimSnapshotPredicted",
+        "ServerAimSnapshotDirection",
+        "ServerAimSnapshotLaunch",
+        "ServerAimSnapshotSingleDamage",
+        "PrimaryAimSnapshotOutcome",
+        "PartnerAimSnapshotOutcome",
+        "PrimaryAimMovingReady",
+        "PartnerAimMovingReady",
+        "PrimaryAimMovingPredicted",
+        "ServerAimMovingDirection",
+        "ServerAimMovingLaunch",
+        "ServerAimMovingSingleDamage",
+        "PrimaryAimMovingOutcome",
+        "PartnerAimMovingOutcome",
+        "ServerAimMovingCMC",
+        "ServerVisualFixture",
+        "PrimaryVisualPresentationReady",
+        "PartnerVisualPresentationReady",
+        "PrimaryVisualAreaReleaseCasting",
+        "PrimaryVisualAreaReleaseResult",
+        "PrimaryVisualAreaStunCasting",
+        "PrimaryVisualAreaStunStopped",
+        "PrimaryVisualAreaIdentityA",
+        "PrimaryVisualAreaIdentityACancelled",
+        "PrimaryVisualAreaIdentityB",
+        "PrimaryVisualAreaIdentityBRetained",
+        "PartnerVisualAreaReleaseCasting",
+        "PartnerVisualAreaReleaseResult",
+        "PartnerVisualAreaStunCasting",
+        "PartnerVisualAreaStunStopped",
+        "PartnerVisualAreaIdentityA",
+        "PartnerVisualAreaIdentityACancelled",
+        "PartnerVisualAreaIdentityB",
+        "PartnerVisualAreaIdentityBRetained",
+        "PrimaryAreaReleaseEffectObserved",
+        "PartnerAreaReleaseEffectObserved",
+        "ServerAreaIdentityRules",
+        "ServerAreaIdentityAReleased",
+        "ServerAreaIdentityACancelled",
+        "ServerAreaIdentityBReleased",
+        "ServerAreaIdentityBRetained",
+        "ServerAreaIdentityRestored",
+        "PrimaryAreaIdentityAInput",
+        "PrimaryAreaIdentityBInput",
+        "PrimaryAreaIdentityACancelActive",
+        "PrimaryAreaIdentityReady",
+        "PrimaryAreaIdentityAEffect",
+        "PrimaryAreaIdentityACancelled",
+        "PrimaryAreaIdentityBReady",
+        "PrimaryAreaIdentityBEffect",
+        "PrimaryAreaIdentityBRetained",
+        "PrimaryAreaIdentityRestored",
+        "PartnerAreaIdentityReady",
+        "PartnerAreaIdentityAEffect",
+        "PartnerAreaIdentityACancelled",
+        "PartnerAreaIdentityBReady",
+        "PartnerAreaIdentityBEffect",
+        "PartnerAreaIdentityBRetained",
+        "PartnerAreaIdentityRestored"
+      ],
+      "events": [
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "Boot",
+          "assertion": "DedicatedAuthority",
+          "passed": true,
+          "elapsed": 2.4675646014511585
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "Boot",
+          "assertion": "ServerVisualFixture",
+          "passed": true,
+          "elapsed": 2.470374498516321
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ReadyForPartner",
+          "assertion": "ServerLifecycleFloor",
+          "passed": true,
+          "elapsed": 17.3175462000072
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ReadyForPartner",
+          "assertion": "ServerLifecycleLateState",
+          "passed": true,
+          "elapsed": 17.322351600974798
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ReadyForClient",
+          "assertion": "Join",
+          "passed": true,
+          "elapsed": 36.52517880126834
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ScenarioStart",
+          "assertion": "ServerLifecycleFixture",
+          "passed": true,
+          "elapsed": 36.525268599390984
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "ScenarioStart",
+          "assertion": "ServerLifecycleRules",
+          "passed": true,
+          "elapsed": 36.52578090131283
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "ServerMovementJoin",
+          "passed": true,
+          "elapsed": 41.199206199496984
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "ServerDefenseCancelActive",
+          "passed": true,
+          "elapsed": 43.10413699969649
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "ServerDefenseCancelOutcome",
+          "passed": true,
+          "elapsed": 43.6076040007174
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "ServerAreaSingleDamage",
+          "passed": true,
+          "elapsed": 49.956592101603746
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "ServerMovementRelease",
+          "passed": true,
+          "elapsed": 54.42648779973388
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "ServerAreaCancelCooldownRetained",
+          "passed": true,
+          "elapsed": 55.76686279848218
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "ServerAreaCancelNoDamage",
+          "passed": true,
+          "elapsed": 59.97456429898739
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "ServerMovementCancel",
+          "passed": true,
+          "elapsed": 65.02406239882112
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "ServerAreaConfirmedCancelCooldownRetained",
+          "passed": true,
+          "elapsed": 67.16725239902735
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "ServerAreaConfirmedCancelNoDamage",
+          "passed": true,
+          "elapsed": 70.84665070101619
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "ServerMovementConfirmedCancel",
+          "passed": true,
+          "elapsed": 75.49387989938259
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "ServerAreaStunInterrupt",
+          "passed": true,
+          "elapsed": 77.3931188993156
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "ServerAreaStunNoDamage",
+          "passed": true,
+          "elapsed": 80.9375187009573
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "ServerMovementStun",
+          "passed": true,
+          "elapsed": 85.45113519951701
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "ServerAreaIdentityRules",
+          "passed": true,
+          "elapsed": 85.45161110162735
+        },
+        {
+          "role": "Server",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "ServerLifecyclePhaseTimeout",
+          "passed": false,
+          "elapsed": 101.22892130166292
+        },
+        {
+          "role": "Server",
+          "status": "FAIL",
+          "phase": "LifecycleIdentityA",
+          "assertion": null,
+          "passed": null,
+          "elapsed": 101.22907619923353
+        },
+        {
+          "role": "Server",
+          "status": "DONE",
+          "phase": "LifecycleIdentityA",
+          "assertion": null,
+          "passed": false,
+          "elapsed": 101.22918330132961
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "Connecting",
+          "assertion": "Join",
+          "passed": true,
+          "elapsed": 11.296169999986887
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleLateState",
+          "assertion": "PrimaryLifecycleLateState",
+          "passed": true,
+          "elapsed": 11.296229999512434
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Join",
+          "assertion": "PrimaryMovementJoinReady",
+          "passed": true,
+          "elapsed": 12.419708400964737
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PrimaryViewportInputJoin",
+          "passed": true,
+          "elapsed": 13.545481700450182
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PrimaryMovementJoin",
+          "passed": true,
+          "elapsed": 15.383835900574923
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PrimaryVisualPresentationReady",
+          "passed": true,
+          "elapsed": 16.063661102205515
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PrimaryDefenseCancelReady",
+          "passed": true,
+          "elapsed": 16.06397880241275
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PrimaryDefenseCancelPredicted",
+          "passed": true,
+          "elapsed": 16.72926289960742
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PrimaryDefenseCancelObserved",
+          "passed": true,
+          "elapsed": 17.284074999392033
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PrimaryDefenseCancelAuthorityObserved",
+          "passed": true,
+          "elapsed": 17.284208200871944
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "PrimaryDefenseCancelSent",
+          "passed": true,
+          "elapsed": 17.84726110100746
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "PrimaryDefenseCancelOutcome",
+          "passed": true,
+          "elapsed": 18.403489600867033
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PrimaryLifecycleRules",
+          "passed": true,
+          "elapsed": 18.969755802303553
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PrimaryAreaReleaseReady",
+          "passed": true,
+          "elapsed": 18.970035400241613
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseInputPreview",
+          "passed": true,
+          "elapsed": 19.648453000932932
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleasePredicted",
+          "passed": true,
+          "elapsed": 19.66972979903221
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseInputReleased",
+          "passed": true,
+          "elapsed": 19.669815201312304
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseRepeatedInput",
+          "passed": true,
+          "elapsed": 19.70484160259366
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryVisualAreaReleaseCasting",
+          "passed": true,
+          "elapsed": 20.29299909994006
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PrimaryAreaReleaseEffectObserved",
+          "passed": true,
+          "elapsed": 23.65023510158062
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PrimaryVisualAreaReleaseResult",
+          "passed": true,
+          "elapsed": 24.962331000715494
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PrimaryAreaReleaseOutcome",
+          "passed": true,
+          "elapsed": 24.962388399988413
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Release",
+          "assertion": "PrimaryMovementReleaseReady",
+          "passed": true,
+          "elapsed": 26.16279000043869
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PrimaryViewportInputRelease",
+          "passed": true,
+          "elapsed": 26.726039700210094
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PrimaryMovementRelease",
+          "passed": true,
+          "elapsed": 28.570139799267054
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Cancel",
+          "assertion": "PrimaryAreaCancelReady",
+          "passed": true,
+          "elapsed": 29.247012801468372
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "PrimaryAreaCancelPredicted",
+          "passed": true,
+          "elapsed": 29.918462302535772
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "PrimaryAreaCancelRepeatedInput",
+          "passed": true,
+          "elapsed": 29.91855699941516
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleCancel",
+          "assertion": "PrimaryAreaCancelSent",
+          "passed": true,
+          "elapsed": 29.918765101581812
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Cancel",
+          "assertion": "PrimaryAreaCancelOutcome",
+          "passed": true,
+          "elapsed": 34.84649860113859
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Cancel",
+          "assertion": "PrimaryMovementCancelReady",
+          "passed": true,
+          "elapsed": 35.74451830238104
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PrimaryViewportInputCancel",
+          "passed": true,
+          "elapsed": 37.31216010078788
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PrimaryMovementCancel",
+          "passed": true,
+          "elapsed": 39.23372010141611
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:ConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 39.79337120056152
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelPredicted",
+          "passed": true,
+          "elapsed": 40.800035800784826
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelRepeatedInput",
+          "passed": true,
+          "elapsed": 40.80017290264368
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelAuthorityObserved",
+          "passed": true,
+          "elapsed": 41.357661701738834
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelSent",
+          "passed": true,
+          "elapsed": 41.35809350013733
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:ConfirmedCancel",
+          "assertion": "PrimaryAreaConfirmedCancelOutcome",
+          "passed": true,
+          "elapsed": 45.62140899896622
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:ConfirmedCancel",
+          "assertion": "PrimaryMovementConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 46.635893899947405
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PrimaryViewportInputConfirmedCancel",
+          "passed": true,
+          "elapsed": 47.7660115994513
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PrimaryMovementConfirmedCancel",
+          "passed": true,
+          "elapsed": 49.68736770004034
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Stun",
+          "assertion": "PrimaryAreaStunReady",
+          "passed": true,
+          "elapsed": 50.3553716018796
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PrimaryAreaStunPredicted",
+          "passed": true,
+          "elapsed": 50.909302700310946
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PrimaryAreaStunRepeatedInput",
+          "passed": true,
+          "elapsed": 50.909390199929476
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PrimaryVisualAreaStunCasting",
+          "passed": true,
+          "elapsed": 51.08885470032692
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PrimaryVisualAreaStunStopped",
+          "passed": true,
+          "elapsed": 52.37952449917793
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PrimaryAreaStunObserved",
+          "passed": true,
+          "elapsed": 52.379566200077534
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Stun",
+          "assertion": "PrimaryAreaStunOutcome",
+          "passed": true,
+          "elapsed": 55.71233320236206
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Stun",
+          "assertion": "PrimaryMovementStunReady",
+          "passed": true,
+          "elapsed": 57.16376730054617
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PrimaryViewportInputStun",
+          "passed": true,
+          "elapsed": 57.72109290212393
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PrimaryMovementStun",
+          "passed": true,
+          "elapsed": 59.62892059981823
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityReady",
+          "assertion": "PrimaryAreaIdentityReady",
+          "passed": true,
+          "elapsed": 60.29936930164695
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PrimaryAreaIdentityAInput",
+          "passed": true,
+          "elapsed": 61.19249249994755
+        },
+        {
+          "role": "Client",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PrimaryLifecyclePhaseTimeout",
+          "passed": false,
+          "elapsed": 76.03237650170922
+        },
+        {
+          "role": "Client",
+          "status": "FAIL",
+          "phase": "LifecycleIdentityA",
+          "assertion": null,
+          "passed": null,
+          "elapsed": 76.03243140131235
+        },
+        {
+          "role": "Client",
+          "status": "DONE",
+          "phase": "LifecycleIdentityA",
+          "assertion": null,
+          "passed": false,
+          "elapsed": 76.03244910016656
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "Connecting",
+          "assertion": "PartnerReady",
+          "passed": true,
+          "elapsed": 5.654879201203585
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleLateState",
+          "assertion": "PartnerLifecycleLateState",
+          "passed": true,
+          "elapsed": 25.475935600697994
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Join",
+          "assertion": "PartnerMovementJoinReady",
+          "passed": true,
+          "elapsed": 27.03843219950795
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PartnerViewportInputJoin",
+          "passed": true,
+          "elapsed": 27.60596350207925
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Join",
+          "assertion": "PartnerMovementJoin",
+          "passed": true,
+          "elapsed": 29.460726499557495
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PartnerVisualPresentationReady",
+          "passed": true,
+          "elapsed": 30.15098199993372
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseReady",
+          "assertion": "PartnerDefenseCancelReady",
+          "passed": true,
+          "elapsed": 30.151298500597477
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCast",
+          "assertion": "PartnerDefenseCancelObserved",
+          "passed": true,
+          "elapsed": 31.373888202011585
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleDefenseCancel",
+          "assertion": "PartnerDefenseCancelOutcome",
+          "passed": true,
+          "elapsed": 32.49269890040159
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PartnerLifecycleRules",
+          "passed": true,
+          "elapsed": 33.055474601686
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Release",
+          "assertion": "PartnerAreaReleaseReady",
+          "passed": true,
+          "elapsed": 33.05576400086284
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PartnerVisualAreaReleaseCasting",
+          "passed": true,
+          "elapsed": 35.098936799913645
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleRelease",
+          "assertion": "PartnerAreaReleaseEffectObserved",
+          "passed": true,
+          "elapsed": 37.73667890205979
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PartnerVisualAreaReleaseResult",
+          "passed": true,
+          "elapsed": 39.047046702355146
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Release",
+          "assertion": "PartnerAreaReleaseOutcome",
+          "passed": true,
+          "elapsed": 39.04710889980197
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Release",
+          "assertion": "PartnerMovementReleaseReady",
+          "passed": true,
+          "elapsed": 39.67401660233736
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PartnerViewportInputRelease",
+          "passed": true,
+          "elapsed": 40.91373300179839
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Release",
+          "assertion": "PartnerMovementRelease",
+          "passed": true,
+          "elapsed": 42.76735069975257
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Cancel",
+          "assertion": "PartnerAreaCancelReady",
+          "passed": true,
+          "elapsed": 43.33401530236006
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Cancel",
+          "assertion": "PartnerAreaCancelOutcome",
+          "passed": true,
+          "elapsed": 48.944064401090145
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Cancel",
+          "assertion": "PartnerMovementCancelReady",
+          "passed": true,
+          "elapsed": 50.95988330245018
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PartnerViewportInputCancel",
+          "passed": true,
+          "elapsed": 51.51759830117226
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Cancel",
+          "assertion": "PartnerMovementCancel",
+          "passed": true,
+          "elapsed": 53.33648490160704
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:ConfirmedCancel",
+          "assertion": "PartnerAreaConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 53.900695502758026
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:ConfirmedCancel",
+          "assertion": "PartnerAreaConfirmedCancelOutcome",
+          "passed": true,
+          "elapsed": 59.73081950098276
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:ConfirmedCancel",
+          "assertion": "PartnerMovementConfirmedCancelReady",
+          "passed": true,
+          "elapsed": 61.31212620064616
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PartnerViewportInputConfirmedCancel",
+          "passed": true,
+          "elapsed": 61.873709600418806
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:ConfirmedCancel",
+          "assertion": "PartnerMovementConfirmedCancel",
+          "passed": true,
+          "elapsed": 63.698442202061415
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleReady:Stun",
+          "assertion": "PartnerAreaStunReady",
+          "passed": true,
+          "elapsed": 64.36881919950247
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleStun",
+          "assertion": "PartnerVisualAreaStunCasting",
+          "passed": true,
+          "elapsed": 65.69714640080929
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PartnerVisualAreaStunStopped",
+          "passed": true,
+          "elapsed": 66.48123149946332
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleStunObserve",
+          "assertion": "PartnerAreaStunObserved",
+          "passed": true,
+          "elapsed": 66.48128170147538
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleVerify:Stun",
+          "assertion": "PartnerAreaStunOutcome",
+          "passed": true,
+          "elapsed": 69.84192990139127
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMoveReady:Stun",
+          "assertion": "PartnerMovementStunReady",
+          "passed": true,
+          "elapsed": 70.486991699785
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PartnerViewportInputStun",
+          "passed": true,
+          "elapsed": 71.83577850088477
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleMove:Stun",
+          "assertion": "PartnerMovementStun",
+          "passed": true,
+          "elapsed": 73.65747180208564
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityReady",
+          "assertion": "PartnerAreaIdentityReady",
+          "passed": true,
+          "elapsed": 74.33112920075655
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PartnerVisualAreaIdentityA",
+          "passed": true,
+          "elapsed": 76.1891994997859
+        },
+        {
+          "role": "Partner",
+          "status": "ASSERT",
+          "phase": "LifecycleIdentityA",
+          "assertion": "PartnerAreaIdentityAEffect",
+          "passed": true,
+          "elapsed": 76.1892566010356
+        }
+      ],
+      "nativeAreaRouteObservations": [
+        {
+          "role": "Partner",
+          "phase": "LifecycleIdentityA"
+        }
+      ],
+      "peers": [
+        {
+          "role": "Server",
+          "exitCode": -1,
+          "stoppedByRunner": true
+        },
+        {
+          "role": "Partner",
+          "exitCode": -1,
+          "stoppedByRunner": true
+        },
+        {
+          "role": "Client",
+          "exitCode": -1,
+          "stoppedByRunner": true
+        }
+      ]
+    }
+  ],
+  "boundary": "Normal passed; Harsh failed before owner observed R result routing. No tokens, commands, raw detail, machine paths or inferred passing assertions are published."
+}

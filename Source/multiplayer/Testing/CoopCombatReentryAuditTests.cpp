@@ -24,6 +24,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameplayPrediction.h"
+#include "GameplayAbilitySpec.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
@@ -392,9 +393,32 @@ bool FCoopCombatMontagePredictionKeyOwnershipAudit::RunTest(const FString& Param
 	const auto* Surviving = Animation->GetActiveInstanceForMontage(Montage);
 	TestTrue(TEXT("The same new montage instance survives the old rejection"), Surviving && Surviving->GetInstanceID() == SecondInstance);
 	TestTrue(TEXT("ASC continues to own the current saved montage"), ReceiverASC->GetCurrentMontage() == Montage);
+	AddInfo(FString::Printf(TEXT("STALE_REJECTION oldKey=%d newKey=%d oldInstance=%d currentInstance=%d oldRejected=%d currentStillPlaying=%d"),
+		OldKey.Current, NewKey.Current, FirstInstance, SecondInstance, bOldRejected, Animation->Montage_IsPlaying(Montage)));
 	RejectKey(NewKey);
 	TestTrue(TEXT("The native client rejection actually broadcasts the new key"), bNewRejected);
 	TestFalse(TEXT("Rejecting the current real key does stop its own animation"), Animation->Montage_IsPlaying(Montage));
+	AddInfo(FString::Printf(TEXT("STALE_REJECTION currentKeyRejected=%d currentStillPlaying=%d"), bNewRejected, Animation->Montage_IsPlaying(Montage)));
+	// 延迟到原动作窗口之外播放时，ASC 仍须用已存在的激活键认领拒绝；不新开窗口或制造替代编号。
+	FPredictionKey ActivationKey;
+	bool bActivationRejected = false;
+	{
+		FScopedPredictionWindow Window(ReceiverASC, true);
+		ActivationKey = ReceiverASC->GetPredictionKeyForNewAction();
+		if (!TestTrue(TEXT("Delayed playback retains a real independent activation key"),
+			ActivationKey.IsLocalClientKey() && ActivationKey != NewKey)) return false;
+		ActivationKey.NewRejectedDelegate().BindWeakLambda(ReceiverASC, [&] { bActivationRejected = true; });
+	}
+	FGameplayAbilityActivationInfo DelayedActivation;
+	DelayedActivation.SetPredicting(ActivationKey);
+	if (!TestFalse(TEXT("Delayed playback occurs outside any current action prediction window"),
+		ReceiverASC->GetPredictionKeyForNewAction().IsValidKey())) return false;
+	TestTrue(TEXT("Outside-window playback accepts the original activation info"),
+		ReceiverASC->PlayMontage(nullptr, DelayedActivation, Montage, 1.f) > 0.f);
+	TestTrue(TEXT("Outside-window montage is actually playing before rejection"), Animation->Montage_IsPlaying(Montage));
+	RejectKey(ActivationKey);
+	TestTrue(TEXT("Native rejection broadcasts the retained activation key"), bActivationRejected);
+	TestFalse(TEXT("Activation-key fallback stops its own outside-window playback"), Animation->Montage_IsPlaying(Montage));
 	return !HasAnyErrors();
 }
 
@@ -444,6 +468,43 @@ bool FCoopCombatFailedNestedMontageAudit::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Failed nested play cannot steal ASC's montage record"), ASC->GetCurrentMontage() == Montage);
 	ASC->CancelAbilityHandle(Handle);
 	TestFalse(TEXT("Outer ability can still stop its own correctly owned animation"), Animation->Montage_IsPlaying(Montage));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaEndWhileScopeLockedAudit,
+	"Multiplayer.Combat.ReentryAudit.AreaEndWhileScopeLocked",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 真实蓝图结束入口必须连同自有施法锁一起排队；不能在原生 GAS 仍持有目标迭代锁时提前解锁。
+bool FCoopCombatAreaEndWhileScopeLockedAudit::RunTest(const FString&)
+{
+	FCombatReentryAuditWorld Fixture;
+	auto* Player = Fixture.Player();
+	if (!TestNotNull(TEXT("Saved player exists"), Player)) return false;
+	auto* ASC = Player->GetAbilitySystemComponent();
+	const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+	if (!TestTrue(TEXT("Real area spec has its primary instance"), Spec && Spec->GetPrimaryInstance())) return false;
+	const auto Handle = Spec->Handle;
+	if (!TestTrue(TEXT("Real area starts before the target iteration lock"), Player->ActivateSkill(EMultiplayerCombatSkill::Area))) return false;
+	auto* Ability = ASC->FindAbilitySpecFromHandle(Handle)->GetPrimaryInstance();
+	UFunction* EndFunction = Ability->FindFunction(TEXT("K2_EndAbility"));
+	FGameplayEffectQuery CastingQuery;
+	CastingQuery.EffectDefinition = UmultiplayerCastingEffect::StaticClass();
+	const auto CastingEffects = ASC->GetActiveEffects(CastingQuery);
+	const int32 CastingTags = ASC->GetTagCount(CombatTags::State_Casting);
+	if (!TestTrue(TEXT("Area owns one actual casting effect and the real blueprint end entry"),
+		CastingEffects.Num() == 1 && CastingTags > 0 && EndFunction && EndFunction->NumParms == 0)) return false;
+	{
+		FScopedTargetListLock ScopeLock(*ASC, *Ability);
+		// CancelAbility defers before EndAbility; the genuine Blueprint end entry exercises the derived cleanup itself.
+		Ability->ProcessEvent(EndFunction, nullptr);
+		TestTrue(TEXT("Locked end keeps the original real spec active"), ASC->FindAbilitySpecFromHandle(Handle)->IsActive());
+		TestTrue(TEXT("Locked end retains its own actual casting GE"), ASC->GetActiveGameplayEffect(CastingEffects[0]) != nullptr);
+		TestEqual(TEXT("Locked end does not remove any casting tag reference"), ASC->GetTagCount(CombatTags::State_Casting), CastingTags);
+	}
+	TestFalse(TEXT("Releasing the native scope lock completes the queued end"), ASC->FindAbilitySpecFromHandle(Handle)->IsActive());
+	TestNull(TEXT("Completed end removes its exact casting GE"), ASC->GetActiveGameplayEffect(CastingEffects[0]));
+	TestFalse(TEXT("Completed end releases casting state"), Player->IsCasting());
 	return !HasAnyErrors();
 }
 

@@ -18,6 +18,7 @@
 #include "Combat/multiplayerCombatEnemy.h"
 #include "Combat/multiplayerCombatMobility.h"
 #include "Combat/multiplayerCombatProgression.h"
+#include "Combat/multiplayerCombatPresentation.h"
 #include "Core/multiplayerGameMode.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -31,10 +32,11 @@
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/PlayerController.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 
-// ASC 与属性集属于角色生命周期；短时重连由服务器快照恢复，不跨回合保存。
+// [职责] ASC 与属性集属于 Pawn 生命周期；短时重连由服务器快照重建，不跨回合保存。
 // 取舍：玩家和敌人共用角色战斗层；换 Pawn 要重建稳定状态，而不是让 ASC 跨 Pawn 常驻。
 AmultiplayerCombatCharacter::AmultiplayerCombatCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -154,6 +156,7 @@ void AmultiplayerCombatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReas
 	}
 	AbilitySystem->ClearActorInfo();
 	PresentationAssets.Reset();
+	ClearAreaFeedback();
 	Super::EndPlay(EndPlayReason);
 	// Super 会结束合作组件并广播最后一次状态清理；在它之后撤销唯一表现任务。
 	GetWorldTimerManager().ClearTimer(LifePresentationRefreshTimer);
@@ -216,13 +219,20 @@ float AmultiplayerCombatCharacter::GetBurnRemaining() const { return GetEffectRe
 // 读取眩晕 GE 的剩余时间。
 float AmultiplayerCombatCharacter::GetStunRemaining() const { return GetEffectRemaining(CombatTags::State_Stunned); }
 // 从 R 冷却 GE 读取剩余时间。
-float AmultiplayerCombatCharacter::GetAreaCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Area); }
+float AmultiplayerCombatCharacter::GetAreaCooldownRemaining() const { return GetSkillCooldownRemaining(EMultiplayerCombatSkill::Area); }
 // 从普攻冷却 GE 读取剩余时间。
-float AmultiplayerCombatCharacter::GetAttackCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Attack); }
+float AmultiplayerCombatCharacter::GetAttackCooldownRemaining() const { return GetSkillCooldownRemaining(EMultiplayerCombatSkill::Attack); }
 // 从治疗冷却 GE 读取剩余时间。
-float AmultiplayerCombatCharacter::GetHealCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Heal); }
+float AmultiplayerCombatCharacter::GetHealCooldownRemaining() const { return GetSkillCooldownRemaining(EMultiplayerCombatSkill::Heal); }
 // 从冲刺冷却 GE 读取剩余时间。
-float AmultiplayerCombatCharacter::GetDashCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Dash); }
+float AmultiplayerCombatCharacter::GetDashCooldownRemaining() const { return GetSkillCooldownRemaining(EMultiplayerCombatSkill::Dash); }
+
+// HUD、失败提示和权威拒绝使用同一映射，无效枚举不能退化为空查询并读到其他效果。
+float AmultiplayerCombatCharacter::GetSkillCooldownRemaining(EMultiplayerCombatSkill Skill) const
+{
+	const FGameplayTag Tag = CombatTags::GetSkillTags(Skill).Cooldown;
+	return Tag.IsValid() ? GetEffectRemaining(Tag) : 0.f;
+}
 // 配置资产缺省时使用原生默认配置；调用者只读，不改写共享资产。
 const UmultiplayerCombatConfig& AmultiplayerCombatCharacter::GetCombatConfig() const
 {
@@ -282,7 +292,7 @@ float AmultiplayerCombatCharacter::GetCastProgress() const
 float AmultiplayerCombatCharacter::GetDefenseRemaining() const { return GetEffectRemaining(CombatTags::State_Defending); }
 
 // 冷却使用实际 GameplayEffect 时间，不额外维护 Timer；拒绝预测后不残留本地冷却。
-float AmultiplayerCombatCharacter::GetDefenseCooldownRemaining() const { return GetEffectRemaining(CombatTags::Cooldown_Defend); }
+float AmultiplayerCombatCharacter::GetDefenseCooldownRemaining() const { return GetSkillCooldownRemaining(EMultiplayerCombatSkill::Defend); }
 
 // 状态和冷却查询共用实际 GE 计时；死亡时返回零，不在此移除效果。
 float AmultiplayerCombatCharacter::GetEffectRemaining(const FGameplayTag& Tag) const
@@ -315,7 +325,7 @@ void AmultiplayerCombatCharacter::SetCombatSessionReady(bool bReady)
 	OnCombatStateChanged.Broadcast();
 }
 
-// 断线前从服务器真实属性与 GameplayEffect 读取快照，不接受客户端上报的资源和计时。
+// [职责] GameMode 断线保存时，从服务器真实属性与 GE 捕获个人快照，不接收客户端数值。
 // 只保存稳定数值及白名单效果；旧任务、回调和 ActiveGEHandle 不带入新 Pawn，避免重放半次技能。
 FmultiplayerCombatResumeState AmultiplayerCombatCharacter::CaptureResumeState() const
 {
@@ -387,7 +397,8 @@ namespace
 	}
 }
 
-// 仅对尚未接纳的新 Pawn 还原服务器快照；离线时间正常扣除，不刷新资源、冷却或死亡状态。
+// [职责] 新 Pawn 仍未接纳时，依次恢复成长上限、位置、资源和白名单效果，完成后由 GameMode 提交接纳状态。
+// [边界] 扣除离线耗时并补算白名单灼烧；不重演离线世界、恢复旧能力或回滚恢复失败的临时 Pawn。
 bool AmultiplayerCombatCharacter::RestoreResumeState(const FmultiplayerCombatResumeState& State, float OfflineSeconds, FText* OutError)
 {
 	if (OutError) *OutError = FText::GetEmpty();
@@ -559,7 +570,8 @@ void AmultiplayerCombatCharacter::ClientProgressResult_Implementation(bool bSucc
 		: TEXT("操作未完成：存档不存在、不兼容或当前动作尚未结束")));
 }
 
-// 远程玩家以事件携带方向意图，服务器直接请求走自己的世界查询与方向快照。
+// [亮点] 远端方向意图随 GAS 激活事件提交；服务器独立求起点、落点和命中，不另收目标裁决。
+// [边界] 沿用原生预测窗口及 GE 账本，不为任意 C++ 副作用或半次技能提供通用回滚。
 bool AmultiplayerCombatCharacter::ActivateAimedSkill(TSubclassOf<UGameplayAbility> AbilityClass, const FGameplayTag& EventTag)
 {
 	// AI、独立运行和服务器自己的调用直接取本地快照；远端玩家只发送方向，不发送命中结果。
@@ -576,15 +588,187 @@ bool AmultiplayerCombatCharacter::ActivateAimedSkill(TSubclassOf<UGameplayAbilit
 	Event.TargetData.Add(Aim);
 	return AbilitySystem->HandleGameplayEvent(EventTag, &Event) > 0;
 }
-// 右键撤销本地预览并请求结束救援、R 和冲刺；不撤销已经付费的成本或权威伤害。
+// 能力取消与持续状态分开处理：Q 的 GA 已结束，仍需服务器移除其防御/弹反 GE。
+// R 出手后粒子独立于 GA；右键只停当前表现，不能抹去已经结算的伤害与控制。
 void AmultiplayerCombatCharacter::CancelCast()
 {
-	CancelSkillTargeting();
+	FPredictionKey DefenseKey;
+	const bool bCancelDefense = CastChecked<UmultiplayerCombatAbilitySystem>(AbilitySystem)->GetDefensePredictionKey(DefenseKey);
+	const FmultiplayerCombatActivationIdentity AreaIdentity = GetAreaActivationIdentity();
+	// 先关闭旧预览，清理完成后再通知；这条预览通知中启动的新技能不属于本次取消。
+	// 这里只调整预览通知顺序，不把 GAS 效果/任务内部的状态通知改成延后事务。
+	const bool bHadTargeting = bSkillTargeting;
+	bSkillTargeting = false;
 	CancelRescue();
 	FGameplayTagContainer AbilityTags;
+	AbilityTags.AddTag(CombatTags::Ability_Defend);
 	AbilityTags.AddTag(CombatTags::Ability_Area);
 	AbilityTags.AddTag(CombatTags::Ability_Dash);
 	AbilitySystem->CancelAbilities(&AbilityTags);
+	if (!HasAuthority()) StopAreaFeedback(AreaIdentity);
+	ServerCancelDefenseAndAreaFeedback(DefenseKey, bCancelDefense, AreaIdentity);
+	if (bHadTargeting) OnCombatStateChanged.Broadcast();
+}
+
+// 该 RPC 只接纳所属角色的取消意图；客户端不能指定效果类型、伤害或任意效果句柄。
+void AmultiplayerCombatCharacter::ServerCancelDefenseAndAreaFeedback_Implementation(FPredictionKey DefenseKey, bool bCancelDefense,
+	FmultiplayerCombatActivationIdentity AreaIdentity)
+{
+	if (bCancelDefense) CastChecked<UmultiplayerCombatAbilitySystem>(AbilitySystem)->EndDefense(DefenseKey);
+	// 只解析本角色已授予的 R；未知预测请求不推断成当前新轮次。
+	if (!AreaIdentity.IsValid()) return;
+	const FmultiplayerCombatActivationIdentity Requested = AreaIdentity;
+	AreaIdentity.AuthorityRevision = 0;
+	const auto* Spec = AbilitySystem->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+	const auto* Ability = Spec ? Cast<UmultiplayerCombatAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	const auto Current = Ability ? Ability->GetActivationIdentity() : FmultiplayerCombatActivationIdentity();
+	if (Current.IsValid() && Requested.SpecHandle == Current.SpecHandle)
+	{
+		// 客户端不能通过未来轮次提前屏蔽服务器后续释放。
+		if (Requested.AuthorityRevision != 0
+			&& Requested.AuthorityRevision <= Current.AuthorityRevision) AreaIdentity = Requested;
+		else if (Requested.AuthorityRevision == 0)
+		{
+			if (Current.Matches(Requested)) AreaIdentity = Current;
+			else if (const auto* State = AreaFeedbackStates.Find(Requested.SpecHandle);
+				State && State->Identity.Matches(Requested)) AreaIdentity = State->Identity;
+		}
+	}
+	// 未解析请求只确认并释放拥有者的暂存关联，不修改服务器/旁观者的当前状态。
+	MulticastStopAreaFeedback(AreaIdentity);
+}
+
+// 旧回执只操作自己的激活；无法解析的旧预测请求只结束等待，不取消当前新表现。
+void AmultiplayerCombatCharacter::MulticastStopAreaFeedback_Implementation(FmultiplayerCombatActivationIdentity Identity)
+{
+	if (Identity.AuthorityRevision != 0) StopAreaFeedback(Identity);
+	PendingAreaCancellations.RemoveAll([&](const auto& Pending) { return Pending.Matches(Identity); });
+}
+
+// 预测轮次只在本端绑定；拒绝造成客户端/服务器轮次分叉时仍通过原预测键关联。
+FmultiplayerCombatActivationIdentity AmultiplayerCombatCharacter::GetAreaActivationIdentity() const
+{
+	const auto* Spec = AbilitySystem->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+	const auto* Ability = Spec ? Cast<UmultiplayerCombatAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	if (!Ability) return LatestAreaFeedback;
+	const auto Identity = Ability->GetActivationIdentity();
+	if (Identity.AuthorityRevision == 0)
+		if (const auto* State = AreaFeedbackStates.Find(Identity.SpecHandle); State
+			&& State->OwnerActivationRevision == Ability->GetLocalActivationRevision() && State->Identity.Matches(Identity))
+			return State->Identity;
+	return Identity;
+}
+
+// 每个能力句柄只保存最新权威轮次；接收旧 Cue、旧取消或旧异步结果不退回旧状态。
+bool AmultiplayerCombatCharacter::AcceptAreaFeedbackIdentity(const FmultiplayerCombatActivationIdentity& Identity)
+{
+	if (!Identity.IsValid() || Identity.AuthorityRevision == 0 || !IsAlive() || IsActorBeingDestroyed()) return false;
+	auto& State = AreaFeedbackStates.FindOrAdd(Identity.SpecHandle);
+	if (State.Identity.AuthorityRevision != 0
+		&& static_cast<int32>(Identity.AuthorityRevision - State.Identity.AuthorityRevision) < 0) return false;
+	if (Identity.AuthorityRevision != State.Identity.AuthorityRevision)
+	{
+		State.Identity = Identity;
+		State.bCancelled = false;
+		State.OwnerActivationRevision = 0;
+	}
+	if (IsLocallyControlled() && !State.bCancelled && State.OwnerActivationRevision == 0)
+	{
+		const auto* Spec = AbilitySystem->FindAbilitySpecFromHandle(Identity.SpecHandle);
+		const auto* Ability = Spec ? Cast<UmultiplayerCombatAbility>(Spec->GetPrimaryInstance()) : nullptr;
+		if (Ability && Ability->GetActivationIdentity().Matches(Identity))
+			State.OwnerActivationRevision = Ability->GetLocalActivationRevision();
+	}
+	if (PendingAreaCancellations.ContainsByPredicate([&](const auto& Pending) { return Pending.Matches(Identity); }))
+		State.bCancelled = true;
+	LatestAreaFeedback = Identity;
+	// 新 R 接替同能力旧结果；先摘除集合，再销毁，回调创建的新组件不在旧清理范围内。
+	TArray<TWeakObjectPtr<USceneComponent>> Replaced;
+	for (int32 Index = AreaFeedback.Num() - 1; Index >= 0; --Index)
+		if (!AreaFeedback[Index].Component.IsValid() || (AreaFeedback[Index].Identity.SpecHandle == Identity.SpecHandle
+			&& !AreaFeedback[Index].Identity.Matches(Identity)))
+		{
+			Replaced.Add(AreaFeedback[Index].Component);
+			AreaFeedback.RemoveAtSwap(Index);
+		}
+	for (const auto& Entry : Replaced) if (auto* Component = Entry.Get()) Component->DestroyComponent();
+	return !IsAreaFeedbackCancelled(Identity);
+}
+
+// 权威身份按服务器轮次比较；预测键只用于尚未收到权威回执的短暂关联。
+bool AmultiplayerCombatCharacter::IsAreaFeedbackCancelled(const FmultiplayerCombatActivationIdentity& Identity) const
+{
+	if (!Identity.IsValid()) return true;
+	if (PendingAreaCancellations.ContainsByPredicate([&](const auto& Pending) { return Pending.Matches(Identity); })) return true;
+	if (const auto* State = AreaFeedbackStates.Find(Identity.SpecHandle))
+	{
+		if (Identity.AuthorityRevision != 0 && State->Identity.AuthorityRevision != 0
+			&& static_cast<int32>(Identity.AuthorityRevision - State->Identity.AuthorityRevision) < 0) return true;
+		if (!State->bCancelled || !State->Identity.Matches(Identity)) return false;
+		if (Identity.AuthorityRevision != 0) return true;
+		const auto* Spec = AbilitySystem->FindAbilitySpecFromHandle(Identity.SpecHandle);
+		const auto* Ability = Spec ? Cast<UmultiplayerCombatAbility>(Spec->GetPrimaryInstance()) : nullptr;
+		return Ability && State->OwnerActivationRevision != 0
+			&& State->OwnerActivationRevision == Ability->GetLocalActivationRevision();
+	}
+	return false;
+}
+
+// 组件、补载和取消都使用 Cue 内同一份身份；登记时再复核一次，不复活已取消的粒子。
+void AmultiplayerCombatCharacter::TrackAreaFeedback(USceneComponent* Component, const FmultiplayerCombatActivationIdentity& Identity)
+{
+	if (!IsValid(Component)) return;
+	if (IsAreaFeedbackCancelled(Identity) || IsActorBeingDestroyed() || !IsAlive())
+	{
+		Component->DestroyComponent();
+		return;
+	}
+	AreaFeedback.RemoveAll([](const auto& Entry) { return !Entry.Component.IsValid(); });
+	AreaFeedback.Add({Component, Identity});
+}
+
+FmultiplayerCombatActivationIdentity AmultiplayerCombatCharacter::GetAreaFeedbackIdentity(const USceneComponent* Component) const
+{
+	if (!Component) return {};
+	for (const auto& Entry : AreaFeedback) if (Entry.Component.Get() == Component) return Entry.Identity;
+	return {};
+}
+
+// 先记录取消，再摘除同轮组件；迟到的 A 不能清 B，也不能让 A 再次显示。
+void AmultiplayerCombatCharacter::StopAreaFeedback(const FmultiplayerCombatActivationIdentity& Identity)
+{
+	if (!Identity.IsValid()) return;
+	if (Identity.AuthorityRevision != 0)
+	{
+		AcceptAreaFeedbackIdentity(Identity);
+		if (auto* State = AreaFeedbackStates.Find(Identity.SpecHandle); State && State->Identity.Matches(Identity))
+			State->bCancelled = true;
+	}
+	else if (!PendingAreaCancellations.ContainsByPredicate([&](const auto& Pending) { return Pending.Matches(Identity); }))
+		PendingAreaCancellations.Add(Identity);
+	TArray<TWeakObjectPtr<USceneComponent>> Stopped;
+	for (int32 Index = AreaFeedback.Num() - 1; Index >= 0; --Index)
+		if (AreaFeedback[Index].Identity.Matches(Identity))
+		{
+			Stopped.Add(AreaFeedback[Index].Component);
+			AreaFeedback.RemoveAtSwap(Index);
+		}
+	for (const auto& Entry : Stopped) if (auto* Component = Entry.Get()) Component->DestroyComponent();
+	if (LatestAreaFeedback.Matches(Identity))
+		if (auto* Player = Cast<APlayerController>(GetController()); Player && IsLocallyControlled())
+			if (auto* HUD = Cast<AmultiplayerCombatHUD>(Player->GetHUD())) HUD->ClearResolvedArea();
+}
+
+// 退出/死亡清理所有本地观察状态；这不是另一条服务器取消或伤害回滚链路。
+void AmultiplayerCombatCharacter::ClearAreaFeedback()
+{
+	const auto PreviousFeedback = MoveTemp(AreaFeedback);
+	AreaFeedbackStates.Reset();
+	PendingAreaCancellations.Reset();
+	LatestAreaFeedback = {};
+	for (const auto& Entry : PreviousFeedback) if (auto* Component = Entry.Component.Get()) Component->DestroyComponent();
+	if (auto* Player = Cast<APlayerController>(GetController()); Player && IsLocallyControlled())
+		if (auto* HUD = Cast<AmultiplayerCombatHUD>(Player->GetHUD())) HUD->ClearResolvedArea();
 }
 
 // 死亡玩家不能通过原有跳跃输入重新进入移动状态。
@@ -606,7 +790,8 @@ bool AmultiplayerCombatCharacter::ShouldBlockDirectDamage(const FGameplayEffectS
 		&& FVector::DotProduct(Facing, ToAttack) >= GetCombatConfig().ParryFrontDot;
 }
 
-// 唯一业务伤害入口；服务器生成效果并读取来源/目标属性，不信任客户端上传结果。
+// [职责] 统一直接伤害入口：服务器建 GE 后交 Execution/AttributeSet 结算，Cue 只反馈结果。
+// 灼烧由周期 GE 直接进入同一属性结算器，不反向调用本入口，也不接收客户端伤害值。
 bool AmultiplayerCombatCharacter::ApplyCombatDamage(AmultiplayerCombatCharacter* Target, float Amount, const FHitResult* Hit,
 	const FVector* IncomingDirection)
 {
@@ -756,7 +941,7 @@ void AmultiplayerCombatCharacter::OnRep_SessionReady()
 	RefreshMovementLock();
 	OnCombatStateChanged.Broadcast();
 }
-// 汇总生命、施法和控制限制；只在最后一项限制解除后恢复原 CMC 模式。
+// [亮点] 汇总生命、施法、控制和救援限制，最后一项解除才恢复原 CMC 模式，避免各系统互相解锁。
 void AmultiplayerCombatCharacter::RefreshMovementLock()
 {
 	const bool bLock = !IsCombatReady() || IsMovementBlocked() || IsCasting() || Coop->IsRescuing();
@@ -797,6 +982,7 @@ void AmultiplayerCombatCharacter::OnRep_Dead()
 {
 	if (!bDead) return;
 	CancelSkillTargeting();
+	ClearAreaFeedback();
 	const bool bKeepDownedPose=bLifePoseStarted;
 	Coop->ClearLifeState();
 	// 只停用 Pawn 的游戏输入，移动、技能和观察一起结束；Controller 继续处理重开、退出等界面操作。

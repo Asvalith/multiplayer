@@ -16,13 +16,23 @@
 #include "Combat/multiplayerCombatPresentation.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Core/multiplayerGameMode.h"
+#include "EnhancedInputSubsystems.h"
+#include "EnhancedPlayerInput.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "Engine/InputKeyDelegateBinding.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameModeBase.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
+#include "GameFramework/PlayerStart.h"
+#include "GameFramework/WorldSettings.h"
 #include "InputCoreTypes.h"
+#include "Player/multiplayerCoopPlayerController.h"
 #include "UObject/UnrealType.h"
 
 #if WITH_EDITOR
@@ -44,23 +54,54 @@ namespace
 		UWorld* World = nullptr;
 		AmultiplayerCombatCharacter* Player = nullptr;
 		UmultiplayerCombatAnimInstance* Animation = nullptr;
+		ULocalPlayer* InputPlayer = nullptr;
 		uint64 PreviousFrame = GFrameCounter;
 
-		// 加载保存的玩家及动画图，关闭移动干扰并预热真实动画实例。
-		FDefensePresentationWorld()
+		// 按需走正式本地接纳与输入映射；其余姿态测试仍只加载保存的玩家及动画图。
+		explicit FDefensePresentationWorld(bool bInput = false)
 		{
 			UWorld::InitializationValues Values;
 			Values.CreatePhysicsScene(true).ShouldSimulatePhysics(false).EnableTraceCollision(true)
 				.CreateNavigation(false).CreateAISystem(false);
 			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true,
 				ERHIFeatureLevel::Num, &Values);
-			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+			Context.SetCurrentWorld(World);
+			if (bInput)
+			{
+				auto* Instance = NewObject<UGameInstance>(GEngine);
+				World->SetGameInstance(Instance);
+				Context.OwningGameInstance = Instance;
+				World->GetWorldSettings()->DefaultGameMode = AmultiplayerGameMode::StaticClass();
+				World->SetGameMode(FURL());
+			}
 			World->InitializeActorsForPlay(FURL());
 			World->SetBegunPlay(true);
 			UClass* PlayerClass = LoadClass<AmultiplayerCombatCharacter>(nullptr,
 				TEXT("/Game/Combat/Presentation/BP_CombatPlayer.BP_CombatPlayer_C"));
 			if (!PlayerClass) return;
-			Player = World->SpawnActor<AmultiplayerCombatCharacter>(PlayerClass, FVector(0, 0, 110), FRotator::ZeroRotator);
+			if (bInput)
+			{
+				auto* Mode = World->GetAuthGameMode<AmultiplayerGameMode>();
+				if (!Mode) return;
+				Mode->DefaultPawnClass = PlayerClass;
+				auto* Start = World->SpawnActor<APlayerStart>(FVector(0, 0, 110), FRotator::ZeroRotator);
+				auto* PC = World->SpawnActor<AmultiplayerCoopPlayerController>();
+				if (!Start || !PC) return;
+				InputPlayer = NewObject<ULocalPlayer>(GEngine);
+				World->GetGameInstance()->AddLocalPlayer(InputPlayer, FPlatformUserId::CreateFromInternalId(0));
+				PC->SetPlayer(InputPlayer);
+				PC->StartSpot = Start;
+				Mode->RestartPlayer(PC);
+				if (auto* Input = InputPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+				{
+					FModifyContextOptions Options;
+					Options.bForceImmediately = true;
+					Input->RequestRebuildControlMappings(Options);
+				}
+				Player = Cast<AmultiplayerCombatCharacter>(PC->GetPawn());
+			}
+			else Player = World->SpawnActor<AmultiplayerCombatCharacter>(PlayerClass, FVector(0, 0, 110), FRotator::ZeroRotator);
 			if (!Player) return;
 			Player->GetCharacterMovement()->DisableMovement();
 			Player->GetCharacterMovement()->SetComponentTickEnabled(false);
@@ -74,6 +115,7 @@ namespace
 		~FDefensePresentationWorld()
 		{
 			World->EndPlay(EEndPlayReason::Quit);
+			if (InputPlayer) InputPlayer->PlayerRemoved();
 			GEngine->DestroyWorldContext(World);
 			World->DestroyWorld(false);
 			GFrameCounter = PreviousFrame;
@@ -156,6 +198,65 @@ bool FCoopCombatDefensePoseLifecycleTest::RunTest(const FString& Parameters)
 	Fixture.ReadState();
 	TestFalse(TEXT("Death suppresses a late surviving defensive tag"), Fixture.Animation->CombatIsDefending);
 	ASC->RemoveLooseGameplayTag(CombatTags::State_Defending);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatDefenseRightClickCancellationTest, "Multiplayer.Combat.DefenseRightClickCancellation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 真实 Q 松开确认后 GA 已结束；右键仍须撤下持续格挡，而不是只取消一个已不活动的 Ability。
+// 此处验证正式 PlayerInput 与动画／效果边界；单世界 key0 不冒充远端预测拒绝或旧包隔离。
+bool FCoopCombatDefenseRightClickCancellationTest::RunTest(const FString& Parameters)
+{
+	FDefensePresentationWorld Fixture(true);
+	if (!TestNotNull(TEXT("Formal input player spawned for right-click guard cancellation"), Fixture.Player)
+		|| !TestNotNull(TEXT("Input player uses the saved defense animation graph"), Fixture.Animation)) return false;
+	auto* Player = Fixture.Player;
+	auto* PC = Cast<APlayerController>(Player->GetController());
+	if (!TestTrue(TEXT("Real local input and production pawn bindings are installed"),
+		PC && Cast<UEnhancedPlayerInput>(PC->PlayerInput) && Player->InputComponent)
+		|| !TestTrue(TEXT("Normal admission permits skills"), Player->IsCombatReady())) return false;
+	const auto Input = [&](const FKey& Key, EInputEvent Event)
+	{
+		PC->InputKey(FInputKeyParams(Key, Event, Event == IE_Pressed ? 1. : 0.));
+		Fixture.Advance(.02f);
+	};
+	// 已有护盾也不能被“结束防御”误删；它不是持续格挡效果的退款账本。
+	Player->GrantShield(25.f);
+	const float EnergyBefore = Player->GetEnergy();
+	Input(EKeys::Q, IE_Pressed);
+	TestTrue(TEXT("Actual Q press enters defense preview without granting defense"),
+		Player->IsTargetingSkill() && !Player->IsDefending());
+	Input(EKeys::Q, IE_Released);
+	// 输入和 Mesh 可能在同一世界 Tick 的不同顺序执行；与本文件其余姿态用例一样，
+	// 在状态断言前从正式 NativeUpdateAnimation 同步采样，不把上一帧快照当作当前结果。
+	Fixture.ReadState();
+	const auto* Spec = Player->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerDefendAbility::StaticClass());
+	if (!TestTrue(TEXT("Q release commits a lasting guard after its ability has ended"),
+		Player->IsDefending() && Player->IsParrying() && Spec && !Spec->IsActive())) return false;
+	TestEqual(TEXT("The confirmed guard has paid its configured cost once"), Player->GetEnergy(),
+		EnergyBefore - Player->GetSkillRule(EMultiplayerCombatSkill::Defend).Cost);
+	TestTrue(TEXT("The saved animation has entered its guard pose"), Fixture.Animation->CombatIsDefending);
+	Input(EKeys::LeftMouseButton, IE_Pressed);
+	Input(EKeys::LeftMouseButton, IE_Released);
+	UAnimMontage* Attack = Player->GetActionMontage(EMultiplayerCombatAnimation::Attack);
+	if (!TestTrue(TEXT("A later normal attack plays while the guard effect still lasts"),
+		Player->IsDefending() && Attack && Fixture.Animation->Montage_IsPlaying(Attack))) return false;
+	const float EnergyCommitted = Player->GetEnergy();
+	const float Cooldown = Player->GetSkillCooldownRemaining(EMultiplayerCombatSkill::Defend);
+	const float Shield = Player->GetShield();
+	TestTrue(TEXT("The preservation check has a real shield and committed cooldown"), Shield > 0 && Cooldown > 0);
+	Input(EKeys::RightMouseButton, IE_Pressed);
+	Input(EKeys::RightMouseButton, IE_Released);
+	Fixture.ReadState();
+	TestFalse(TEXT("Actual right-click ends the lasting defense even though Q ability already ended"), Player->IsDefending());
+	TestFalse(TEXT("Right-click also ends the associated short parry window"), Player->IsParrying());
+	TestFalse(TEXT("Guard state immediately leaves the saved animation graph"), Fixture.Animation->CombatIsDefending);
+	TestTrue(TEXT("Ending guard does not stop the newer attack montage"), Fixture.Animation->Montage_IsPlaying(Attack));
+	TestEqual(TEXT("Ending guard does not refund committed energy"), Player->GetEnergy(), EnergyCommitted);
+	TestEqual(TEXT("Ending guard preserves the independent existing shield"), Player->GetShield(), Shield);
+	TestTrue(TEXT("Ending guard preserves its original cooldown deadline"),
+		FMath::IsNearlyEqual(Player->GetSkillCooldownRemaining(EMultiplayerCombatSkill::Defend), Cooldown - .04f, .01f));
 	return !HasAnyErrors();
 }
 

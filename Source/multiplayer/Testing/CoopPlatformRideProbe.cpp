@@ -339,7 +339,10 @@ void UCoopNetTestDriver::MotionServerTick(UWorld* World)
 		FActorSpawnParameters Parameters;
 		Parameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		auto* Rider = World->SpawnActor<ACoopRideTestCharacter>(RideOrigin + FVector(0, 0, 115), FRotator::ZeroRotator, Parameters);
-		auto* Platform = World->SpawnActor<AmultiplayerMovingPlatform>(RideOrigin, FRotator::ZeroRotator, Parameters);
+		const auto PlatformClass = LoadClass<AmultiplayerMovingPlatform>(nullptr,
+			TEXT("/Game/ThirdPerson/Blueprints/gameplayelements/bpmovingplatform.bpmovingplatform_C"));
+		if (!PlatformClass) { Finish(false, TEXT("Actual platform blueprint is missing")); return; }
+		auto* Platform = World->SpawnActor<AmultiplayerMovingPlatform>(PlatformClass, RideOrigin, FRotator::ZeroRotator, Parameters);
 		if (!Rider || !Platform) { Finish(false, TEXT("Could not construct motion fixture")); return; }
 		// 读取实际关卡生成的角色配置，防止蓝图覆盖被测试专用 Pawn 的 C++ 默认值掩盖。
 		if (const ACharacter* PreviousCharacter = Cast<ACharacter>(PreviousPawn))

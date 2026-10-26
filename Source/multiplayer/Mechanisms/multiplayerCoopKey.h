@@ -28,8 +28,8 @@ public:
 	/** 仅服务器调用。附着失败不改变钥匙状态；成功后不可再次拾取。 */
 	bool InstallAtSocket(USceneComponent* SocketPoint);
 
-	// 仅未安装时旋转展示网格，不修改根组件位置。
-	virtual void Tick(float DeltaSeconds) override;
+	// 实际 bpkey 响应安装事实并管理本地展示 Tick；不授予收集或安装资格。
+	UFUNCTION(BlueprintImplementableEvent, Category="Coop|Key|Visual") void ApplyInstalledPresentation(bool bIsInstalled);
 
 	// 复制安装标记，位置与附件关系继续使用 Actor 原生复制。
 	virtual void GetLifetimeReplicatedProps(
@@ -59,7 +59,7 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Coop|Key", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UStaticMeshComponent> KeyMesh;
 
 	UPROPERTY(VisibleAnywhere, Category = "Coop|Key")
@@ -69,11 +69,11 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Coop|Key")
 	TObjectPtr<AmultiplayerKeySocket> DestinationSocket;
 
-	UPROPERTY(EditAnywhere, Category = "Coop|Key|Visual", meta = (ClampMin = "0.0"))
-	float RotationSpeedDegrees = 90.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Coop|Key|Visual", meta = (AllowPrivateAccess="true", ClampMin = "0.0"))
+	float RotationSpeedDegrees = 0.0f;
 
-	UPROPERTY(EditAnywhere, Category = "Coop|Key|Visual")
-	FVector RotationAxis = FVector::UpVector;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Coop|Key|Visual", meta=(AllowPrivateAccess="true"))
+	FVector RotationAxis = FVector::ZeroVector;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Installed)
 	bool bInstalled = false;

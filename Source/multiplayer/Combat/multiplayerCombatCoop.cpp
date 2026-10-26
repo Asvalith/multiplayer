@@ -136,8 +136,8 @@ bool UmultiplayerCombatCoopComponent::CanStartRescue() const
 	return Character && Character->IsCombatReady() && !Character->IsStunned() && !Character->IsCasting()
 		&& !Character->IsMovementBlocked() && !RescueTarget && FindRescueTarget();
 }
-// 仅服务器提交双向占用和截止时间，通知后监听者可以安全读取完整引导状态。
-// 先认领目标再通知，完成/取消只释放自己的占用；这是单服游戏线程内的排他规则，不是线程锁。
+// [亮点] 服务器先写齐施救者 Target/Until 和被救者 CurrentRescuer，再通知本机监听者。
+// [边界] 这是单服游戏线程内的独占规则；完成/取消只释放自己的占用，不是线程锁或客户端授权。
 bool UmultiplayerCombatCoopComponent::BeginRescue()
 {
 	if (!GetOwner()->HasAuthority() || !CanStartRescue()) return false;
@@ -154,7 +154,7 @@ bool UmultiplayerCombatCoopComponent::IsRescueValid() const
 	return OwnerCharacter()->IsCombatReady() && !OwnerCharacter()->IsStunned() && CanReach(RescueTarget)
 		&& RescueTarget->GetCoopComponent()->CurrentRescuer == OwnerCharacter();
 }
-// 先取回并释放独占令牌，再提交生命与状态，第二名救援者或晚到回调无法重复结算。
+// [亮点] 到时复核后先释放占用、退出倒地，再修改生命，属性回调不能重复救起同一目标。
 bool UmultiplayerCombatCoopComponent::CompleteRescue()
 {
 	if (!GetOwner()->HasAuthority() || !IsRescueValid() || CoopTime(GetWorld()) + KINDA_SMALL_NUMBER < RescueUntil) return false;
@@ -259,7 +259,7 @@ void UmultiplayerRescueAbility::FinishRescue()
 	const bool Success = Character && Character->GetCoopComponent()->CompleteRescue();
 	EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, !Success);
 }
-// 按 GAS 锁定语义延后收尾，并用局部结束保护防止释放占用通知再次重入。
+// [职责] 统一取消巡检、释放本次占用并结束 GAS 任务；作用域锁与结束保护覆盖同步重入。
 void UmultiplayerRescueAbility::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* Info,
 	FGameplayAbilityActivationInfo Activation, bool bReplicate, bool bCancelled)
 {

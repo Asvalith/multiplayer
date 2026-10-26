@@ -7,8 +7,27 @@
 #include "multiplayerGameInstance.generated.h"
 
 class AmultiplayerCoopPlayerController;
+class UNetConnection;
 
-/** 客户端连接生命周期。服务器不参与菜单状态，不因某名玩家退出而停止。 */
+// 业务等待的有界估计值；采样来自 UE 已有 ACK RTT，不接管可靠包重传或服务器接纳期限。
+struct MULTIPLAYER_API FmultiplayerConnectionTiming
+{
+	// 新 ACK 批次均值的平滑结果与变化量，单位为秒；不是加载或整个握手的耗时。
+	double SmoothedRTT = 0.0;
+	double RTTVariation = 0.0;
+	int32 SampleCount = 0;
+
+	// 忽略无效测量；变化量按旧平滑值计算，再更新本次平滑 RTT。
+	void ObserveRTT(double RTTSeconds);
+	// 无样本使用 1 秒；已测量估计限制在 0.25～5 秒。
+	double GetRTOSeconds() const;
+	// 20 秒加载/业务预算之外增加退避余量，总等待上限 60 秒。
+	double GetConnectTimeoutSeconds(int32 Attempt) const;
+	// 配置间隔与 RTO 指数退避取较大值，不再把配置间隔重复乘指数。
+	double GetReconnectDelaySeconds(double ConfiguredDelay, int32 Attempt) const;
+};
+
+/** [职责] 本机连接业务状态；DS 不执行玩家菜单退出与自动重连。 */
 UENUM(BlueprintType)
 enum class EMultiplayerConnectionState : uint8
 {
@@ -32,7 +51,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMultiplayerConnectionChanged);
 DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerLeaveFailed, const FText&);
 
 /**
- * DS 地址连接、取消和有限重连；不承担房间发现、账号登录或匹配。
+ * [职责] 跨 World 保留本实例的 DS 连接意图、有限重试和端点票据。
+ * [边界] 不承担房间发现、账号登录或匹配，也不持有服务器个人战斗快照。
  * 连接状态在进入游戏、重开和返回菜单期间保留；PlayingState 发起握手，服务器接纳后才确认成功。
  * 状态提交统一更新操作编号，通知后只检查本次操作是否被取消或替换。
  */
@@ -42,7 +62,6 @@ class MULTIPLAYER_API UmultiplayerGameInstance : public UGameInstance
 	GENERATED_BODY()
 
 public:
-	// 生命周期：读取配置、绑定全局事件；结束时清理计时器与订阅。
 	// 实例初始化时加载配置并订阅引擎通知，不在这里发起玩家连接。
 	virtual void Init() override;
 	// 实例结束时取消等待并解除订阅，与 Init 对称。
@@ -76,8 +95,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Network")
 	FText GetConnectionMessage() const { return ConnectionMessage; }
 
-	// 返回本进程已加载的配置，调用者不能通过此引用修改规则。
+	// 返回本实例已加载的配置，调用者不能通过此引用修改规则。
 	const FmultiplayerGameplayConfig& GetGameplayConfig() const { return GameplayConfig; }
+	// 只读诊断估计，不开放外部改写网络样本或连接预算。
+	const FmultiplayerConnectionTiming& GetConnectionTiming() const { return ConnectionTiming; }
 	// 独立校验地址格式并生成规范输出，不尝试连接服务器。
 	static bool NormalizeServerAddress(const FString& Input, FString& Output);
 
@@ -113,10 +134,14 @@ private:
 	// 状态提交与公共清理。
 	// 先提交状态和编号，再同步广播；返回本次编号供调用者检查是否被接管。
 	uint64 SetConnectionState(EMultiplayerConnectionState State, const FText& Message);
-	// 取消两种等待计时器，不直接关闭已经建立的网络连接。
+	// 停止等待和 RTT 采样，不直接关闭底层连接；同端点重连保留已有估计。
 	void ClearConnectionTimers();
+	// Connected 后低频读取当前连接的新 ACK 批次，统计周期或连接变化时重置采样游标。
+	void SampleConnectionTiming();
+	// 更换端点、主动退出、最终失败或 Shutdown 时放弃上一端点的估计。
+	void ResetConnectionTiming();
 
-	// 本进程读取的配置；服务器玩法规则以服务器自己加载的配置为准。
+	// 本实例读取的配置；服务器玩法规则以服务器自己加载的配置为准。
 	FmultiplayerGameplayConfig GameplayConfig;
 	// 本地连接业务状态与显示文本，不复制给其他客户端。
 	EMultiplayerConnectionState ConnectionState = EMultiplayerConnectionState::Idle;
@@ -124,6 +149,7 @@ private:
 	// 首次请求或实际客户端 URL 记下的地址；主动退出和最终失败会清空。
 	FString LastServerAddress;
 	// 本地内存按规范端点保存不透明票据，不拼入URL、不写日志，也不保存客户端战斗数值。
+	// [边界] 票据只是恢复凭据；恢复时限、资格和实际快照由服务器 GameMode 裁决。
 	TMap<FString, FGuid> ReconnectTickets;
 	TWeakObjectPtr<AmultiplayerCoopPlayerController> HandshakeController;
 	// 已经开始的重连次数，用作下一次等待间隔的下标。
@@ -134,6 +160,12 @@ private:
 	// 一次连接尝试的等待期限，与重试前的等待分别管理。
 	FTimerHandle ConnectTimeoutHandle;
 	FTimerHandle ReconnectTimerHandle;
+	FTimerHandle ConnectionTimingTimer;
+	FmultiplayerConnectionTiming ConnectionTiming;
+	TWeakObjectPtr<UNetConnection> TimingConnection;
+	double TimingStatUpdateTime = -1.0;
+	double TimingLagAcc = 0.0;
+	int32 TimingLagCount = 0;
 	// 引擎全局委托的订阅句柄，Shutdown 时用于对称解绑。
 	FDelegateHandle NetworkFailureHandle;
 	FDelegateHandle TravelFailureHandle;

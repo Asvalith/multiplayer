@@ -13,6 +13,19 @@
 #include "NativeGameplayTags.h"
 #include "Net/UnrealNetwork.h"
 
+namespace
+{
+	// 演示只改变本进程的初始配装；不是玩家档案，不能读写正式成长存档。
+	bool IsSkillDemoSession()
+	{
+#if !UE_BUILD_SHIPPING
+		return FParse::Param(FCommandLine::Get(), TEXT("CoopSkillDemo"));
+#else
+		return false;
+#endif
+	}
+}
+
 UE_DEFINE_GAMEPLAY_TAG_STATIC(ProgressionHealth, "Data.Progression.MaxHealth");
 UE_DEFINE_GAMEPLAY_TAG_STATIC(ProgressionAttack, "Data.Progression.AttackPower");
 
@@ -82,14 +95,12 @@ void UmultiplayerCombatProgressionComponent::InitializeLoadout()
 	bInitialized = true;
 	FmultiplayerCombatProgressionState Initial = State;
 	if (!Initial.ProfileId.IsValid()) Initial.ProfileId = FGuid::NewGuid();
-#if !UE_BUILD_SHIPPING
 	// 仅当前手动演示局消耗初始技能点解锁冲刺，不写存档或修改正式初始配装。
-	if (FParse::Param(FCommandLine::Get(), TEXT("CoopSkillDemo")) && Initial.ActiveLevels[int32(EMultiplayerCombatSkill::Dash)] == 0)
+	if (IsSkillDemoSession() && Initial.ActiveLevels[int32(EMultiplayerCombatSkill::Dash)] == 0)
 	{
 		Initial.ActiveLevels[int32(EMultiplayerCombatSkill::Dash)] = 1;
 		--Initial.SkillPoints;
 	}
-#endif
 	CommitState(Initial);
 }
 
@@ -226,12 +237,6 @@ int32 UmultiplayerCombatProgressionComponent::GetSkillLevel(EMultiplayerCombatSk
 	return State.ActiveLevels.IsValidIndex(int32(Skill)) ? State.ActiveLevels[int32(Skill)] : 0;
 }
 
-// 槽位与技能等级使用同一映射，界面不再保存一份独立快捷栏状态。
-int32 UmultiplayerCombatProgressionComponent::GetSlotLevel(int32 Slot) const
-{
-	return State.Slots.IsValidIndex(Slot) ? GetSkillLevel(State.Slots[Slot]) : 0;
-}
-
 // None 表示不装配被动，不占用第三个被动等级条目。
 int32 UmultiplayerCombatProgressionComponent::GetPassiveLevel(EMultiplayerCombatPassive Passive) const
 {
@@ -330,7 +335,8 @@ FString UmultiplayerCombatProgressionComponent::SaveSlot() const
 // 只写版本化成长数据，既不抬血量也不保留已消费资源；路径不来自 RPC 参数。
 bool UmultiplayerCombatProgressionComponent::SaveProgress()
 {
-	if (!Character() || !Character()->HasAuthority() || !bInitialized || bUpdatingLoadout || !IsStateValid(State)) return false;
+	// 演示和正式单机原先共用 Local 槽；在创建 SaveGame 前拒绝，保证演示不污染玩家档案。
+	if (IsSkillDemoSession() || !Character() || !Character()->HasAuthority() || !bInitialized || bUpdatingLoadout || !IsStateValid(State)) return false;
 	auto* Save = Cast<UmultiplayerCombatProgressionSaveGame>(UGameplayStatics::CreateSaveGameObject(UmultiplayerCombatProgressionSaveGame::StaticClass()));
 	Save->Progression = State; return UGameplayStatics::SaveGameToSlot(Save, SaveSlot(), 0);
 }
@@ -338,7 +344,8 @@ bool UmultiplayerCombatProgressionComponent::SaveProgress()
 // 加载失败保持当前状态；联机只允许读取当前服务器档案，单机可还原固定本地槽里的稳定标识。
 bool UmultiplayerCombatProgressionComponent::LoadProgress()
 {
-	if (!CanChangeLoadout(false) || !UGameplayStatics::DoesSaveGameExist(SaveSlot(), 0)) return false;
+	// 与保存共用同一演示边界，不把普通存档加载进带额外初始解锁的演示局。
+	if (IsSkillDemoSession() || !CanChangeLoadout(false) || !UGameplayStatics::DoesSaveGameExist(SaveSlot(), 0)) return false;
 	const auto* Save = Cast<UmultiplayerCombatProgressionSaveGame>(UGameplayStatics::LoadGameFromSlot(SaveSlot(), 0));
 	if (!Save || (GetNetMode() != NM_Standalone && Save->Progression.ProfileId != State.ProfileId)) return false;
 	return RestoreState(Save->Progression);

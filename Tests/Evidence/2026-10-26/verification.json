@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "2efa683616770e05d915276bb074fbcccff6bc0a",
+  "sourceTree": "704ea2b98c0a35f78f2539d4e6f5be80f77b5218",
+  "testedBeforeCommit": true,
+  "sourceFilesVerified": 119,
+  "sourceDifferences": 0,
+  "moduleSha256": "E28DD35ECEF44AF5B793C19BD2267CC4E2CFD69CFAD23EEB5E9C9E8C69F360AB",
+  "shippingSha256": "422A8AEC6EF4DA94189223817E595DD9738276B8CE4507FC5141DDF4CA153830",
+  "protectedAssets": 116,
+  "assetDifferences": 0,
+  "builds": [
+    {
+      "name": "Editor",
+      "relativePath": "Saved/ActivationIdentity_20261026/BuildEditor_R8.log",
+      "sha256": "3E2B285A817DE92F593F50A0F287865B17AC6D004D6410993F1B355886383BD8",
+      "result": "completed",
+      "packagedRuntimeAccepted": false
+    },
+    {
+      "name": "Shipping",
+      "relativePath": "Saved/ActivationIdentity_20261026/BuildShipping_R3.log",
+      "sha256": "0DE9FCD3B6B71C01C6B4D2F5154DC9E4980EA96CDEE693874A0DA7D1330ACD52",
+      "result": "completed",
+      "packagedRuntimeAccepted": false
+    }
+  ],
+  "boundary": "Disk hashes and completed build logs; no runtime module attestation, public-cloud acceptance or universal prediction rollback."
+}

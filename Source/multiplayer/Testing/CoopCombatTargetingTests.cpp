@@ -732,6 +732,59 @@ bool FCoopCombatTargetingConfirmationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatTargetCancelReentrantCastTest,
+	"Multiplayer.Combat.Targeting.CancelNotificationPreservesNextCast",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 右键关闭旧预览的通知在清理完成后发布；监听者由此接纳的新 R 不能再被旧取消栈清掉。
+// 只验证这一通知边界，不把它描述为任意能力结束回调的通用重入保护。
+bool FCoopCombatTargetCancelReentrantCastTest::RunTest(const FString& Parameters)
+{
+	FCombatTargetingWorld Fixture(true, true);
+	auto* Caster = Fixture.AdmitInputPlayer();
+	if (!TestNotNull(TEXT("Saved production player is admitted for real cancellation input"), Caster)) return false;
+	auto* PC = Cast<APlayerController>(Caster->GetController());
+	if (!TestTrue(TEXT("Real keyboard input stack is installed"),
+		PC && Cast<UEnhancedPlayerInput>(PC->PlayerInput) && Caster->InputComponent)) return false;
+	Fixture.Advance(.3f);
+	PC->SetControlRotation(FRotator(-20, 0, 0));
+	const auto Preview = Caster->GetSkillTargetPreview(EMultiplayerCombatSkill::Area);
+	if (!TestTrue(TEXT("The next R has a real valid ground target"), Preview.bValid)) return false;
+	auto* Target = Fixture.Enemy(Preview.End + FVector(0, 0, 100));
+	if (!TestNotNull(TEXT("The next R has a real damage recipient"), Target)) return false;
+	const auto Rule = Caster->GetSkillRule(EMultiplayerCombatSkill::Area);
+	const float EnergyBefore = Caster->GetEnergy(), HealthBefore = Target->GetHealth();
+	bool bRequestedNextCast = false;
+	TStrongObjectPtr<UCoopCombatRelationshipTestProbe> Probe(NewObject<UCoopCombatRelationshipTestProbe>());
+	Probe->StateCallback = [&]
+	{
+		if (bRequestedNextCast || Caster->IsTargetingSkill()) return;
+		bRequestedNextCast = true;
+		Caster->CastArea();
+	};
+	Caster->OnCombatStateChanged.AddDynamic(Probe.Get(), &UCoopCombatRelationshipTestProbe::HandleState);
+	ON_SCOPE_EXIT
+	{
+		Caster->OnCombatStateChanged.RemoveDynamic(Probe.Get(), &UCoopCombatRelationshipTestProbe::HandleState);
+		Probe->StateCallback = nullptr;
+	};
+	PC->InputKey(FInputKeyParams(EKeys::Q, IE_Pressed, 1.));
+	Fixture.Advance(.02f);
+	TestTrue(TEXT("Q press opens only the old uncommitted preview"), Caster->IsTargetingSkill()
+		&& Caster->GetTargetingSkill() == EMultiplayerCombatSkill::Defend && Caster->GetEnergy() == EnergyBefore);
+	PC->InputKey(FInputKeyParams(EKeys::RightMouseButton, IE_Pressed, 1.));
+	Fixture.Advance(.02f);
+	PC->InputKey(FInputKeyParams(EKeys::RightMouseButton, IE_Released, 0.));
+	Fixture.Advance(.02f);
+	const auto* Spec = Caster->GetAbilitySystemComponent()->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+	TestTrue(TEXT("Preview-close notification starts the next real R without a stale cancellation"),
+		bRequestedNextCast && Spec && Spec->IsActive() && Caster->IsCasting() && !Caster->IsTargetingSkill());
+	TestEqual(TEXT("Only the next R commits its normal energy cost"), Caster->GetEnergy(), EnergyBefore - Rule.Cost);
+	Fixture.Advance(Rule.Windup + Rule.Recovery + .3f);
+	TestTrue(TEXT("The next R retains its real release task and damages the intended target"), Target->GetHealth() < HealthBefore);
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatTargetConfirmReentrantCancelTest,
 	"Multiplayer.Combat.Targeting.ConfirmNotificationCanCancelAcceptedCast",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

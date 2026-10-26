@@ -1,76 +1,140 @@
-# Co-op 当前架构与源码阅读顺序
+# Co-op 架构：状态归属、调用链与阅读顺序
 
-本项目使用一个 UE Runtime 模块 `multiplayer`。下面是同一模块内的功能目录，不是六套框架或六个独立模块。先按状态所有者阅读，再追函数，不以类数量或文件长度衡量设计质量。
+本项目只有一个 UE Runtime 模块 multiplayer，目录是职责分组，不是多套框架。设计原则是：**C++ 裁决规则，蓝图配置和消费表现，数据资产提供静态定义，实验显式启动且不改正式存档。**
 
-## 1. 目录与职责
+## 1. 先分清四种内容
 
-| 目录 | 唯一职责与主要入口 |
-| --- | --- |
-| `Core/` | `multiplayerGameMode` 接纳玩家、裁决目标与终局、重开及恢复资格；`multiplayerCoopGameState` 复制共享进度与结果；`multiplayerGameplayConfig` 读取 JSON 规则 |
-| `Network/` | `multiplayerGameInstance` 管本地地址连接、取消、超时与有限重试；`multiplayerCombatResumeState.h` 只定义服务器恢复数据，不驱动旅行或技能 |
-| `Player/` | `multiplayerCoopPlayerController` 是拥有者 RPC 通道并维护重开/离场操作；`multiplayerCharacter` 接地图角色与基础移动输入 |
-| `Mechanisms/` | 各机关拥有自身状态；Occupancy 维护有效玩家占用，门/插槽/撤离区域向 GameMode 提交事实；平台与角色基座交互仍由原生移动系统处理 |
-| `Combat/` | Character 协调输入与组件，ASC 接入 GAS，GA 执行技能阶段，GE/AttributeSet 结算数值；成长、倒地救援、敌人和遭遇战各有现有所有者 |
-| `Testing/` | 自动化、联网场景、只读资产审计和显式生成工具；它们不是第二套正式玩法，不将测试开关当成正式输入入口 |
-
-现有动画、Cue、HUD/Widget 都在 `Combat/multiplayerCombatPresentation.*`，属于本地表现域；文件按相关职责组织，不额外建立 UI Manager 或为每个短类再建组件。
-
-## 2. 状态归属与运行端
-
-| 状态 | 写入者 | 网络与生命周期边界 |
+| 内容 | 保存什么、负责什么 | 不负责什么 |
 | --- | --- | --- |
-| 连接地址、重试阶段、恢复凭证 | 本机 GameInstance | 跨 World 存活，各端独立；不具有战斗裁决权限 |
-| 接纳、钥匙进度提交、胜负、重开、恢复资格 | 服务器 GameMode | 本局权威；客户端通过所属 Controller 请求，不直接调用本地 GameMode 裁决 |
-| 共享进度与结果 | 服务器 GameState | 复制给客户端；晚加入/重绑定先补读当前快照，再消费后续事件 |
-| 生命、能量、护盾、冷却及持续效果 | Character 的 ASC/AttributeSet/GE | GAS 管复制和预测账本；客户端预览不直接写属性 |
-| 单次技能的起手、出手、收招及取消 | 对应 GA 实例 | 预测键识别请求，激活版本区分实例复用轮次，句柄限定清理归属 |
-| 门、平台、钥匙与玩家占用 | 对应机关 Actor/Occupancy | 服务器提交事实；客户端播放过渡；同一玩家的多个碰撞体不是多人 |
-| 动画、Cue、范围预览和界面缓存 | 本地表现对象 | 不裁决命中、不决定技能成功、不反向修改权威属性 |
+| 运行时 C++ | 网络资格、GAS 生命周期、目标查询、属性结算、机关占用、目标与终局 | 不保存第二套 HUD 数值，不自动生成或修复正式蓝图 |
+| 保存的 BP / WBP / AnimBP | 角色和机关资源、动画图、控件布局、只读快照的显示 | 不另行扣费、加伤害、授奖或判胜；按钮回到已有请求入口 |
+| Data Asset / JSON | 技能基础参数、标签关系、资源引用、关卡和连接规则 | 不保存当前血量、剩余冷却、GE 句柄或正在执行的任务 |
+| Testing / 离线脚本 | 自动化夹具、多进程实验、只读审计、显式迁移工具 | 不是正式玩法的回退路径，不用演示开关验证正式规则 |
 
-ASC 当前属于 Character，而非 PlayerState。断线重新创建角色后，用显式白名单快照恢复稳定状态；不宣称任意 GE 存档或跨服迁移。
+“表现归蓝图”不意味着把碰撞、CMC 移动或每个参数计算都改成蓝图。原生 Cue 管异步资源与组件生命周期，原生 UI 管订阅和只读快照，原生 HUD 管几何投影；保存的蓝图负责资源绑定、控件更新和实际绘制。
 
-## 3. 三条主要调用链
+## 2. 每份状态只有一个所有者
 
-### 连接与恢复
+| 状态 | 所有者和写入端 | 对外关系 |
+| --- | --- | --- |
+| 地址、连接阶段、ACK RTT 估计、重试、恢复票据 | 本机 GameInstance | 跨 World 保留；不决定血量或接纳资格，也不接管 UE 可靠包重传 |
+| 接纳、恢复记录、合作目标、胜负与重开 | 服务器 GameMode | 通过所属 Controller 接收请求，成功后更新共享状态 |
+| 目标进度、终局、波次与存活数量 | 服务器写 GameState，客户端接收复制 | OnRep 只发布本机通知；晚加入先读取当前快照 |
+| 生命、能量、护盾、冷却和持续效果 | Character 的 ASC / AttributeSet / GE | GAS 管复制和预测账本；不是 UI 或蓝图另存一份余额 |
+| 单次起手、出手、收招及取消 | 对应 GA 实例 | SpecHandle 与已有服务器激活轮次关联表现；PredictionKey 连接拥有者预测，GE 句柄限定清理归属 |
+| 成长、学习、槽位和被动 | Progression 组件 | 服务器提交后更新真实 AbilitySpec / GE；长期档案不覆盖战斗资源 |
+| 倒地、救援占用与引导 | Coop 组件 | 距离、遮挡和生命状态复核，结束只释放自己的占用 |
+| 占用、钥匙安装、门和平台状态 | 对应机关 Actor / Occupancy | 服务器提交事实，客户端按复制状态更新表现 |
+| 控件快照、范围提示、动画和粒子 | 本地 Widget / HUD / AnimInstance / Cue | 只观察结果；专服不创建 UMG 或粒子 |
 
-GameInstance 发起旅行 → 当前 Controller 握手 → GameMode 验证票据与恢复条件 → Character 恢复支持的状态 → 成功才接纳、轮换票据 → 客户端等待本端对象就绪并补读 GameState。
+ASC 当前属于 **Character，不是 PlayerState**。换 Pawn 时显式恢复受支持状态；不能把这一实现说成 ASC 永久存活、任意 GE 存档或跨服务器迁移。
 
-恢复只覆盖同服务器、同局、有限保留窗口。扣除离线时间，处理支持的持续效果与倒地超时；不续接半次攻击、冲刺、救援或旧任务。`multiplayerCombatResumeState.h` 是数据合同，不是序列化服务，也不接受客户端上传血量。
+## 3. 文件为什么这样放
 
-### 机关与目标
-
-服务器 Overlap/玩家资格变化 → Occupancy 去重 → 机关检查自身条件 → GameMode 提交目标/终局 → GameState 发布结果 → 客户端状态驱动表现。不同生命周期的连接状态、重开状态与机关状态不合并成一个全局状态机。
-
-### 技能与结算
-
-本地输入/范围预览 → Character 的只读资格查询 → 实际 AbilitySpec 的 CanActivateAbility → 原生预测激活与服务器独立准入 → GA Commit 成本/冷却 → 起手任务 → 服务器重建目标并结算 → EndAbility 释放本轮任务和临时状态。
-
-取消不等于退款，也不回滚已结算伤害；技能已生成的独立持续效果按自身规则结束。界面不另写一套成本/冷却/阻断条件。
-
-## 4. 战斗源码阅读入口
-
-以下文件相对于 `Source/multiplayer/Combat/`：
-
-| 文件 | 负责什么 |
+| 目录 / 文件 | 阅读重点 |
 | --- | --- |
-| `multiplayerCombatCharacter.h/.cpp` | 角色生命周期、能力输入、属性监听、控制状态及恢复协调 |
-| `multiplayerCombatCharacterSkillStatus.cpp` | 同一个 Character 的技能可用性与失败说明；不是新增组件或第二个角色 |
-| `multiplayerCombatAbilitySystem.h/.cpp` | 已有 ASC 子类的声明和实现：原生标签关系适配、正式失败反馈、动画认领与恢复窄入口 |
-| `multiplayerCombatAbility.h/.cpp` | 公共 GA 约束、具体技能阶段及相关小型默认 GE；不再聚合 ASC 类声明 |
-| `multiplayerCombatTargeting.h/.cpp` | 共享几何查询与 Character 预览方法，不提交战斗结果 |
-| `multiplayerCombatProjectile.*`、`multiplayerCombatAttributes.*` | 权威弹体命中与最终属性结算 |
-| `multiplayerCombatProgression.*`、`multiplayerCombatCoop.*` | 成长/配装与倒地/救援，保留各自已有组件和状态所有者 |
-| `multiplayerCombatPresentation.*` | Character 的本地动画/特效方法、Cue、动画实例和事件驱动界面；不额外持有权威数值 |
+| Core/ | GameMode 裁决；GameState 发布共享快照；GameplayConfig 加载 JSON |
+| Network/ | GameInstance 的连接状态机及同文件内有界计时值对象；CombatResumeState 只定义服务器快照合同 |
+| Player/ | Character 基础输入和镜头；CoopPlayerController 的拥有者 RPC、重开和离场 |
+| Mechanisms/ | 每个机关的自身状态与 Occupancy；不把全部交互硬塞进 GAS |
+| Combat/Config、Tags | 静态规则与标签；不是运行时战斗管理器 |
+| Combat/Character | ASC 初始化、输入协调、生命权限和恢复；不是所有技能的执行器 |
+| Combat/CharacterSkillStatus.cpp | 同一 Character 的资格查询与失败说明，不是第二个组件 |
+| Combat/AbilitySystem | GAS 关系映射、正式失败反馈、动画认领和恢复窄入口 |
+| Combat/Ability、Mobility | 公共准入/提交、既有激活身份与专用 Cue Context、具体能力阶段；相关小型 GE 定义就近保留 |
+| Combat/Targeting | 预览和权威出手共用的几何；查询不等于授权 |
+| Combat/Projectile、Attributes | 权威弹体、格挡/弹反、伤害计算及属性唯一结算 |
+| Combat/Progression、Coop | 已有成长、倒地救援组件，各自维护状态 |
+| Combat/Enemy、Encounter | BT 决策、错峰出生、有限波次与补给；技能归 GAS、移动归 CMC |
+| Combat/Presentation | 同一表现域按 Cue、战斗 HUD、成长菜单、Canvas、动画分段；旧血条 Widget 父类仅兼容存量布局 |
+| Testing/ | 自动化、网络实验和编辑器工具；生成用 .inl 是 Commandlet 的同一编译单元，不是运行时模块 |
 
-一个 Character 的方法分在多个 cpp，是实现文件组织，不等于拆出了多个组件。两次发生在不同时点的准入与提交复核，也不是重复结算。
+Combat 表中使用文件名短称；实际文件前缀均为 multiplayerCombat。一个 Character 的方法分在多个 cpp 是实现组织，不等于对象隔离。本轮不为每个短类再建 Manager/组件，反射类名、资产父类和状态所有者保持稳定。
 
-## 5. 配置、蓝图与兼容性
+## 4. 按三条完整链路理解
 
-- Combat Data Asset 保存技能参数、标签关系和表现资源；JSON 保存已有机关/实验规则。同一字段只维护一个配置源，不把运行状态写回共享配置。
-- C++ 定义规则与唯一提交入口，蓝图派生现有角色/机关/界面并配置资源；蓝图不另行扣费、伤害或判胜。
-- 本次整理只调整头文件、依赖与实现文件命名。UClass/枚举名称、`/Script/multiplayer.*` 身份、属性/RPC 与资产父类不变，不需要额外 CoreRedirects、兼容聚合头或批量重存资产。
-- GameMode 的头只依赖恢复数据，不再通过完整 CombatCharacter 头间接引入角色、动画与输入声明；使用 Character 或 ASC 的实现应直接包含对应头。
+### 技能：输入到结果
 
-## 6. 验证与边界
+~~~
+按键 / 配装槽位 → 本地预览（不提交）→ ConfirmSkillTargeting / ActivateSkill
+  → 定向技能：GameplayEvent + 方向 TargetData
+  → 非定向技能：TryActivateAbilityByClass
+  → GAS 内部尝试激活 → 实际 AbilitySpec 的 CanActivateAbility
+  → 客户端原生预测 + 服务器独立准入
+  → GA::ActivateAbility → CommitAbility（复核并提交成本/CD）
+  → 起手任务 → 服务器重新检查目标 → 发弹或范围结算
+  → Damage Execution → IncomingDamage → AttributeSet：格挡、盾、生命
+  → 复制 / Cue / 本机委托 → 只读表现快照 → 保存的蓝图显示
+  → EndAbility：结束本轮任务，移除自己持有的临时状态
+~~~
 
-当前结果见 [Tests/README](../Tests/README.md)。结构整理不等于新的性能优化、弱网或视觉验收；每轮编译、自动化、静态资产契约和多进程网络测试分别记录，不把历史通过移称为本轮重跑。
+Commit、出手和 End 都由具体 GA 显式调用，不是引擎在 Activate 后无条件完成。Can 管能否开始，Commit 管现在能否付费，出手时仍复核目标；不同时点的检查不能当重复代码直接删除。非伤害效果直接通过自己的 GE 修改属性/标签，不必经过 IncomingDamage。完整函数链见 [GAS 架构与调用链](../Source/multiplayer/Combat/multiplayerCombatAbility.cpp)。
+
+### 连接：握手到恢复
+
+~~~
+本机 GameInstance 发起旅行 → 当前 Controller 的所属 RPC
+  → 服务器 GameMode 校验票据、在线占用和恢复期限
+  → 新 Pawn 未接纳时恢复成长 / 资源 / 剩余效果
+  → 成功才设置战斗就绪、轮换票据并回执
+  → 客户端等待本端对象就绪 → 重新绑定并补读当前快照
+~~~
+
+地图加载、收到回执和全部属性/HUD 就绪不是同一时刻。客户端不能上传一份血量覆盖服务器；半次攻击、冲刺、救援和旧回调也不续接到新 Pawn。
+
+### 机关：事实到共享进度
+
+~~~
+服务器 Overlap / 玩家资格变化 → Occupancy 去重
+  → 机关验证当前条件 → GameMode 提交目标或终局
+  → GameState / 机关自身状态复制 → 客户端状态驱动表现
+~~~
+
+占用人数不是碰撞体数量；钥匙安装成功后才登记进度。门的本地过渡不保证全端逐帧相同；平台仍依赖原生运动复制和 CMC 基座机制。
+
+## 5. 蓝图和数据去哪里改
+
+- **技能参数、标签关系和 Cue 资源**：DA_CombatConfig、DA_EnemyCombatConfig、Escape/DA_EscapeCombat。运行时不改共享资产；有限敌人变体只派生自己的实例配置。
+- **关卡和连接基础规则**：Content/Config/Gameplay.json。配置无效时整份回退默认值，客户端配置不覆盖服务器。
+- **角色动画/外观、机关网格/相对变换**：对应保存的 BP / AnimBP；碰撞和规则仍沿原 C++ 所有者执行。
+- **战斗 HUD**：WBP_ARPGCombatVisuals、WBP_EscapeCombatVisuals 的 LocalPresentation 消费 Native 快照，不另存血量或冷却余额。
+- **成长菜单**：WBP_CombatProgression 显示快照；按钮由原生绑定到服务器请求，蓝图不自己发技能点。
+- **敌人头顶血条已移除**：敌人不再创建 WidgetComponent 或订阅血条更新。两份旧 WBP 依赖的 Widget 父类保留为资产兼容；零引用的专用组件与 Widget 向组件的反向通知移除，不再保留一套未接入小兵的显示逻辑。
+- **范围绘制**：两种战斗 HUD 使用唯一 BP_CombatHUDPresentation；原生准备线段/文字，ReceiveDrawHUD 绘制，没有原生 Canvas 回退。
+
+当前技能流程和 GE 类型仍在已有 C++ 能力中显式绑定。新建一个 GA/GE 子蓝图，不会自动替换已经授予的能力或成本类；需要在实际能力映射/效果类入口接入，不能只看资源存在就认定运行链已使用。
+
+玩家 Widget 按“解绑旧对象 → 绑定新对象 → 补读快照 → 后续事件”工作。销毁时发布最后空快照并停止定时器，晚到通知不能复活界面；活动冷却与读条仍以低频 Timer 更新，事件驱动不等于整个 UI 没有计时任务。
+
+## 6. 实验与正式玩法的隔离
+
+- 模块的网络实验入口只在非 Shipping 构建注册；没有显式场景参数就不创建实验驱动。自动化由 WITH_DEV_AUTOMATION_TESTS 控制，资产生成实现和编辑器依赖只在 WITH_EDITOR / Editor Target 存在。
+- -CoopSkillDemo 只用于非 Shipping 演示；额外初始解锁不读写正式成长档。演示或忽略成本/冷却不能用于证明正式资源规则通过。
+- Commandlet 的只读验证与写入迁移参数互斥，歧义在载入地图或保存之前拒绝。Validate / Audit 不偷偷修复资产，只有显式写入模式可保存。
+- 生成 .inl 只能由编辑器工具包含。资源审计按玩家/小兵分别检查配置，Cascade 优先级与运行时一致。资源迁移冷检需要对应迁移前快照，不能在缺少基线时声称地图实例未变。
+- 旧庭院 `Escape_*` 自动路线及其专用导航/诊断已退休；`CoopVisualFixture.cpp` 只保留现用场景共享的视觉检查和截图。本机启动脚本默认手动游玩，六个现用网络实验仍由统一 runner 显式启动。
+- 资源迁移基线归档在 Tests/Evidence/ResourcePresentationBaseline_20261025.json；实际运行参数/存档与验证报告分开。Saved/SaveGames 是正式成长数据，不能因其他 Saved 子目录存放实验结果就整目录清理。
+- WBP 冷检拒绝额外业务图、写变量和表现图外的执行路径；它不证明所有运行路径没有 Bug，更不等于屏幕像素、完整通关或弱网体验验收。
+
+入口、参数和原始证据统一在 [Tests/README](../Tests/README.md)，不另建一套正式玩法来迁就实验。
+
+## 7. 值得重点理解的亮点与边界
+
+1. **预测与取消**：GAS 负责预测效果账本，项目复用 SpecHandle、已有服务器激活轮次和原预测键关联动画、Cue 与取消，不生成另一套施法计数器。预测拒绝撤销受支持的预测效果，普通中断不退款，已结算伤害不撤回。GAS 结束锁内先排队，不能提前解锁或停动画。
+2. **持续效果与重连**：同服务器同局，断线后 120 秒窗口；白名单 GE 保留来源、剩余时间和灼烧下一跳，扣离线时间并补算伤害。不是账号系统、任意 GE 序列化或离线世界重演。
+3. **状态交互**：独立禁锢共同持有限制，最后一份结束才解锁；当前眩晕采用刷新时长，不宣称所有控制效果都有独立多来源策略。
+4. **统一结算和表现**：伤害 Execution 只输出 IncomingDamage，AttributeSet 消费一次；Cue/蓝图只显示结果。预览共用配置/几何，但网络延迟期间目标仍可能移动。
+5. **实验输入就绪**：创建了网格组件不等于物理形体已经可查询。网络夹具等待异步网格构建和同条件地面射线命中，再检查技能几何；不放宽生产判定或给正式原生类塞回美术默认值。
+6. **连接计时**：GI 每 0.5 秒只读取新的 ACK RTT 批次，以连接和统计周期隔离游标。平滑 RTT／波动仅提供有界等待余量；20 秒业务预算、配置重试次数和操作编号各有职责。可靠 RPC 不因业务超时重复发送，服务器接纳及恢复期限仍独立裁决。
+
+右键取消分两种生命周期：活动能力走 GAS 取消，Q 的持续防御／弹反按本次预测键由服务器移除；R 出手后按同次激活身份停止结果表现。服务器的已有 ActivationRevision 与 SpecHandle 构成权威关联，拥有者在取得它之前短暂使用原预测键连接请求；键不会永久累积为取消墓碑。每个 Spec 只保留最新权威状态，较新的 R 接替旧表现，旧取消和旧结果不能接管较新轮次；已结算伤害与持续效果保留。
+
+身份通过显式构造的 `FmultiplayerCombatCueContext` 专用字段传递，沿用原生类型化 Context 序列化，不改 Globals 或借用无关 Cue 参数。动画原生播放号仍负责具体播放；ASC 的实际播放入口统一动作键／激活键的拒绝清理，Commit 不再重复登记。结果特效补载按同次身份复核；起手标记的共享材质加载完成后服务当前有效身份，读取缓存的最新位置，不重放旧预测落点。持续效果的 Cue 计数和移除仍归原生流程。
+
+预览关闭通知放在本轮清理末尾，通知中开始的新技能不会再被这段旧取消流程清除；这不代表任意能力结束回调都可安全重入，也不是通用世界回滚。当前实现与最终验证结果分别记录，不能用旧测试数字替代本轮验收。
+
+关键源码注释使用 [职责]、[亮点]、[边界]。先讲“谁写状态、谁有权限、何时通知、何时释放”，再沿调用链看函数，不按类数量背设计模式。
+
+## 8. 验证口径
+
+编译、资产冷加载、进程内自动化、多进程网络与人工画面验收分别记录。历史通过不自动覆盖后续改动；NullRHI、忽略消耗演示、局部抽帧也不等于完整视觉通过。本轮实际结果在 Tests/README 最新一节记录，未覆盖项保持明确。

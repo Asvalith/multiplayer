@@ -338,12 +338,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatSupplyTest, "Multiplayer.Combat.Enco
 bool FCoopCombatSupplyTest::RunTest(const FString&)
 {
 	FEncounterFixture Fixture;
+	const auto SupplyClass = LoadClass<AmultiplayerCombatSupply>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatSupply.BP_CombatSupply_C"));
+	if (!TestNotNull(TEXT("Supply rules run on the formal Blueprint with authored presentation"), SupplyClass)) return false;
 	auto* FirstPC = Fixture.Player(0); auto* SecondPC = Fixture.Player(1);
 	if (!TestTrue(TEXT("First player accepted"), Fixture.Accept(FirstPC))
 		|| !TestTrue(TEXT("Second player accepted"), Fixture.Accept(SecondPC))) return false;
 	auto* First = Pawn(FirstPC); auto* Second = Pawn(SecondPC);
 	const FVector Position(0.f, 0.f, 100.f);
-	auto* FullSupply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(Position, FRotator::ZeroRotator);
+	auto* FullSupply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(SupplyClass, Position, FRotator::ZeroRotator);
 	const auto* Label = FullSupply->FindComponentByClass<UTextRenderComponent>();
 	TestTrue(TEXT("Supply label remains present but hidden in game"), Label && Label->bHiddenInGame);
 	First->SetActorLocation(Position);
@@ -356,7 +359,7 @@ bool FCoopCombatSupplyTest::RunTest(const FString&)
 	TestEqual(TEXT("Supply does not overfill full health"), First->GetHealth(), First->GetMaxHealth());
 	First->SetActorLocation(FVector(-500.f, 0.f, 100.f));
 	SetResources(First, 20.f, 0.f); SetResources(Second, 20.f, 0.f);
-	auto* Shared = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(FVector(0.f, 1000.f, 100.f), FRotator::ZeroRotator);
+	auto* Shared = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(SupplyClass, FVector(0.f, 1000.f, 100.f), FRotator::ZeroRotator);
 	auto* Trigger = Shared->FindComponentByClass<USphereComponent>();
 	int32 ReentrantCallbacks = 0;
 	const FDelegateHandle DamageCallback = First->GetAbilitySystemComponent()->GetGameplayAttributeValueChangeDelegate(
@@ -377,7 +380,7 @@ bool FCoopCombatSupplyTest::RunTest(const FString&)
 	First->GetCoopComponent()->bEnableDowned = true;
 	First->GetAbilitySystemComponent()->SetNumericAttributeBase(UmultiplayerCombatAttributes::GetHealthAttribute(), 0.f);
 	if (!TestTrue(TEXT("The first player genuinely enters cooperative downed state"), First->GetCoopComponent()->IsDowned())) return false;
-	auto* DownedSupply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(FVector(0.f, 2000.f, 100.f), FRotator::ZeroRotator);
+	auto* DownedSupply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(SupplyClass, FVector(0.f, 2000.f, 100.f), FRotator::ZeroRotator);
 	auto* DownedTrigger = DownedSupply->FindComponentByClass<USphereComponent>();
 	DownedTrigger->OnComponentBeginOverlap.Broadcast(DownedTrigger, First, First->GetCapsuleComponent(), 0, false, FHitResult());
 	TestFalse(TEXT("A queued overlap cannot let a downed player claim a supply"), DownedSupply->IsConsumed());
@@ -394,7 +397,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopEncounterSnapshotTest, "Multiplayer.Combat
 bool FCoopEncounterSnapshotTest::RunTest(const FString&)
 {
 	FEncounterFixture Fixture;
-	auto* Supply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(FVector(0.f, 3000.f, 100.f), FRotator::ZeroRotator);
+	const auto SupplyClass = LoadClass<AmultiplayerCombatSupply>(nullptr,
+		TEXT("/Game/Combat/Presentation/BP_CombatSupply.BP_CombatSupply_C"));
+	if (!TestNotNull(TEXT("Snapshot fixture uses the actual authored supply class"), SupplyClass)) return false;
+	auto* Supply = Fixture.World->SpawnActor<AmultiplayerCombatSupply>(SupplyClass, FVector(0.f, 3000.f, 100.f), FRotator::ZeroRotator);
 	const FBoolProperty* Consumed = FindFProperty<FBoolProperty>(Supply->GetClass(), TEXT("bConsumed"));
 	if (!TestNotNull(TEXT("Supply exposes its real replicated consumed property"), Consumed)) return false;
 	TestTrue(TEXT("Supply snapshot is replicated with its real RepNotify"), Consumed->HasAnyPropertyFlags(CPF_Net)

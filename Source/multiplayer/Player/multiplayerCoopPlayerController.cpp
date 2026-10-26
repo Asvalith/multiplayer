@@ -9,7 +9,7 @@
 #include "InputCoreTypes.h"
 #include "Components/InputComponent.h"
 
-// 所属连接的请求层：握手、重开与退出经本控制器建立端点，不在控制器内重写玩法规则。
+// [职责] 所属连接的请求层：握手、重开与退出经本控制器建立端点，不在控制器内重写玩法规则。
 // 服务器只通过 Owned RPC 回复该玩家；界面反馈使用本地委托，其他客户端不参与请求锁。
 
 // Pawn 死亡后只关闭自身输入；Controller 保留终局重开入口，服务器仍复核是否真的结束。
@@ -29,8 +29,7 @@ void AmultiplayerCoopPlayerController::BeginPlay()
 	{
 		return;
 	}
-	//绑定事件
-	// OnLeaveFailed 是同进程委托；GameInstance 在退出 Travel 失败时通知此入口。
+	// OnLeaveFailed 是本实例的本地委托；GameInstance 在退出 Travel 失败时通知此入口。
 	if (UmultiplayerGameInstance* GameInstance = GetGameInstance<UmultiplayerGameInstance>())
 	{
 		GameInstance->OnLeaveFailed.AddUObject(this, &AmultiplayerCoopPlayerController::HandleLeaveFailed);
@@ -41,7 +40,6 @@ void AmultiplayerCoopPlayerController::BeginPlay()
 void AmultiplayerCoopPlayerController::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
-	// 解绑事件
 	GetWorldTimerManager().ClearTimer(CombatHandshakeTimer);
 	if (UmultiplayerGameInstance* GameInstance = GetGameInstance<UmultiplayerGameInstance>())
 	{
@@ -51,11 +49,11 @@ void AmultiplayerCoopPlayerController::EndPlay(
 }
 
 // 本地控制器进入 PlayingState 后准备会话握手；接纳回执前不把连接视为业务就绪。
-// 设计：GI 跨 World 保留连接意图，Owned Controller 提供请求端点，GameMode 决定是否开放角色权限。
+// [亮点] GI 保留本机连接意图，Owned Controller 提供请求端点，GameMode 决定是否开放角色权限。
 void AmultiplayerCoopPlayerController::BeginPlayingState()
 {
 	Super::BeginPlayingState();
-	//服务器也为远端玩家创建 PlayerController，但只有所属客户端能确认本地连接已经进入可操作状态。
+	// 服务器也持有远端玩家的 Controller；只有本地控制器发起握手，接纳前仍不能操作角色。
 	if (!IsLocalController())
 	{
 		return;
@@ -74,7 +72,8 @@ void AmultiplayerCoopPlayerController::BeginPlayingState()
 	}
 }
 
-// 单次 Owned RPC 只带服务器票据；不接收位置、血量、资源或冷却，也不接受在已接纳会话上重复换号。
+// [职责] 所属客户端 -> 服务器：只提交票据与本机操作编号，GameMode 裁决接纳／恢复。
+// [边界] 不接收位置、血量、资源或冷却，也不接受在已接纳会话上重复换号。
 void AmultiplayerCoopPlayerController::ServerEstablishCombatSession_Implementation(FGuid Ticket, uint64 Operation)
 {
 	if (bCombatHandshakeSubmitted) return;
@@ -91,7 +90,7 @@ void AmultiplayerCoopPlayerController::ServerEstablishCombatSession_Implementati
 }
 
 // 所属客户端验证回执仍属于当前握手，成功后才开放本地连接状态，迟到回执不能接管新尝试。
-// 接纳回执和 Pawn/属性复制独立到达；可靠 RPC 不是所有 Actor、资源与 HUD 已就绪的屏障。
+// [边界] 接纳回执和 Pawn/属性复制独立到达；可靠 RPC 不是所有 Actor、资源与 HUD 已就绪的屏障。
 void AmultiplayerCoopPlayerController::ClientCombatSessionResult_Implementation(FGuid Ticket, uint64 Operation, const FText& Error, bool bRetryable)
 {
 	if (!IsLocalController() || HasAuthority()) return;
@@ -125,7 +124,7 @@ void AmultiplayerCoopPlayerController::PawnLeavingGame()
 	Super::PawnLeavingGame();
 }
 
-//VictoryAction状态修改
+// 本地操作状态先提交再广播，监听者读取同一份请求占用。
 void AmultiplayerCoopPlayerController::SetVictoryAction(ECoopVictoryAction NewAction, const FText& Message)
 {
 	// 先提交本地操作状态，再广播按钮与提示；监听者同步回调时能读取新状态。
@@ -133,7 +132,6 @@ void AmultiplayerCoopPlayerController::SetVictoryAction(ECoopVictoryAction NewAc
 	OnVictoryActionChanged.Broadcast(NewAction == ECoopVictoryAction::Idle, Message);
 }
 
-//本地占用
 // 所属客户端的重开按钮入口：锁定本地操作后向服务器提交请求，不在客户端重载地图。
 void AmultiplayerCoopPlayerController::RequestRestartCurrentRound()
 {
@@ -156,7 +154,7 @@ void AmultiplayerCoopPlayerController::RequestRestartCurrentRound()
 	if (VictoryAction == ECoopVictoryAction::RestartPending) ServerRequestRestartCurrentRound();
 }
 
-//接收请求并做权威校验（防重入，状态校验，权威校验，规则校验）
+// [职责] 服务器为本玩家占用请求，再交 GameMode 检查整局资格；本地按钮锁不能授权重开。
 void AmultiplayerCoopPlayerController::ServerRequestRestartCurrentRound_Implementation()
 {
 	// 重复的在途请求不另发失败：否则会把真正等待 Travel 的本地操作错误解锁。
@@ -236,11 +234,10 @@ void AmultiplayerCoopPlayerController::HandleLeaveFailed(const FText& Reason)
 	}
 }
 
-//服务器要求客户端返回菜单时，关闭自动重连，避免退出后再次连回。
+// 服务器要求客户端返回菜单时，交 GameInstance 关闭自动重连并处理本机退出。
 void AmultiplayerCoopPlayerController::ClientReturnToMainMenuWithTextReason_Implementation(
 	const FText& ReturnReason)
 {
-	// 服务器主动要求返回菜单时关闭自动重连，避免退出后再次连回。
 	if (UmultiplayerGameInstance* GameInstance =GetGameInstance<UmultiplayerGameInstance>())
 	{
 		// 服务端要求退出可打断重开等待；否则退出失败后会遗留 RestartPending 锁。

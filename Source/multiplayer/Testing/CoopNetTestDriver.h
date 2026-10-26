@@ -4,6 +4,7 @@
 #include "Containers/Ticker.h"
 #include "GameFramework/Actor.h"
 #include "Network/multiplayerGameInstance.h"
+#include "Combat/multiplayerCombatAbility.h"
 #include "CoopNetTestDriver.generated.h"
 
 class FJsonObject;
@@ -11,20 +12,9 @@ class AmultiplayerCombatCharacter;
 class AmultiplayerCombatEnemy;
 class AmultiplayerCombatProjectile;
 class UNetDriver;
-class UCapsuleComponent;
 class USceneComponent;
 struct FKey;
 enum class EMultiplayerCombatSkill : uint8;
-
-// 仅开发验收的导航意图；路线来自真实 Recast，所属客户端仍以输入驱动 CMC。
-USTRUCT()
-struct FCoopEscapeRoute
-{
-	GENERATED_BODY()
-	UPROPERTY() FString Command;
-	UPROPERTY() TArray<FVector> Points;
-	UPROPERTY() int32 Revision = 0;
-};
 
 // 仅测试回执通道，不给业务类增加测试 RPC 或权限后门。
 // UHT 在 Shipping 仍生成类型，但测试入口和 RPC 实现均不会激活。
@@ -40,7 +30,6 @@ public:
 	UPROPERTY(Replicated) FString Stage;
 	UPROPERTY(Replicated) TObjectPtr<AActor> Subject;
 	UPROPERTY(Replicated) TObjectPtr<AActor> CombatTarget;
-	UPROPERTY(Replicated) FCoopEscapeRoute EscapeRoute;
 	// 所属客户端提交观察回执，服务器驱动继续核对来源与唯一名称。
 	UFUNCTION(Server, Reliable) void ServerReceipt(const FString& Name, bool bPassed, const FString& Detail);
 };
@@ -106,12 +95,8 @@ private:
 	void ExpansionServerTick(UWorld* World);
 	// 所属端发冲刺/成长/救援业务请求，并独立验证同步与预测结果。
 	void ExpansionClientTick(UWorld* World);
-	// 原地图服务器只观察真实战斗/钥匙/撤离与重开，不靠夹具直接改写胜负。
-	void EscapeServerTick(UWorld* World);
-	// 原地图客户端用正常按键沿路线游玩，并记录本端画面/状态证据。
-	void EscapeClientTick(UWorld* World);
-	// 服务器依据真实导航生成路线意图，客户端仍以输入驱动 CMC。
-	bool SetEscapeMove(UWorld* World, const FString& Command, const FVector& PrimaryGoal, const FVector& PartnerGoal);
+	// 释放 Expansion 视觉验收实际按住的 F；正常完成、失败和退出共用同一输入清理。
+	void ClearCombatRescueInput();
 	// 请求本轮 token 下的截图并等待非空 PNG，NullRHI 明确标注无视觉证据。
 	bool CaptureEscapeView(const FString& Name);
 	// 保留原相机与 FOV，正常调整观察方向后保存技能画面。
@@ -125,21 +110,10 @@ private:
 	void ClearCombatSelfHealFixture();
 	// 核对已保存正式角色/HUD/配置身份，不能换测试 HUD 冒充视觉通过。
 	bool PrepareVisualFixture(UWorld* World);
-	// 仅给隔离数值夹具补无碰撞可见地面，不改变原移动/命中规则。
-	bool PrepareVisualFixtureSurface(UWorld* World, AmultiplayerCombatCharacter* Character);
 	// 视觉模式用正式敌人蓝图，纯数值模式用原生测试敌人。
 	UClass* CombatFixtureEnemyClass() const;
 	// 双客户端核对实际 Pawn、HUD、动画和配置，等待必要表现资源就绪。
 	bool ValidateVisualFixturePawn(AmultiplayerCombatCharacter* Character);
-	// 通过真实 W 按下/松开切换测试行走，不直接设置角色速度。
-	void SetEscapeWalking(APlayerController* Controller, bool bWalk);
-	// 释放测试自己的行走/救援/重开按键与碰撞/出生观察。
-	void ClearEscapeInput();
-	// 显式诊断模式临时监听阻挡碰撞，保存旧开关以便退出恢复。
-	void BindEscapeHitDiagnostics(AmultiplayerCombatCharacter* Character);
-	// 限频输出真实阻挡与导航参数，不改变碰撞或移动结果。
-	UFUNCTION() void HandleEscapeCapsuleHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit);
 	// 独立覆盖异步施法预测、取消和控制；不向玩法类增加测试 RPC。
 	void PrepareLifecycleLateJoin(UWorld* World);
 	// DS 组织出手、取消、控制与瞄准夹具，并等待双连接观察。
@@ -177,16 +151,22 @@ private:
 	FVector CombatPartnerMovementOrigin = FVector::ZeroVector;
 	double CombatMovementAt = 0;
 	bool bCombatMovementInputHeld = false;
+	bool bCombatRescueInputHeld = false;
 	TWeakObjectPtr<UWorld> CombatAimWorld;
 	TWeakObjectPtr<AmultiplayerCombatCharacter> CombatAimTarget;
 	TWeakObjectPtr<AmultiplayerCombatProjectile> CombatAimProjectile;
 	FDelegateHandle CombatAimControlTick, CombatAimSpawned, CombatAimHealthChanged;
 	// R 按下/松开必须经过输入帧，再在该帧网络接收之前检查真实预测提交。
 	FDelegateHandle CombatAreaInputTick;
+	FDelegateHandle CombatAreaCueTrace;
 	int32 CombatAreaInputStep = 0;
 	FVector CombatAreaReleaseCenter = FVector::ZeroVector;
 	bool bCombatAreaReleaseCenter = false;
 	TSet<TWeakObjectPtr<USceneComponent>> CombatAreaEffectsBefore;
+	// 视觉专项仅观察两次真实 R 的身份与组件，不自行产生结果或取消消息。
+	FmultiplayerCombatActivationIdentity CombatAreaIdentityA, CombatAreaIdentityB;
+	TWeakObjectPtr<USceneComponent> CombatAreaIdentityEffectA, CombatAreaIdentityEffectB;
+	double CombatAreaIdentityCooldownDeadline = 0;
 	// 自疗必须经过真实 E 输入；两端记录旧组件与独立生命变化，不能沿用上次队友治疗的特效。
 	TWeakObjectPtr<UWorld> CombatSelfHealWorld;
 	TWeakObjectPtr<AmultiplayerCombatCharacter> CombatSelfHealObserved;
@@ -223,25 +203,9 @@ private:
 	uint32 TrafficStartOutBytes = 0, TrafficStartOutPackets = 0;
 	uint64 TrafficStartFrame = 0;
 	int32 TrafficProjectileSpawns = 0, TrafficEnergyUpdates = 0;
-	TWeakObjectPtr<UWorld> EscapeRoundWorld;
-	FString EscapeLocalCommand;
-	int32 EscapeRouteRevision = -1, EscapeRoutePoint = 0;
-	int32 EscapeEnemyBirths = 0;
-	FDelegateHandle EscapeSpawnObserver;
-	FVector EscapePrimaryOrigin = FVector::ZeroVector, EscapePartnerOrigin = FVector::ZeroVector;
-	FVector EscapePrimaryGoal = FVector::ZeroVector, EscapePartnerGoal = FVector::ZeroVector;
-	double EscapeLastRepathAt = 0, EscapeLastAttackAt = 0, EscapeLastDefenseAt = 0, EscapeLastHealAt = 0;
-	double EscapeLastSampleAt = 0;
-	double EscapeFirstEnemyAt = 0;
-	double EscapeLastHitAt = 0;
-	TMap<TWeakObjectPtr<UCapsuleComponent>, bool> EscapeHitSources;
 	TMap<FString, double> EscapeCaptureWaitStarted;
-	double EscapeEmptySince = 0;
-	float EscapePrimaryMinHealth = 100.f, EscapePartnerMinHealth = 100.f;
-	bool bEscapeWalking = false, bEscapeRescueHeld = false, bEscapeEnterHeld = false;
 	bool bTrafficProjectileObserved = false;
 	bool bVisualAcceptance = false;
-	bool bEscapeMovementDiagnostic = false;
 	bool bServer = false, bPartner = false, bDone = false;
 };
 

@@ -21,12 +21,17 @@ public:
 		const FGameplayTagContainer& CancelTags) override;
 	// 服务器按句柄、拥有者预测端按本次预测键解除施法锁，绝不移除其他施法或冷却。
 	void EndCasting(FActiveGameplayEffectHandle ServerHandle, const FPredictionKey& ActivationKey);
+	// 防御能力已结束时仍可查询其持续状态；重连恢复的无预测键效果也属于可取消的当前防御。
+	bool GetDefensePredictionKey(FPredictionKey& OutKey) const;
+	// 只由服务器结束对应次防御/弹反状态；不退资源、不清冷却，也不撤销已经授予的护盾。
+	void EndDefense(const FPredictionKey& ActivationKey);
 	// 重连恢复只调整新效果的下一跳时刻，沿用 GE 自己的 TimerHandle 和清理链路。
 	void SetPeriodicEffectDelay(FActiveGameplayEffectHandle Handle, float FirstDelay);
 	// 服务器把正式拒绝原因发给技能拥有者，不用一次新的资格查询代替真实失败结果。
 	virtual void NotifyAbilityFailed(FGameplayAbilitySpecHandle Handle, UGameplayAbility* Ability,
 		const FGameplayTagContainer& FailureReason) override;
 	// UE5.5 的动画开始通知早于 ASC 认领；在这里统一处理同步取消/替换，能力不各自补停。
+	// 复用现有动作/激活键处理拒绝；不为延迟动画重新开启可预测的资源提交窗口。
 	virtual float PlayMontage(UGameplayAbility* AnimatingAbility, FGameplayAbilityActivationInfo ActivationInfo,
 		UAnimMontage* Montage, float InPlayRate, FName StartSectionName = NAME_None, float StartTimeSeconds = 0.f) override;
 protected:

@@ -135,6 +135,8 @@ private:
 	TSoftObjectPtr<UNiagaraSystem> ProjectileEffectAsset;
 	TSoftObjectPtr<UParticleSystem> ProjectileCascadeAsset;
 	TSharedPtr<FStreamableHandle> ProjectileEffectLoad;
+	FTransform ProjectileEffectTransform = FTransform::Identity;
+	FName ProjectileDurationParameter = NAME_None;
 	float DamageAmount = 0.0f;
 	int32 ReflectionCount = 0;
 	int32 ReflectionLimit = 0;

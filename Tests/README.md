@@ -1,34 +1,29 @@
-# 当前测试与公开证据（2026-10-24）
+# 当前测试与公开证据（2026-10-26）
 
-Source 来源 7477ca9；报告在完整授权资源开发环境执行，main 是同源码展示快照，未独立运行资产/联机验收。
-
-## 本次架构整理验证
-
-[architecture.json](Evidence/2026-10-24/architecture.json) 保留本次源提交/树标识、原报告相对路径与 SHA-256：Editor/Shipping 编译退出 0；DX12 离屏 `Multiplayer.Combat.` 为 174 clean、0 warned/failed/notRun；42 项资产契约通过、43 个所查包内容未变。没有保存或发布素材，也没有重跑多进程网络、完整通关、视频或性能基线。
-
-## 原构建 9b4105c 的同日验证
-
-下表是先前冻结报告，不将原网络通过移称为 7477ca9 的新一轮结果。
+Source 与开发提交 2efa683616770e05d915276bb074fbcccff6bc0a 完全一致，Source 树为 704ea2b98c0a35f78f2539d4e6f5be80f77b5218。报告在提交前的完整授权开发环境执行，最终源码清单核对无差异；main 缺少 Content，未独立重跑资源或联机验收。
 
 | 检查 | 原环境结果 | 公开摘录 |
 | --- | --- | --- |
-| Editor / Shipping 原生编译 | 成功；最后增量检查 up to date | [构建与逐项自动化](Evidence/2026-10-24/automation.json) |
-| 完整 Automation | 174 clean，0 warned/failed/notRun | 同上 |
-| Combat / Lifecycle / Expansion / Reconnect | 每组 Normal、Harsh 各一次，8/8 passed | [分组、case及显式事件](Evidence/2026-10-24/network.json) |
+| Editor / Shipping 非 Unity 编译 | 完成；不等于发布包运行 | [构建与源码对应关系](Evidence/2026-10-26/verification.json) |
+| 完整 Automation | 184 clean，0 warned/failed/notRun | [逐项名称及状态](Evidence/2026-10-26/automation.json) |
+| CombatLifecycle Normal，DX12 离屏 | 148 项门禁通过，91.314 秒，三个进程正常退出 | [案例与显式断言](Evidence/2026-10-26/network.json) |
+| CombatLifecycle Harsh，DX12 离屏 | **失败**，108.899 秒；R 的拥有者结果表现未被观察，超时后由 runner 结束 | 同上 |
 
-本轮网络环境为本机 Editor Dedicated Server + 两独立客户端，CombatTest、NullRHI。覆盖预测拒绝、取消、冲刺/弹反/救援和存活/倒地/死亡恢复；不作为正式地图画面、完整通关、实测公网或新发布包验收。
+## 机制与证据边界
 
-Harsh 三端设置 PktLag=200、Variance=50、Loss=5，这是仿真参数而非实测 RTT。报告保留原状态与所需断言，剔除 token、detail、命令、原始日志和机器标识。原报告相对路径/SHA-256 可核对出处；摘录不代表原文件随仓库提供。
+- 复用现有 SpecHandle、ActivationRevision 与 PredictionKey，没有新增施法计数器。原生动画播放号仍区分具体播放；Commit 的重复拒绝登记已移除。
+- 真实 A／B 激活后，在原接收入口确定性重放旧取消和旧结果，B 不被清除、A 不复活。真实异步加载用例观察未完成的 A 请求，再验证 B 接替。它们不证明实际 UDP 乱序已经发生。
+- Normal 的真实键盘输入、粒子登记、双端 A／取消／B 保留及取消均通过；原环境保存 16 张阶段 PNG，并抽查部分画面。原始截图与日志不发布，截图抽查不代表连续动画质量。
+- Harsh 为三端 PktLag=200、Variance=50、Loss=5，不是实测 RTT。服务器扣费及伤害正确，Partner 观察到原生路由与粒子，Owner 未观察到同次路由。观察点早于项目身份过滤，不能归因为自定义身份误删，也不能单凭日志确定具体丢包位置；原生结果 Cue 不保证送达。
+- 未新增确认／补发层，未将结果改成可靠 RPC，未降低门禁或把失败算成通过。先前配置验证顺序、输入帧和表现缺失失败保留于开发环境。
+- 116 个受保护素材未因最新专项变化。资产须独立授权；仓库的地图配置基线 JSON 不包含实际资源包。
 
-## 源码与入口
+## 使用入口
 
-- `Source/multiplayer/Testing/` 是真实回归与联机场景实现，可沿生产能力、属性与机关接口查看断言，不是第二套玩法。
-- `Scripts/RunMultiplayerNetworkTests.ps1 -SelfTest` 是离线脚本契约检查，不启动游戏、不代表网络通过。
-- 具备完整资源后，用同一脚本选 Combat、CombatLifecycle、CombatExpansion 或 CombatReconnect；设置 Map 为 `/Game/Combat/Maps/CombatTest`，Normal/Harsh 分别记录结果。
-- 可操作入口 `Scripts/RunLocalDedicatedServer.ps1 -Play` 仍需地图/蓝图；省略 Play 的旧原型机关验证不能当作当前原埃及地图完整通关。
+Source/multiplayer/Testing 保留真实回归和联机场景；脚本的 SelfTest 仅检验契约，不启动游戏。恢复授权资源后方可运行 Combat、CombatLifecycle、CombatExpansion、CombatReconnect，或用 RunLocalDedicatedServer.ps1 -FromMenu 操作双客户端。
 
-## 历史与未覆盖项
+## 历史证据
 
-`Evidence/2026-09-27`、`Evidence/2026-09-29` 和 [Performance](../Docs/Performance.md) 是旧机关/平台构建的证据，不作为当前 GAS 通过率或优化收益。历史 JSON 和声明按原版本理解，不把500个合成压力板、20个平台当成玩家容量。
+Evidence/2026-10-24 及更早目录保留各自构建与拓扑，不作为当前通过率或优化收益。旧的 NullRHI 8/8 不能代替本轮带渲染 Harsh 的失败。当前没有公网、正式地图完整通关、Linux DS、新发布包运行或新的整局性能收益验收。
 
-尚无本轮公网、完整画面/通关、全部冷加载特效、Linux DS 或新 Shipping 包运行验收；本轮也不宣称新的整局CPU/带宽下降。资源边界见 [ASSET_REQUIREMENTS](../Docs/ASSET_REQUIREMENTS.md)，实现链见 [INTERVIEW_GUIDE](../Docs/INTERVIEW_GUIDE.md)。
+公开摘录只保留白名单字段和原始状态，不上传 token、机器标识、命令、绝对路径、原始 detail 或日志；报告相对路径与 SHA-256 可核对来源。实现见 [ARCHITECTURE](../Docs/ARCHITECTURE.md)、[INTERVIEW_GUIDE](../Docs/INTERVIEW_GUIDE.md)，资源边界见 [ASSET_REQUIREMENTS](../Docs/ASSET_REQUIREMENTS.md)。

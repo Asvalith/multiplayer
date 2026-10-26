@@ -13,12 +13,6 @@
 
 namespace
 {
-	// 将技能种类映射到集中定义的冷却标签，供提示读取剩余时间。
-	FGameplayTag SkillCooldownTag(EMultiplayerCombatSkill Skill)
-	{
-		return CombatTags::GetSkillTags(Skill).Cooldown;
-	}
-
 	// 优先取项目可读的拒绝标签；原生未知原因由调用者使用通用说明兜底。
 	FGameplayTag SpecificFailure(const FGameplayTagContainer& Reasons)
 	{
@@ -104,7 +98,7 @@ FText AmultiplayerCombatCharacter::GetSkillFailureText(EMultiplayerCombatSkill S
 			AuthorityValue >= 0 ? AuthorityValue : GetEnergy()));
 	if (Reason == CombatTags::Failure_Cooldown)
 	{
-		const float Remaining = AuthorityValue >= 0 ? AuthorityValue : GetEffectRemaining(SkillCooldownTag(Skill));
+		const float Remaining = AuthorityValue >= 0 ? AuthorityValue : GetSkillCooldownRemaining(Skill);
 		return FText::FromString(Remaining > 0.f ? FString::Printf(TEXT("技能冷却中：剩余 %.1f 秒"), Remaining) : TEXT("技能冷却中，等待服务器同步"));
 	}
 	if (Reason == CombatTags::Failure_NoHealTarget)

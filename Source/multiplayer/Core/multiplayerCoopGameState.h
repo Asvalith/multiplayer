@@ -7,7 +7,7 @@
 #include "multiplayerCoopGameState.generated.h"
 
 /**
- * 一次网络更新中发送的合作目标快照。
+ * [职责] 合作目标的复制快照，表达当前结果，不记录每次中间事件。
  *
  * 将“当前进度、目标上限、是否胜利”归在一个业务结构中，并使用同一 RepNotify 刷新表现，
  * 避免业务层依赖多个 OnRep 的调用顺序；这不等于跨 Actor、RPC 或附件复制的原子事务。
@@ -52,7 +52,7 @@ struct FmultiplayerCombatEncounterState
 };
 
 /**
- * 向所有客户端复制的合作目标状态。
+ * [职责] 向所有客户端复制合作目标、终局和波次的当前状态。
  * GameMode 判定规则并写入快照；客户端根据最新快照刷新，不依赖收到每个中间值。
  * 目标、终局与波次委托都是本地通知，不是 RPC；服务器主动调用 OnRep，客户端由复制触发。
  */
@@ -118,7 +118,7 @@ private:
 	FmultiplayerCoopObjectiveState ObjectiveState;
 	UPROPERTY(ReplicatedUsing = OnRep_EncounterState) FmultiplayerCombatEncounterState EncounterState;
 
-	// 记录本机上一次已经进入通知流程的胜利状态，用于只发布 false -> true 转换。
+	// 本机通知去重游标，不是第二份权威终局状态；广播前先推进，抵御监听者同步重入。
 	bool bLastNotifiedGameWon = false;
 	bool bLastNotifiedGameLost = false;
 };

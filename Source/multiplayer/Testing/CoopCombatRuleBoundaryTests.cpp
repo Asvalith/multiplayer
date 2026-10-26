@@ -8,6 +8,7 @@
 #include "Misc/AutomationTest.h"
 #include "AbilitySystemComponent.h"
 #include "Abilities/GameplayAbilityTargetTypes.h"
+#include "Abilities/Tasks/AbilityTask_WaitDelay.h"
 #include "Animation/AnimMontage.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatAttributes.h"
@@ -24,6 +25,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectIterator.h"
 #include <limits>
 
 namespace
@@ -336,6 +338,79 @@ bool FCoopCombatActivationABABoundaryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Old callbacks cannot release a second hit"), Target->GetHealth(),
 		100.0f - Caster->GetCombatConfig().Area.Amount);
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatCancelledTaskReactivationTest, "Multiplayer.Combat.CancelledTaskReactivation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 真实 WaitDelay 建立后取消并复用同一 GA：旧起手不能提前出手，旧收招不能结束新一轮。
+// 不直接 Broadcast 任务委托；GAS 会结束旧任务并清空其 Ability，测试观察任务状态及跨期限的真实结果。
+bool FCoopCombatCancelledTaskReactivationTest::RunTest(const FString& Parameters)
+{
+	for (bool bCancelRecovery : { false, true })
+	{
+		const FString Phase = bCancelRecovery ? TEXT("Recovery") : TEXT("Windup");
+		FCombatRuleBoundaryWorld Fixture;
+		auto* Config = DuplicateObject<UmultiplayerCombatConfig>(GetDefault<UmultiplayerCombatConfig>(), Fixture.World);
+		// 只调整本夹具配置，使冷却先于取消结束，且旧任务期限早于新起手；不修改生产默认资产。
+		Config->Area.Cost = 11.f;
+		Config->Area.Amount = 13.f;
+		Config->Area.Cooldown = .05f;
+		Config->Area.Windup = .8f;
+		Config->Area.Recovery = .5f;
+		auto* Caster = Fixture.Player(FVector(0, 0, 100), Config);
+		auto* Target = Fixture.Enemy(FVector(Config->Area.Range, 0, 100));
+		if (!TestNotNull(TEXT("Caster with isolated config exists"), Caster)
+			|| !TestNotNull(TEXT("Real damage target exists"), Target)) return false;
+		auto* ASC = Caster->GetAbilitySystemComponent();
+		Fixture.Advance(.04f); // 先正常 Tick，让之后建立的 Timer 使用同一条已启动时间线。
+		Caster->CastArea();
+		const auto* Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+		UGameplayAbility* Ability = Spec ? Spec->GetPrimaryInstance() : nullptr;
+		if (!TestTrue(TEXT("First real activation exists"), Ability && Ability->IsActive())) return false;
+		Fixture.Advance(bCancelRecovery ? .9f : .25f);
+		const float HealthBeforeCancel = bCancelRecovery ? 87.f : 100.f;
+		TestEqual(TEXT("First activation has reached the intended phase"), Target->GetHealth(), HealthBeforeCancel);
+		UAbilityTask_WaitDelay* OldTask = nullptr;
+		int32 OldTasks = 0;
+		for (TObjectIterator<UAbilityTask_WaitDelay> It; It; ++It)
+		{
+			if (It->Ability == Ability && !It->IsFinished()) { OldTask = *It; ++OldTasks; }
+		}
+		if (!TestEqual(TEXT("A real pending WaitDelay exists before cancellation"), OldTasks, 1)) return false;
+		Caster->CancelCast();
+		TestFalse(TEXT("Cancellation ends the first activation"), Ability->IsActive());
+		TestTrue(TEXT("Native GAS ends the old task"), OldTask->IsFinished());
+		TestTrue(TEXT("Old task detaches its ability before any reactivation"), OldTask->Ability == nullptr);
+		TestFalse(TEXT("Cancelled activation releases its casting effect"), Caster->IsCasting());
+		Caster->CastArea();
+		Spec = ASC->FindAbilitySpecFromClass(UmultiplayerAreaAbility::StaticClass());
+		if (!TestTrue(TEXT("The same GA instance genuinely reactivates"),
+			Spec && Spec->GetPrimaryInstance() == Ability && Spec->IsActive() && Caster->IsCasting())) return false;
+		TestEqual(TEXT("Each committed activation pays once; cancellation does not refund"), Caster->GetEnergy(), 78.f);
+		const auto Casting = FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(CombatTags::State_Casting));
+		TestEqual(TEXT("Only the current activation owns a casting effect"), ASC->GetActiveEffects(Casting).Num(), 1);
+		AddInfo(FString::Printf(TEXT("STALE_TASK %s cancelled task finished=1 abilityDetached=1; same GA restarted at t=%.2f energy=%.0f"),
+			*Phase, Fixture.World->GetTimeSeconds(), Caster->GetEnergy()));
+		// 越过旧任务的起手/收招期限，但还没到新一轮出手；不能只在所有技能都结束后检查。
+		const float CrossOldDeadline = bCancelRecovery ? .55f : .65f;
+		Fixture.Advance(CrossOldDeadline);
+		TestEqual(TEXT("Crossing the old deadline cannot release damage from the new activation early"), Target->GetHealth(), HealthBeforeCancel);
+		TestTrue(TEXT("Crossing the old deadline cannot end the current activation"), Ability->IsActive() && Caster->IsCasting());
+		TestEqual(TEXT("Old completion cannot remove the new casting effect"), ASC->GetActiveEffects(Casting).Num(), 1);
+		AddInfo(FString::Printf(TEXT("STALE_TASK %s old deadline crossed at t=%.2f targetHP=%.0f currentCasting=%d"),
+			*Phase, Fixture.World->GetTimeSeconds(), Target->GetHealth(), Caster->IsCasting()));
+		Fixture.Advance(Config->Area.Windup - CrossOldDeadline + .1f);
+		TestEqual(TEXT("Positive control: the current activation still releases exactly one real hit"), Target->GetHealth(), HealthBeforeCancel - 13.f);
+		Fixture.Advance(Config->Area.Recovery + .15f);
+		TestFalse(TEXT("The current activation finishes its own recovery"), Ability->IsActive() || Caster->IsCasting());
+		TestEqual(TEXT("No orphaned casting effect remains"), ASC->GetActiveEffects(Casting).Num(), 0);
+		TestEqual(TEXT("No duplicate damage survives either old deadline"), Target->GetHealth(), HealthBeforeCancel - 13.f);
+		TestEqual(TEXT("No late callback charges an extra cost"), Caster->GetEnergy(), 78.f);
+		AddInfo(FString::Printf(TEXT("STALE_TASK %s current release/recovery complete at t=%.2f targetHP=%.0f energy=%.0f casting=0"),
+			*Phase, Fixture.World->GetTimeSeconds(), Target->GetHealth(), Caster->GetEnergy()));
+	}
+	return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatAreaDynamicOcclusionTest, "Multiplayer.Combat.AreaDynamicOcclusion",

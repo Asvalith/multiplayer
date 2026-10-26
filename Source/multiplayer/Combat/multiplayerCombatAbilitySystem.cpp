@@ -14,6 +14,17 @@
 #include "Engine/World.h"
 #include "TimerManager.h"
 
+namespace
+{
+	// 精确限定本项目的两种防御状态，不能因共享标签误删其他种类的增益。
+	bool IsDefenseEffect(const FActiveGameplayEffect* Effect)
+	{
+		const UClass* EffectClass = Effect && Effect->Spec.Def ? Effect->Spec.Def->GetClass() : nullptr;
+		return EffectClass == UmultiplayerDefendingEffect::StaticClass()
+			|| EffectClass == UmultiplayerParryEffect::StaticClass();
+	}
+}
+
 // 标签只描述资格；目标、距离、遮挡等实时业务仍由各能力在接纳/生效阶段分别复核。
 // 此处集中拥有者的能力关系，不是“全局规则、攻击方、受击方”任意组合的通用规则解析器。
 bool UmultiplayerCombatAbilitySystem::CheckAbilityTagRelationships(const FGameplayTagContainer& AbilityTags,
@@ -80,17 +91,7 @@ void UmultiplayerCombatAbilitySystem::NotifyAbilityFailed(FGameplayAbilitySpecHa
 	}
 	float AuthorityValue = -1.f;
 	if (Reason == CombatTags::Failure_InsufficientEnergy) AuthorityValue = Character->GetEnergy();
-	else if (Reason == CombatTags::Failure_Cooldown)
-	{
-		switch (CombatAbility->GetCombatSkill())
-		{
-		case EMultiplayerCombatSkill::Attack: AuthorityValue = Character->GetAttackCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Defend: AuthorityValue = Character->GetDefenseCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Heal: AuthorityValue = Character->GetHealCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Area: AuthorityValue = Character->GetAreaCooldownRemaining(); break;
-		case EMultiplayerCombatSkill::Dash: AuthorityValue = Character->GetDashCooldownRemaining(); break;
-		}
-	}
+	else if (Reason == CombatTags::Failure_Cooldown) AuthorityValue = Character->GetSkillCooldownRemaining(CombatAbility->GetCombatSkill());
 	Character->ClientSkillRejected(CombatAbility->GetCombatSkill(), Reason, AuthorityValue);
 }
 
@@ -120,6 +121,9 @@ float UmultiplayerCombatAbilitySystem::PlayMontage(UGameplayAbility* AnimatingAb
 {
 	UAnimInstance* Animation = AbilityActorInfo.IsValid() ? AbilityActorInfo->GetAnimInstance() : nullptr;
 	if (!Animation || !Montage) return -1.f;
+	const auto* CombatAbility = Cast<UmultiplayerCombatAbility>(AnimatingAbility);
+	const FmultiplayerCombatActivationIdentity Activation = CombatAbility
+		? CombatAbility->GetActivationIdentity() : FmultiplayerCombatActivationIdentity();
 	const uint32 PreviousRevision = MontagePlayRevision;
 	const uint32 Revision = ++MontagePlayRevision;
 	const float Duration = Animation->Montage_Play(Montage, InPlayRate, EMontagePlayReturnType::MontageLength, StartTimeSeconds);
@@ -132,7 +136,8 @@ float UmultiplayerCombatAbilitySystem::PlayMontage(UGameplayAbility* AnimatingAb
 	// Started 内可同步取消并启动另一技能；较新的播放已经负责自己的归属，旧栈不得再覆盖。
 	if (MontagePlayRevision != Revision) return -1.f;
 	if (AnimatingAbility && (!AnimatingAbility->IsActive()
-		|| AnimatingAbility->GetCurrentActivationInfo().GetActivationPredictionKey() != ActivationInfo.GetActivationPredictionKey()))
+		|| AnimatingAbility->GetCurrentActivationInfo().GetActivationPredictionKey() != ActivationInfo.GetActivationPredictionKey()
+		|| (CombatAbility && Activation.IsValid() && !CombatAbility->GetActivationIdentity().Matches(Activation))))
 	{
 		Animation->Montage_Stop(.15f, Montage);
 		return -1.f;
@@ -162,13 +167,29 @@ float UmultiplayerCombatAbilitySystem::PlayMontage(UGameplayAbility* AnimatingAb
 	}
 	else
 	{
-		FPredictionKey Key = GetPredictionKeyForNewAction();
-		if (Key.IsValidKey())
-			Key.NewRejectedDelegate().BindWeakLambda(this, [this, Revision]
+		// 动作键与激活键的拒绝收口在真正播放处，不在 Commit 阶段再登记另一份停动画逻辑。
+		const auto BindRejection = [this, Revision, WeakAbility = TWeakObjectPtr<UGameplayAbility>(AnimatingAbility)]
+			(FPredictionKey Key, bool bCheckAbility)
+		{
+			if (!Key.IsValidKey()) return;
+			Key.NewRejectedDelegate().BindWeakLambda(this, [this, Revision, WeakAbility, Key, bCheckAbility]
 			{
-				// 资产可能被下一轮复用，旧预测拒绝只能结束自己的播放请求。
-				if (MontagePlayRevision == Revision) CurrentMontageStop(.25f);
+				if (MontagePlayRevision != Revision) return;
+				if (bCheckAbility)
+				{
+					auto* Ability = WeakAbility.Get();
+					if (!Ability || GetAnimatingAbility() != Ability
+						|| Ability->GetCurrentActivationInfo().GetActivationPredictionKey() != Key) return;
+				}
+				CurrentMontageStop(.25f);
 			});
+		};
+		const FPredictionKey ActionKey = GetPredictionKeyForNewAction();
+		BindRejection(ActionKey, false);
+		const FPredictionKey ActivationKey = ActivationInfo.GetActivationPredictionKey();
+		// 延迟播放可离开动作预测窗口；同键不重复注册，非空能力保留原有归属复核。
+		if (ActivationKey.IsLocalClientKey() && ActivationKey != ActionKey)
+			BindRejection(ActivationKey, AnimatingAbility != nullptr);
 	}
 	return Duration;
 }
@@ -190,6 +211,34 @@ void UmultiplayerCombatAbilitySystem::EndCasting(FActiveGameplayEffectHandle Ser
 		if (Effect && Effect->PredictionKey == ActivationKey
 			&& Effect->Spec.Def->GetClass() == UmultiplayerCastingEffect::StaticClass())
 			RemoveActiveGameplayEffect_AllowClientRemoval(Handle);
+	}
+}
+
+// 防御 GA 提交后即结束，右键取消需要从仍存活的状态效果取回原激活键。
+bool UmultiplayerCombatAbilitySystem::GetDefensePredictionKey(FPredictionKey& OutKey) const
+{
+	OutKey = FPredictionKey();
+	for (const FActiveGameplayEffectHandle Handle : GetActiveEffects(FGameplayEffectQuery()))
+	{
+		const FActiveGameplayEffect* Effect = GetActiveGameplayEffect(Handle);
+		if (!IsDefenseEffect(Effect)) continue;
+		OutKey = Effect->PredictionKey;
+		return true; // 重连恢复时键可以为 0；是否存在防御由效果本身决定。
+	}
+	return false;
+}
+
+// 移除结果沿 GAS 复制给客户端，不将权威 GE 的删除伪装为可预测操作。
+void UmultiplayerCombatAbilitySystem::EndDefense(const FPredictionKey& ActivationKey)
+{
+	if (!IsOwnerActorAuthoritative()) return;
+	// 先固定句柄集合；移除回调若启动新防御，不得被旧取消继续清掉。
+	const TArray<FActiveGameplayEffectHandle> Handles = GetActiveEffects(FGameplayEffectQuery());
+	for (const FActiveGameplayEffectHandle Handle : Handles)
+	{
+		const FActiveGameplayEffect* Effect = GetActiveGameplayEffect(Handle);
+		if (IsDefenseEffect(Effect) && Effect->PredictionKey == ActivationKey)
+			RemoveActiveGameplayEffect(Handle);
 	}
 }
 

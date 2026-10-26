@@ -56,24 +56,10 @@ private:
 	void Look(const FInputActionValue& Value);
 	// 仅所属客户端切换成长附加层，保留原 HUD 生命周期与界面布局。
 	void ToggleProgressionMenu();
-	// Q 按下预览槽位 1，装配映射由成长组件决定。
-	void PreviewDefense() { BeginSlotTargeting(1); }
-	// E 按下预览槽位 2，不直接消耗资源或选择权威治疗目标。
-	void PreviewHeal() { BeginSlotTargeting(2); }
-	// R 按下预览槽位 3，预览与实际能力共用父类规则。
-	void PreviewArea() { BeginSlotTargeting(3); }
-	// Shift 按下预览槽位 4，不在输入层直接改变位置。
-	void PreviewDash() { BeginSlotTargeting(4); }
-	// 仅当前预览仍属于 Q 槽位时确认。
-	void ReleaseDefense();
-	// 仅当前预览仍属于 E 槽位时确认。
-	void ReleaseHeal();
-	// 仅当前预览仍属于 R 槽位时确认。
-	void ReleaseArea();
-	// 仅当前预览仍属于 Shift 槽位时确认。
-	void ReleaseDash();
 	// 共用松键确认入口，阻止已取消或已切换技能的旧松键继续激活。
 	void ReleaseTargetSlot(int32 Slot);
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Combat|UI", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UmultiplayerCombatProgressionWidget> ProgressionWidgetClass;
 	UPROPERTY(Transient) TObjectPtr<UmultiplayerCombatProgressionWidget> ProgressionMenu;
 
 	// 相机组件。

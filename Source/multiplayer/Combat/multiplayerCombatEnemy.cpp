@@ -11,7 +11,6 @@
 #include "BrainComponent.h"
 #include "Combat/multiplayerCombatAbility.h"
 #include "Combat/multiplayerCombatConfig.h"
-#include "Combat/multiplayerCombatPresentation.h"
 #include "Combat/multiplayerCombatTags.h"
 #include "Combat/multiplayerCombatTargeting.h"
 #include "Core/multiplayerLog.h"
@@ -29,9 +28,8 @@
 #include "Perception/AISenseConfig_Sight.h"
 #include "Perception/AISense_Sight.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 
-// 使用原生外观；行为树控制决策，GAS 执行技能，移动仍由 CharacterMovement 完成。
+// 外观由正式蓝图提供；行为树控制决策，GAS 执行技能，移动仍由 CharacterMovement 完成。
 AmultiplayerCombatEnemy::AmultiplayerCombatEnemy()
 {
 	CombatTeam = EMultiplayerCombatTeam::Enemies;
@@ -51,20 +49,6 @@ AmultiplayerCombatEnemy::AmultiplayerCombatEnemy()
 	EnemyWeapon->SetupAttachment(GetMesh());
 	EnemyWeapon->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	EnemyWeapon->SetGenerateOverlapEvents(false);
-
-	EnemyVisual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("EnemyVisual"));
-	EnemyVisual->SetupAttachment(GetCapsuleComponent());
-	EnemyVisual->SetRelativeScale3D(FVector(0.7f, 0.7f, 1.4f));
-	EnemyVisual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (SphereMesh.Succeeded())
-	{
-		EnemyVisual->SetStaticMesh(SphereMesh.Object);
-	}
-	// 世界空间组件跟随平滑身体；血量只响应 GAS 属性事件，不在 Tick 查询。
-	HealthBarWidget = CreateDefaultSubobject<UmultiplayerEnemyHealthWidgetComponent>(TEXT("HealthBarWidget"));
-	HealthBarWidget->SetupAttachment(GetCapsuleComponent());
-	HealthBarWidget->SetRelativeLocation(FVector(0, 0, 115));
 }
 
 // 复用保存蓝图的动作和表现，只复制本实例的攻击参数；不修改共享资产或运行中的 ASC 授予。
@@ -92,20 +76,12 @@ float AmultiplayerCombatEnemy::GetAttackDistance() const
 void AmultiplayerCombatEnemy::BeginPlay()
 {
 	Super::BeginPlay();
-	HealthBarWidget->InitializeForCharacter(this);
 	if (HasAuthority())
 	{
 		// 现有敌人蓝图可能保存过旧默认值，实际出生时仍通过 CMC 正式入口注册避让。
 		GetCharacterMovement()->SetAvoidanceEnabled(true);
 		if (AmultiplayerCombatAIController* AI = Cast<AmultiplayerCombatAIController>(GetController())) AI->StartCombat();
 	}
-}
-
-// 停止世界血条订阅后交还基类的战斗和 Actor 生命周期清理。
-void AmultiplayerCombatEnemy::EndPlay(const EEndPlayReason::Type Reason)
-{
-	HealthBarWidget->StopPresentation();
-	Super::EndPlay(Reason);
 }
 
 // 行为树是可编辑资产；软引用保留烘焙依赖，只在服务器启动决策时加载。
@@ -117,7 +93,6 @@ UBehaviorTree* AmultiplayerCombatEnemy::GetCombatBehaviorTree() const
 // 停止攻击和寻路后再保留短暂尸体，死亡角色不再参与战斗。
 void AmultiplayerCombatEnemy::HandleDeath()
 {
-	HealthBarWidget->StopPresentation();
 	GetCharacterMovement()->SetAvoidanceEnabled(false);
 	Super::HandleDeath();
 	if (AAIController* AI = Cast<AAIController>(GetController()))

@@ -12,7 +12,7 @@ class UCoopEscapeBuildCommandlet : public UCommandlet
 public:
 	// 注册编辑器构建工具环境，不启动客户端或服务器游戏。
 	UCoopEscapeBuildCommandlet();
-	// 验证地图与资产依赖后配置可玩副本，构建失败通过退出码向脚本报告。
+	// 保留编辑器 Python 反射入口；审计与保存模式互斥，非编辑器和失败操作返回非零。
 	UFUNCTION(BlueprintCallable, Category = "CombatAssets")
 	virtual int32 Main(const FString& Params) override;
 };

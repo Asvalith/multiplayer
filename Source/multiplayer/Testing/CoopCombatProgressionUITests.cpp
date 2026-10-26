@@ -5,6 +5,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "UObject/Class.h"
 #include "AbilitySystemComponent.h"
 #include "Combat/multiplayerCombatCharacter.h"
 #include "Combat/multiplayerCombatPresentation.h"
@@ -76,9 +77,12 @@ bool FCombatMenuLearningTest::RunTest(const FString&)
 {
 	if (!TestTrue(TEXT("Slate is ready for native UMG"), FSlateApplication::IsInitialized())) return false;
 	FCombatMenuWorld Fixture; auto* Pawn = Fixture.Character(); auto* Progression = Pawn->GetProgressionComponent();
-	auto* Widget = CreateWidget<UmultiplayerCombatProgressionWidget>(Fixture.World, UmultiplayerCombatProgressionWidget::StaticClass());
-	if (!TestNotNull(TEXT("Native progression overlay is constructible without a blueprint"), Widget)) return false;
+	auto* Widget = CreateWidget<UmultiplayerCombatProgressionWidget>(Fixture.World, LoadClass<UmultiplayerCombatProgressionWidget>(nullptr, TEXT("/Game/Combat/Presentation/UI/WBP_CombatProgression.WBP_CombatProgression_C")));
+	if (!TestNotNull(TEXT("Saved progression WBP is constructible with its authored layout"), Widget)) return false;
 	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Widget->TakeWidget());
+	const UFunction* SnapshotEvent = Widget->FindFunction(TEXT("PresentProgressionSnapshot"));
+	if (!TestNotNull(TEXT("Real progression WBP implements its presentation event"), SnapshotEvent)) return false;
+	TestEqual(TEXT("Progression control writes execute in the actual WBP"), SnapshotEvent->GetOuterUClass(), Widget->GetClass());
 	BindCombatMenu(Widget, nullptr, Pawn);
 	const auto Button = [Widget](const TCHAR* Name) { return Cast<UButton>(Widget->GetWidgetFromName(FName(Name))); };
 	const TCHAR* Names[] = {TEXT("NextSkillButton"), TEXT("LearnSkillButton"), TEXT("NextSlotButton"), TEXT("EquipSkillButton"),
@@ -123,7 +127,8 @@ bool FCombatMenuLifecycleTest::RunTest(const FString&)
 	if (!FSlateApplication::IsInitialized()) return false;
 	FCombatMenuWorld Fixture; auto* Old = Fixture.Character(); auto* Current = Fixture.Character();
 	Old->GetProgressionComponent()->AwardExperience(100, FGuid::NewGuid());
-	auto* Widget = CreateWidget<UmultiplayerCombatProgressionWidget>(Fixture.World, UmultiplayerCombatProgressionWidget::StaticClass());
+	auto* Widget = CreateWidget<UmultiplayerCombatProgressionWidget>(Fixture.World, LoadClass<UmultiplayerCombatProgressionWidget>(nullptr, TEXT("/Game/Combat/Presentation/UI/WBP_CombatProgression.WBP_CombatProgression_C")));
+	if (!TestNotNull(TEXT("Real saved progression WBP loads for lifecycle checks"), Widget)) return false;
 	TSharedPtr<SObjectWidget> Slate = StaticCastSharedRef<SObjectWidget>(Widget->TakeWidget());
 	BindCombatMenu(Widget, nullptr, Old);
 	TestTrue(TEXT("Opening reads existing level without waiting for another reward"), MenuText(Widget, TEXT("ProgressionSummary")).Contains(TEXT("Lv.2")));

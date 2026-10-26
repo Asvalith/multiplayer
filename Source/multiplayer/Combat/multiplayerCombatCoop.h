@@ -1,5 +1,5 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
-// 合作生命模块：组件保存倒地与救援占用，服务器能力控制引导时长和取消。
+// [职责] 组件保存倒地与救援占用，服务器 GAS 能力持有引导任务与取消生命周期。
 // 属性仍由 ASC 结算，客户端只消费复制状态；不在这里复制另一套生命或移动系统。
 #pragma once
 
@@ -65,6 +65,7 @@ private:
 	UPROPERTY(ReplicatedUsing=NotifyLifeState) double DownedUntil = 0;
 	UPROPERTY(ReplicatedUsing=NotifyLifeState) TObjectPtr<AmultiplayerCombatCharacter> RescueTarget;
 	UPROPERTY(ReplicatedUsing=NotifyLifeState) double RescueUntil = 0;
+	// [边界] 被救者只在服务器持有占用者弱引用；施救者复制的 Target/Until 只供各端显示引导。
 	TWeakObjectPtr<AmultiplayerCombatCharacter> CurrentRescuer;
 	FTimerHandle BleedoutTimer;
 };

@@ -15,10 +15,3 @@ for actor in actors:
                          'location': [location.x, location.y, location.z],
                          'rotation': str(actor.get_actor_rotation())})
 unreal.log('COOP_ESCAPE_MAP_AUDIT ' + json.dumps({'count': len(actors), 'selected': selected}, ensure_ascii=False))
-unreal.log('COOP_EDITOR_APIS ' + json.dumps({
-    'level_library': [name for name in dir(unreal.EditorLevelLibrary) if any(token in name for token in ['build', 'save_current'])],
-    'level_subsystem': [name for name in dir(unreal.LevelEditorSubsystem) if any(token in name for token in ['build', 'save_current'])],
-    'navigation': [name for name in dir(unreal.NavigationSystemV1) if any(token in name for token in ['build', 'random', 'project_point'])],
-    'volume': str(unreal.load_class(None, '/Script/NavigationSystem.NavMeshBoundsVolume')),
-    'cube_builder': str(getattr(unreal, 'CubeBuilder', None)),
-}, ensure_ascii=False))

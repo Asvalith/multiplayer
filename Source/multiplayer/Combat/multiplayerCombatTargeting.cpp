@@ -174,7 +174,7 @@ AmultiplayerCombatCharacter* AmultiplayerCombatCharacter::GetHealTarget() const
 		}
 	}
 #if !UE_BUILD_SHIPPING
-	// 无 AI 手动演示允许满血对自己释放；正式游戏仍要求真实受伤目标。
+	// 非 Shipping 的 CoopSkillDemo 演示例外允许满血自疗；其余模式仍要求真实受伤目标。
 	if (!Selected && IsCombatReady() && FParse::Param(FCommandLine::Get(), TEXT("CoopSkillDemo")))
 		return const_cast<AmultiplayerCombatCharacter*>(this);
 #endif

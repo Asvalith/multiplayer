@@ -5,12 +5,15 @@
 
 #include "Combat/multiplayerCombatConfig.h"
 #include "Combat/multiplayerCombatTags.h"
+#include "Combat/multiplayerCombatProjectile.h"
 
 // 旧资产未序列化关系字段时也继承这些默认值；不重写地图配置、数值或表现资源。
 // 借鉴 Lyra 的关系映射来减少各技能重复判断，不引入 Experience/GameFeature 或另一套活动能力管理器。
 // 关系只管拥有者准入、阻断与替换；目标是否仍在范围内、被遮挡等条件留在生效时复核。
 UmultiplayerCombatConfig::UmultiplayerCombatConfig()
 {
+	// 纯逻辑夹具可用无美术的原生弹体；正式资产显式绑定 BP_CombatProjectile，不在发射时回退。
+	ProjectileClass = AmultiplayerCombatProjectile::StaticClass();
 	// 只用于构造默认关系行；不在运行中根据活动能力增删映射。
 	const auto Add = [this](FGameplayTag AbilityTag) -> FmultiplayerAbilityTagRelationship&
 	{

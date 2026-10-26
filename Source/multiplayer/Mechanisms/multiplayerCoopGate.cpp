@@ -12,7 +12,6 @@
 #include "Mechanisms/multiplayerMeshMovement.h"
 #include "Mechanisms/multiplayerPressurePlate.h"
 #include "Net/UnrealNetwork.h"
-#include "UObject/ConstructorHelpers.h"
 
 // 合作门规则层：服务器合并不同压力板的状态/玩家与可选钥匙条件，只复制最终开关。
 // 各端根据同一端点配置播放网格过渡，不发送逐帧门位置，也不负责平台承载预测。
@@ -40,8 +39,6 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 	DoorMesh->SetupAttachment(SceneRoot);
 	DoorMesh->SetMobility(EComponentMobility::Movable);
 	DoorMesh->SetCollisionProfileName(TEXT("BlockAll"));
-	DoorMesh->SetRelativeLocation(FVector(300.0f, 0.0f, 200.0f));
-	DoorMesh->SetRelativeScale3D(FVector(0.3f, 2.0f, 2.0f));
 
 	ClosedPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("ClosedPoint"));
 	ClosedPoint->SetupAttachment(SceneRoot);
@@ -57,12 +54,8 @@ AmultiplayerCoopGate::AmultiplayerCoopGate()
 	OpenPoint->SetRelativeLocation(FVector(300.0f, 0.0f, 600.0f));
 	OpenPoint->ArrowColor = FColor::Green;
 
-	//从引擎自带资源里加载一个立方体，作为门的默认网格
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (CubeMesh.Succeeded())
-	{
-		DoorMesh->SetStaticMesh(CubeMesh.Object);
-	}
+	//门的默认网格与展示变换已在正式蓝图中配置。
+	// 正式机关蓝图持有网格与展示变换，碰撞策略和过渡继续由原组件执行。
 }
 
 //生命周期开始时的初始化

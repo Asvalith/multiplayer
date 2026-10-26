@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Mechanisms/multiplayerCoopKey.h"
+#include "Combat/multiplayerCombatCharacter.h"
 
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
@@ -39,20 +40,6 @@ AmultiplayerCoopKey::AmultiplayerCoopKey()
 	PickupTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	PickupTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	PickupTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
-}
-
-// Tick函数，旋转展示
-void AmultiplayerCoopKey::Tick(float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-
-	if (RotationSpeedDegrees <= 0.0f || RotationAxis.IsNearlyZero())
-	{
-		return;
-	}
-	//旋转轴归一化，避免缩放影响旋转速度
-	const FQuat RotationDelta(RotationAxis.GetSafeNormal(),FMath::DegreesToRadians(RotationSpeedDegrees * DeltaSeconds));
-	KeyMesh->AddLocalRotation(RotationDelta);
 }
 
 // BeginPlay函数，初始化重叠回调
@@ -146,10 +133,8 @@ bool AmultiplayerCoopKey::InstallAtSocket(USceneComponent* SocketPoint)
 void AmultiplayerCoopKey::OnRep_Installed()
 {
 	const bool bFree = !bInstalled;
-	SetActorTickEnabled(
-		bFree
-		&& RotationSpeedDegrees > 0.0f
-		&& !RotationAxis.IsNearlyZero());
+	if (GetNetMode() != NM_DedicatedServer) ApplyInstalledPresentation(bInstalled);
+	else SetActorTickEnabled(false);
 	PickupTrigger->SetCollisionEnabled(
 		HasAuthority() && bFree
 			? ECollisionEnabled::QueryOnly

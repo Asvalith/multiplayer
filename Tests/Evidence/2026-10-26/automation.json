@@ -1,0 +1,1308 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "curated-automation-excerpt",
+  "sourceCommit": "2efa683616770e05d915276bb074fbcccff6bc0a",
+  "sourceTree": "704ea2b98c0a35f78f2539d4e6f5be80f77b5218",
+  "sourceReport": {
+    "relativePath": "Saved/ActivationIdentity_20261026/Automation_R4/index.json",
+    "sha256": "B490B61786C62208D0C7EF36E4060ED711F2C62CD9950ADA3CD2017AFA51940F"
+  },
+  "summary": {
+    "succeeded": 184,
+    "succeededWithWarnings": 0,
+    "failed": 0,
+    "notRun": 0,
+    "inProcess": 0
+  },
+  "tests": [
+    {
+      "fullTestPath": "Multiplayer.Authoring.CombatModeBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.003993600606918335
+    },
+    {
+      "fullTestPath": "Multiplayer.Authoring.EscapeModeBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01717039942741394
+    },
+    {
+      "fullTestPath": "Multiplayer.Authoring.WidgetGraphScopeBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01690179854631424
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Admission.CommitKeepsRuleSnapshotAcrossCostNotification",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.032363299280405045
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Admission.CommitRechecksCurrentResourcesAndCooldown",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01898990198969841
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Admission.PreviewUsesDerivedAbilityRequirements",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020171500742435455
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Admission.PreviewUsesNativeActivationInhibition",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01962669938802719
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Admission.RepeatedPreviewIsReadOnly",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01775280013680458
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.DownedPresentation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.14028850197792053
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.DownedPresentationDedicatedServer",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.030769001692533493
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.DownedRecoveryDeadline",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.044396501034498215
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.RescueCompletion",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.048772599548101425
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.RescueInterruptCleanup",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.08573919534683228
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.RescueReachability",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03431960195302963
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.RescueReservation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0365057997405529
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Coop.TeamDefeatAndPersistentResult",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02421329915523529
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Encounter.AdmissionAndPreview",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04133420065045357
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Encounter.PendingSpawnReservations",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.23480120301246643
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Encounter.ReplicatedSnapshotContract",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.031595900654792786
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Encounter.SupplyAuthorityAndReentry",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.026623200625181198
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Encounter.TerminalStopsTasksAndAI",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 4.990749359130859
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Encounter.ThreeWavesAndCapacity",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.2247128039598465
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Flow.RestartAdmissionAndPending",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02476789802312851
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Guard.BlockedHitPresentation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.12335729598999023
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Guard.BodyFacingIgnoresCamera",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020265299826860428
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Guard.FacingAndExpiry",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.10795620083808899
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Guard.ProjectileDirectionSnapshot",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05057160183787346
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Guard.UndirectedAndBurningDamage",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0378665030002594
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.HUDPresentation.ActualBlueprintDrawsSnapshots",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.15354520082473755
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Progression.ActiveSkillAndValidationBoundaries",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.021230898797512054
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Progression.GrowthAndRealAbilityLevels",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.023912198841571808
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Progression.PassiveAndSlotLoadout",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.025287803262472153
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Progression.UniqueProfileDiskPersistence",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02951119840145111
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Progression.VersionedPersistenceAndRewardWindow",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02053239941596985
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ProgressionUI.PawnReplacementAndCloseLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01734120026230812
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ProgressionUI.RealButtonsLearnAndEquip",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020404499024152756
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Recovery.ExpiredSourcesRemainIndependent",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.029182102531194687
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Recovery.IntegerExpiryMatchesContinuous",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.1411924958229065
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Recovery.OfflineDamageExpiryAndDeath",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04838839918375015
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Recovery.PendingFinalTickMatchesContinuous",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.037651099264621735
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Recovery.PhaseAndIndependentRoots",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.07738129794597626
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Recovery.RejectedRestoreKeepsTicket",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01796559989452362
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.AreaEndWhileScopeLocked",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01776079833507538
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.AreaMontageStartCancel",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017856400460004807
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.AttackMontageStartCancel",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.019560199230909348
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.AttackRotationCancel",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.024025697261095047
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.FailedNestedMontage",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020197898149490356
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.MontagePredictionKeyOwnership",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020345602184534073
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.MontageStartReplacement",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020824898034334183
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ReentryAudit.PreActivateDuplicateRequest",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02600950002670288
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Refactor.AttackWithoutMontageUsesTiming",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020937498658895493
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Refactor.EffectiveAttackRange",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0172852985560894
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Refactor.FailurePresentation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017788097262382507
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Refactor.SharedEnergyCost",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016743499785661697
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Refactor.UnpossessCancelsAttack",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.024493001401424408
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Refactor.UnpossessCancelsMelee",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.022601701319217682
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Reflection.BoundedExchange",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.029099497944116592
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Reflection.OwnershipAndOriginalSource",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.027924999594688416
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Reflection.RevisionAndLateTrajectory",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05294789746403694
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Reflection.SweepWallAndSourceLifetime",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04813219979405403
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Reflection.WindowAndFacing",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.15177099406719208
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.AreaReplacesAttackAndKeepsGuard",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02462190017104149
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.DefaultMatrix",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02487180009484291
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.HealReplacesAttack",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.023935500532388687
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.HierarchyAndRequirements",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.018004000186920166
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.MissingSpecFeedback",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017917200922966003
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.NativeBlockReferenceCounts",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01834540069103241
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Relationships.RescueReplacesAttack",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03217700123786926
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Settlement.CapacityBonusReplacement",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016881100833415985
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Settlement.CapacityEffectRemoval",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017232798039913177
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Settlement.NestedCapacityReduction",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016742698848247528
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaBoundaryAndOcclusion",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017752502113580704
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaCancelThenReleaseInput",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.14652369916439056
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaCandidateBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020721599459648132
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaConfirmThenReleaseInput",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.16380539536476135
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaGroundPreview",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.019742298871278763
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaLethalWindupNoRelease",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.09481209516525269
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaReleaseInput",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.14827589690685272
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaReleaseInputParticle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.13746589422225952
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaRequiresGround",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01878499984741211
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaRuleSnapshot",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04993949830532074
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.AreaSwappedSlotReleaseInput",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.13520820438861847
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.CancelNotificationPreservesNextCast",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04893459752202034
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ConfiguredProjectileRange",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05522000044584274
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ConfirmCancelAndLockedCenter",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05638040229678154
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ConfirmNotificationCanCancelAcceptedCast",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.052088700234889984
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ConfirmNotificationPreservesNextPreview",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05098150297999382
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.DashActualWallEndpoint",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05223749950528145
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.DashCapsuleWallPreview",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03153430297970772
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.DefenseDirectionSnapshot",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.019645001739263535
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.EnemyProjectileKeepsVerticalAim",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.018496200442314148
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.HealSelectionAndOcclusion",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.021453801542520523
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.PlayerForwardProjectile",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.12636560201644897
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ProjectileMuzzleAimSnapshot",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.019533000886440277
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ProjectileMuzzleNearObstruction",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.034283000975847244
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ProjectileWallOcclusion",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.07174870371818542
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.Targeting.ReceivedEffectsPreserveFacing",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.021995700895786285
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ActivationABABoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.026994500309228897
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AdmissionAndResume",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01792750135064125
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AdmissionMovement",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.029564298689365387
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AIControlBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03959809988737106
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AimEventBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.027788300067186356
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AIRootBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.08196690678596497
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AnimationIntegration",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.07445640116930008
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ArchetypeKillRewards",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.024083398282527924
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AreaAsyncLoadCancellation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.16869379580020905
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AreaDynamicOcclusion",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020718898624181747
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AreaLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.032253198325634
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AreaResultRightClickCancellation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.16507339477539062
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AttackAnimationTiming",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.06529919803142548
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AttackCueSnapshot",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02246129885315895
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.AttributeBaseClamp",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01761559769511223
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.BehaviorAssets",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01678439974784851
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.BehaviorDecision",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.1171606034040451
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.BehaviorLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.035279497504234314
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.BurningSources",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03699510172009468
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CameraFacing",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0575128011405468
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CameraFacingMovingAttack",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.07095250487327576
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CameraObstruction",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.027759898453950882
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CancelledTaskReactivation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05464620143175125
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CascadeLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03880799934267998
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CastForwardBurst",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016475800424814224
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CastInterruptions",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.1010299026966095
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CommitDeathBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01912529766559601
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CommitReentrancyBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.018798600882291794
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ConfiguredAttackCost",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.026638496667146683
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ConfiguredStatusSkillIntegration",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.039008598774671555
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ControlMovement",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0843362957239151
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ControlResume",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017773501574993134
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.CoreRules",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.06770160049200058
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DamageAttributeBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.019461799412965775
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DashCollision",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.036138299852609634
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DashControlBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0992617979645729
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DashHorizontalGravity",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.035378798842430115
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DashMovement",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.029579002410173416
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DeathClearsPeriodicStatus",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04277760162949562
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DeathInput",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04358289763331413
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DefensePoseExpiry",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.059256501495838165
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DefensePoseLayer",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016802597790956497
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DefensePoseLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03680639714002609
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.DefenseRightClickCancellation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.025607801973819733
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.EnemyLocomotion",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.06700929999351501
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.EnemyPresentation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.021180201321840286
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.EnemyRVOLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04869139939546585
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.EnemyWithoutHealthUI",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03980789706110954
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.EscapeHUDHealFailure",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.025798998773097992
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ExistingMovementMode",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03338240087032318
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.FormalPresentationWiring",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016613800078630447
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.GroundMarker",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.0207659974694252
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.HealingAuthority",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.018000900745391846
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.HealRecipientFeetAndFollow",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04141770303249359
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.HealResultCueOwnerAndObserver",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017745498567819595
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.HealWithoutMontage",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017980698496103287
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.HUDEventLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.23375940322875977
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MenuViewportInput",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03468190133571625
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MinionCastingOwnership",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03352230042219162
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MinionMeleeBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.5004256963729858
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MinionMeleeHit",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.08977900445461273
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MinionSkillSetup",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016651000827550888
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MinionWeaponAttachment",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.05572080239653587
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MixedArchetypeWave",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.10206030309200287
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.MovementRestrictionOverlap",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04100320115685463
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.PeriodicHealingClamp",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.030368700623512268
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ProjectileCloseRange",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04495939984917641
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ProjectileInterpolation",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03410699963569641
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ProjectileSweepBoundaries",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.07208380103111267
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ProjectileWall",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02306860312819481
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.RangedArchetypeBehavior",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04139989987015724
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.RangedArchetypeConfiguration",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01950550079345703
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.RVOCrossing",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.19927829504013062
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.ShieldSettlement",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.02023719996213913
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.SightBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03298550099134445
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.SkillCooldownFeedback",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01791119948029518
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.SkillDemoIgnoreCostAndCooldown",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.019464801996946335
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.SkillFailureReasons",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016746699810028076
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.SpawnStaggering",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.1876945048570633
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.StunLifecycle",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.04004339873790741
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.StunMovementModeBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.020575400441884995
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.TriggerOcclusionBoundary",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.032574400305747986
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.VfxAuthoredAssetAudit",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.017151299864053726
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.VfxProjectCalibration",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016517899930477142
+    },
+    {
+      "fullTestPath": "Multiplayer.Combat.WalkingPose",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.03581850230693817
+    },
+    {
+      "fullTestPath": "Multiplayer.Network.ConnectionStateTiming",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.016648899763822556
+    },
+    {
+      "fullTestPath": "Multiplayer.Network.ConnectionTiming",
+      "state": "Success",
+      "warnings": 0,
+      "errors": 0,
+      "duration": 0.01657220348715782
+    }
+  ],
+  "boundary": "Executed before commit in the licensed development environment; not independently rerun from source-only main."
+}

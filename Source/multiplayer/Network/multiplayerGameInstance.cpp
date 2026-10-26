@@ -4,6 +4,7 @@
 #include "Core/multiplayerLog.h"
 #include "Engine/Engine.h"
 #include "Engine/NetDriver.h"
+#include "Engine/NetConnection.h"
 #include "Engine/PendingNetGame.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -11,14 +12,49 @@
 #include "TimerManager.h"
 #include "UObject/UObjectGlobals.h"
 
-// 本地连接流程层：跨 World 维护连接、有限重试、票据和取消意图。
-// 服务器只通过所属 Controller 校验票据与恢复状态；本实例不接受客户端上传战斗快照。
+// [职责] 本机连接流程层：跨 World 维护连接、有限重试、票据和取消意图。
+// 所属 Controller 转交握手，服务器 GameMode 校验并恢复；本实例不提供权威战斗数值。
 
-// 进程初始化：加载本进程配置，并订阅网络失败、跳转失败和地图加载通知。
+// 只处理由真实 ACK 得到的新测量；不能把等待超时或地图加载时长当成 RTT。
+void FmultiplayerConnectionTiming::ObserveRTT(double RTTSeconds)
+{
+	if (!FMath::IsFinite(RTTSeconds) || RTTSeconds <= 0.0) return;
+	if (SampleCount == 0)
+	{
+		SmoothedRTT = RTTSeconds;
+		RTTVariation = RTTSeconds * 0.5;
+	}
+	else
+	{
+		RTTVariation = 0.75 * RTTVariation + 0.25 * FMath::Abs(SmoothedRTT - RTTSeconds);
+		SmoothedRTT = 0.875 * SmoothedRTT + 0.125 * RTTSeconds;
+	}
+	++SampleCount;
+}
+
+// 这是业务计时的估计余量，不替换 UE 的可靠通道重传和 NetConnection 存活检测。
+double FmultiplayerConnectionTiming::GetRTOSeconds() const
+{
+	return SampleCount > 0 ? FMath::Clamp(SmoothedRTT + 4.0 * RTTVariation, 0.25, 5.0) : 1.0;
+}
+
+// 保留原本加载/接纳等待预算，不能因局域网 RTT 很小而把资源加载误判为丢线。
+double FmultiplayerConnectionTiming::GetConnectTimeoutSeconds(int32 Attempt) const
+{
+	return 20.0 + FMath::Min(40.0, GetReconnectDelaySeconds(0.0, Attempt));
+}
+
+// 第八次退避时最小 RTO 也已达到上限；指数在此饱和，不计算无意义的大次幂。
+double FmultiplayerConnectionTiming::GetReconnectDelaySeconds(double ConfiguredDelay, int32 Attempt) const
+{
+	const double Backoff = GetRTOSeconds() * FMath::Pow(2.0, FMath::Clamp(Attempt, 0, 8));
+	return FMath::Min(60.0, FMath::Max(ConfiguredDelay, Backoff));
+}
+
+// 实例初始化：加载本实例配置，并订阅网络失败、跳转失败和地图加载通知。
 void UmultiplayerGameInstance::Init()
 {
 	Super::Init();
-	//加载Content/Config/Gameplay.json
 	GameplayConfig.LoadFromFile(FPaths::Combine(FPaths::ProjectContentDir(), TEXT("Config/Gameplay.json")));
 	// 引擎事件可能涉及多个 World；这里只订阅，回调中再判断是否属于当前实例。
 	if (GEngine)
@@ -30,11 +66,12 @@ void UmultiplayerGameInstance::Init()
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
 }
 
-// 进程结束：停止本实例的等待，并解除 Init 中建立的事件订阅。
+// 实例结束：停止本实例的等待，并解除 Init 中建立的事件订阅。
 void UmultiplayerGameInstance::Shutdown()
 {
 	// 不让连接超时或重试等待在实例结束后继续执行。
 	ClearConnectionTimers();
+	ResetConnectionTiming();
 	++OperationRevision;
 	HandshakeController.Reset();
 	ReconnectTickets.Reset();
@@ -90,6 +127,7 @@ bool UmultiplayerGameInstance::ConnectToServer(const FString& Address)
 		return false;
 	}
 	// 通过校验后才保存地址、重置次数，并复用统一的连接执行流程。
+	if (LastServerAddress != Normalized) ResetConnectionTiming();
 	LastServerAddress = MoveTemp(Normalized);
 	ReconnectAttempt = 0;
 	StartTravel(false);
@@ -97,8 +135,8 @@ bool UmultiplayerGameInstance::ConnectToServer(const FString& Address)
 }
 
 // 统一提交本地状态与提示，再通知监听者；返回本次提交的编号，不是广播后的最新编号。
-// 设计：OperationRevision 标识本机连接操作，过滤旧 Timer/回执，也隔离广播中的同步取消。
-// 它不对底层网络包排序，不替代服务器的票据和接纳校验。
+// [亮点] OperationRevision 标识本机连接操作，过滤旧 Timer/回执，也隔离广播中的同步取消。
+// [边界] 它不对底层网络包排序，不替代服务器的票据和接纳校验。
 uint64 UmultiplayerGameInstance::SetConnectionState(EMultiplayerConnectionState State, const FText& Message)
 {
 	ConnectionState = State;
@@ -109,11 +147,50 @@ uint64 UmultiplayerGameInstance::SetConnectionState(EMultiplayerConnectionState 
 	return Revision;
 }
 
-// 同时取消连接期限和重连等待；这里只清理计时器，不关闭底层网络连接。
+// 同时停止连接期限、重连等待及 RTT 采样；保留同端点估计，不关闭底层网络连接。
 void UmultiplayerGameInstance::ClearConnectionTimers()
 {
 	GetTimerManager().ClearTimer(ConnectTimeoutHandle);
 	GetTimerManager().ClearTimer(ReconnectTimerHandle);
+	GetTimerManager().ClearTimer(ConnectionTimingTimer);
+}
+
+// 只在已连接的本地客户端读取 UE 现有统计，不发送 Ping，也不逐帧轮询。
+void UmultiplayerGameInstance::SampleConnectionTiming()
+{
+	UWorld* World = GetWorld();
+	if (ConnectionState != EMultiplayerConnectionState::Connected || !World || World->GetNetMode() != NM_Client) return;
+	UNetDriver* Driver = World->GetNetDriver();
+	UNetConnection* Connection = Driver ? Driver->ServerConnection : nullptr;
+	if (!Connection || Connection->GetConnectionState() != USOCK_Open) return;
+	// UE 每个 StatPeriod 清零 LagAcc/LagCount；连接和周期共同界定这组计数的归属。
+	if (TimingConnection.Get() != Connection || TimingStatUpdateTime != Connection->StatUpdateTime)
+	{
+		TimingConnection = Connection;
+		TimingStatUpdateTime = Connection->StatUpdateTime;
+		TimingLagAcc = 0.0;
+		TimingLagCount = 0;
+	}
+	const int32 NewSamples = Connection->LagCount - TimingLagCount;
+	if (NewSamples <= 0) return;
+	const double RTTSeconds = (Connection->LagAcc - TimingLagAcc) / NewSamples;
+	TimingLagAcc = Connection->LagAcc;
+	TimingLagCount = Connection->LagCount;
+	const bool bFirstSample = ConnectionTiming.SampleCount == 0;
+	ConnectionTiming.ObserveRTT(RTTSeconds);
+	if (bFirstSample && ConnectionTiming.SampleCount > 0)
+		UE_LOG(LogMultiplayer, Display, TEXT("Connection ACK RTT: samples=%d srtt=%.3fs variation=%.3fs rto=%.3fs"),
+			ConnectionTiming.SampleCount, ConnectionTiming.SmoothedRTT, ConnectionTiming.RTTVariation, ConnectionTiming.GetRTOSeconds());
+}
+
+// 估计属于端点而非角色；离开该端点后不把旧线路的时延带进下一次连接。
+void UmultiplayerGameInstance::ResetConnectionTiming()
+{
+	ConnectionTiming = {};
+	TimingConnection.Reset();
+	TimingStatUpdateTime = -1.0;
+	TimingLagAcc = 0.0;
+	TimingLagCount = 0;
 }
 
 // 执行一次连接尝试：首次连接和重连共用 Travel 与超时处理，区别只在状态和失败去向。
@@ -136,7 +213,8 @@ void UmultiplayerGameInstance::StartTravel(bool bRetry)
 	}
 	// 覆盖地址不可达、已发起 Travel 却未进入 PlayingState 的路径；GI Timer 跨 World 存活。
 	GetTimerManager().SetTimer(ConnectTimeoutHandle,
-		FTimerDelegate::CreateUObject(this, &ThisClass::HandleConnectTimeout, Revision), 20.f, false);
+		FTimerDelegate::CreateUObject(this, &ThisClass::HandleConnectTimeout, Revision),
+		static_cast<float>(ConnectionTiming.GetConnectTimeoutSeconds(ReconnectAttempt)), false);
 	// 将建立连接和加载服务器地图交给 UE；调用返回不代表已连接成功。
 	PC->ClientTravel(LastServerAddress, TRAVEL_Absolute);
 }
@@ -164,6 +242,7 @@ bool UmultiplayerGameInstance::PrepareCombatHandshake(AmultiplayerCoopPlayerCont
 		|| !World || World->GetNetMode() != NM_Client || ConnectionState == EMultiplayerConnectionState::Leaving) return false;
 	FString Address;
 	if (!NormalizeServerAddress(FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port), Address)) return false;
+	if (LastServerAddress != Address) ResetConnectionTiming();
 	LastServerAddress = MoveTemp(Address);
 	// 控制台直连和整体回合重开也必须经过相同握手；重连则保留原来的有限重试预算。
 	if (ConnectionState != EMultiplayerConnectionState::Connecting && ConnectionState != EMultiplayerConnectionState::Reconnecting)
@@ -177,11 +256,13 @@ bool UmultiplayerGameInstance::PrepareCombatHandshake(AmultiplayerCoopPlayerCont
 	OutOperation = OperationRevision;
 	OutTicket = ReconnectTickets.FindRef(LastServerAddress);
 	GetTimerManager().SetTimer(ConnectTimeoutHandle,
-		FTimerDelegate::CreateUObject(this, &ThisClass::HandleConnectTimeout, OutOperation), 20.f, false);
+		FTimerDelegate::CreateUObject(this, &ThisClass::HandleConnectTimeout, OutOperation),
+		static_cast<float>(ConnectionTiming.GetConnectTimeoutSeconds(ReconnectAttempt)), false);
 	return true;
 }
 
-// 只消费当前 Controller/World/操作的回执；成功记住轮换票据，失败按服务器原因终止或有限重试。
+// [职责] 只消费当前 Controller/World/操作的回执；成功记住轮换票据，失败按服务器原因收尾。
+// 回执确认服务器已接纳或恢复，不表示客户端已收齐 Pawn、属性和全场景复制。
 bool UmultiplayerGameInstance::CompleteCombatHandshake(AmultiplayerCoopPlayerController* Controller,
 	uint64 Operation, const FGuid& Ticket, const FText& Error, bool bRetryable)
 {
@@ -221,11 +302,20 @@ void UmultiplayerGameInstance::NotifyClientConnected()
 	if (!Controller || !Controller->HasAcceptedCombatSession()) return;
 	// 控制台/命令行直连没有菜单请求；从实际 URL 补记地址，重开后也重新确认。
 	FString Address;
-	if (NormalizeServerAddress(FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port), Address)) LastServerAddress = Address;
+	if (NormalizeServerAddress(FString::Printf(TEXT("%s:%d"), *World->URL.Host, World->URL.Port), Address))
+	{
+		if (LastServerAddress != Address) ResetConnectionTiming();
+		LastServerAddress = MoveTemp(Address);
+	}
 	// 成功后清掉旧等待并重置重试预算，提交 Connected 也会使旧超时编号失效。
 	ClearConnectionTimers();
 	ReconnectAttempt = 0;
-	SetConnectionState(EMultiplayerConnectionState::Connected, NSLOCTEXT("Multiplayer", "ConnectedDS", "已连接服务器"));
+	const uint64 Revision = SetConnectionState(EMultiplayerConnectionState::Connected, NSLOCTEXT("Multiplayer", "ConnectedDS", "已连接服务器"));
+	if (Revision != OperationRevision) return;
+	GetTimerManager().SetTimer(ConnectionTimingTimer, FTimerDelegate::CreateWeakLambda(this, [this, Revision]
+	{
+		if (Revision == OperationRevision) SampleConnectionTiming();
+	}), 0.5f, true);
 }
 
 // 主动退出或取消连接：先关闭自动重连意图，再交给引擎返回本地菜单。
@@ -235,6 +325,7 @@ void UmultiplayerGameInstance::LeaveGame()
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_DedicatedServer || ConnectionState == EMultiplayerConnectionState::Leaving) return;
 	// 清掉等待、地址和次数，避免主动关闭连接后又被断线通知自动连回。
 	ClearConnectionTimers();
+	ResetConnectionTiming();
 	ReconnectTickets.Remove(LastServerAddress);
 	HandshakeController.Reset();
 	LastServerAddress.Reset();
@@ -336,6 +427,7 @@ void UmultiplayerGameInstance::FailConnection(const FString& Reason)
 {
 	// 结束等待并放弃原地址，之后需要玩家重新提交连接请求。
 	ClearConnectionTimers();
+	ResetConnectionTiming();
 	HandshakeController.Reset();
 	LastServerAddress.Reset();
 	ReconnectAttempt = 0;
@@ -359,11 +451,15 @@ void UmultiplayerGameInstance::ScheduleReconnect()
 	// 用已开始的尝试次数选择下一次间隔；这里安排等待，还没有增加尝试次数。
 	ClearConnectionTimers();
 	HandshakeController.Reset();
-	const float Delay = GameplayConfig.ReconnectDelaysSeconds[ReconnectAttempt];
+	const float Delay = static_cast<float>(ConnectionTiming.GetReconnectDelaySeconds(
+		GameplayConfig.ReconnectDelaysSeconds[ReconnectAttempt], ReconnectAttempt));
 	const uint64 Revision = SetConnectionState(EMultiplayerConnectionState::ReconnectWaiting,
 		NSLOCTEXT("Multiplayer", "ReconnectWaiting", "连接中断，等待重试……"));
 	// 等待通知也可能同步触发退出，操作未被替换才真正注册计时器。
 	if (Revision != OperationRevision) return;
+	UE_LOG(LogMultiplayer, Display, TEXT("Reconnect attempt %d/%d in %.3fs (samples=%d srtt=%.3fs variation=%.3fs rto=%.3fs)"),
+		ReconnectAttempt + 1, GameplayConfig.ReconnectDelaysSeconds.Num(), Delay, ConnectionTiming.SampleCount,
+		ConnectionTiming.SmoothedRTT, ConnectionTiming.RTTVariation, ConnectionTiming.GetRTOSeconds());
 	// 弱绑定实例并检查操作编号，主动退出或新的连接意图会使旧等待失效。
 	GetTimerManager().SetTimer(ReconnectTimerHandle, FTimerDelegate::CreateWeakLambda(this, [this, Revision]
 	{

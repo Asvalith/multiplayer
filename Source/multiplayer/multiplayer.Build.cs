@@ -38,7 +38,9 @@ public class multiplayer : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { "EngineSettings", "Json", "CoreOnline", "NavigationSystem", "NetCore", "ApplicationCore" });
 		if (Target.bBuildEditor)
 		{
-			PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "AssetTools", "AnimGraph", "BlueprintGraph", "KismetCompiler", "IKRig", "IKRigEditor", "UMGEditor", "BehaviorTreeEditor", "AIGraph" });
+			// Testing 下的离线 Commandlet、蓝图生成 .inl 和资产审计才使用这些编辑器模块。
+			// 实现同时受 WITH_EDITOR 约束；自动化测试另外使用 WITH_DEV_AUTOMATION_TESTS。
+			PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "BlueprintEditorLibrary", "AssetTools", "AssetRegistry", "AnimGraph", "BlueprintGraph", "KismetCompiler", "IKRig", "IKRigEditor", "UMGEditor", "BehaviorTreeEditor", "AIGraph" });
 		}
 
 	}

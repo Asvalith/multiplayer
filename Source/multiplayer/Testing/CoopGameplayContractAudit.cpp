@@ -138,7 +138,7 @@ namespace
 			return;
 		}
 		auto Report = MakeShared<FJsonObject>();
-		Report->SetStringField(TEXT("scope"), TEXT("/Game/Combat Blueprints; /Game/UI Blueprints; BP_ThirdPersonCharacter; saved CoopEscape/DSMenu level scripts only"));
+		Report->SetStringField(TEXT("scope"), TEXT("All Blueprints recursively under /Game/Combat, /Game/UI and /Game/ThirdPerson/Blueprints; saved CoopEscape/DSMenu level scripts only"));
 		Report->SetStringField(TEXT("interpretation"), TEXT("Static saved-graph inventory and SkipSave compilation only. Nodes may be disconnected. No gameplay, weak-network, visual, complete playthrough or vendor-asset-health certification."));
 		Report->SetBoolField(TEXT("saveRequested"), false);
 		int32 Errors = 0, Warnings = 0;

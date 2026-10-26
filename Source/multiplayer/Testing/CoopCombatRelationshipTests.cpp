@@ -374,7 +374,7 @@ bool FCoopCombatRelationshipHealReplacementTest::RunTest(const FString& Paramete
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCoopCombatRelationshipAreaReplacementTest, "Multiplayer.Combat.Relationships.AreaReplacesAttackAndKeepsGuard",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-// R 替换普攻并保留独立防御效果，旧普攻不能在新的范围起手中迟到发弹。
+// R 替换普攻时保留独立防御；显式右键则同时结束 R 与 Q，旧普攻不能迟到发弹。
 bool FCoopCombatRelationshipAreaReplacementTest::RunTest(const FString& Parameters)
 {
 	FCombatRelationshipWorld Fixture;
@@ -393,8 +393,8 @@ bool FCoopCombatRelationshipAreaReplacementTest::RunTest(const FString& Paramete
 	TestEqual(TEXT("Area pays its configured cost once"), Player->GetEnergy(), BeforeArea - Fixture.Config->Area.Cost);
 	Player->CancelCast();
 	TestFalse(TEXT("Cancel ends the real area spec"), AbilityActive(Player, UmultiplayerAreaAbility::StaticClass()));
-	TestFalse(TEXT("Cancel clears only the area casting lock"), Player->IsCasting());
-	TestTrue(TEXT("Cancel does not remove the unrelated guard effect"), Player->IsDefending());
+	TestFalse(TEXT("Right-click clears the area casting lock"), Player->IsCasting());
+	TestFalse(TEXT("Explicit right-click also ends the lasting guard effect"), Player->IsDefending());
 	TestTrue(TEXT("A committed cancellation preserves the area cooldown"), Player->GetAreaCooldownRemaining() > 0.f);
 	TestEqual(TEXT("A committed cancellation does not refund energy"), Player->GetEnergy(), BeforeArea - Fixture.Config->Area.Cost);
 	Fixture.Advance(Fixture.Config->Attack.Windup + Fixture.Config->Attack.Recovery + .1f);
